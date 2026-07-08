@@ -1,0 +1,64 @@
+observations:
+  actor:
+    concatenate_terms: true
+    enable_corruption: true
+    terms:
+      - name: command
+        term: generated_commands
+        params: {command_name: motion}
+      - name: motion_anchor_pos_b
+        term: motion_anchor_pos_b
+        params: {command_name: motion}
+        noise: [-0.25, 0.25]
+      - name: motion_anchor_ori_b
+        term: motion_anchor_ori_b
+        params: {command_name: motion}
+        noise: [-0.05, 0.05]
+      - name: base_lin_vel
+        term: builtin_sensor
+        params: {sensor_name: robot/imu_lin_vel}
+        noise: [-0.5, 0.5]
+      - name: base_ang_vel
+        term: builtin_sensor
+        params: {sensor_name: robot/imu_ang_vel}
+        noise: [-0.2, 0.2]
+      - name: joint_pos
+        term: joint_pos_rel
+        params: {biased: true}
+        noise: [-0.01, 0.01]
+      - name: joint_vel
+        term: joint_vel_rel
+        noise: [-0.5, 0.5]
+      - name: actions
+        term: last_action
+  critic:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: command
+        term: generated_commands
+        params: {command_name: motion}
+      - name: motion_anchor_pos_b
+        term: motion_anchor_pos_b
+        params: {command_name: motion}
+      - name: motion_anchor_ori_b
+        term: motion_anchor_ori_b
+        params: {command_name: motion}
+      - name: body_pos
+        term: robot_body_pos_b
+        params: {command_name: motion}
+      - name: body_ori
+        term: robot_body_ori_b
+        params: {command_name: motion}
+      - name: base_lin_vel
+        term: builtin_sensor
+        params: {sensor_name: robot/imu_lin_vel}
+      - name: base_ang_vel
+        term: builtin_sensor
+        params: {sensor_name: robot/imu_ang_vel}
+      - name: joint_pos
+        term: joint_pos_rel
+      - name: joint_vel
+        term: joint_vel_rel
+      - name: actions
+        term: last_action

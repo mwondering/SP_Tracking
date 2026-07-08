@@ -1,0 +1,18 @@
+defaults:
+  - task: tracking_bfm
+  - agent: tracking_bfm_ppo
+  - _self_
+
+seed: 42
+debug: false
+headless: true
+log_root: logs/rsl_rl
+gpu_ids: [0]
+motion_path: null
+registry_name: null
+video: false
+video_length: 200
+video_interval: 2000
+enable_nan_guard: false
+wandb_run_path: null
+wandb_checkpoint_name: null

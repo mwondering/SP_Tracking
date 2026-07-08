@@ -1,0 +1,49 @@
+defaults:
+  - tracking_bfm
+  - override command: largedataset
+  - override obs: sp_tracking
+  - override reward: sp_tracking
+  - _self_
+
+name: tracking_bfm_sp
+
+robot:
+  anchor_body_name: pelvis
+  viewer_body_name: pelvis
+  motion_type: mujoco
+  body_names:
+    - pelvis
+    - left_hip_yaw_link
+    - left_knee_link
+    - left_ankle_roll_link
+    - right_hip_yaw_link
+    - right_knee_link
+    - right_ankle_roll_link
+    - torso_link
+    - head_mimic
+    - left_shoulder_yaw_link
+    - left_wrist_roll_link
+    - left_hand_mimic
+    - right_shoulder_yaw_link
+    - right_wrist_roll_link
+    - right_hand_mimic
+
+terminations:
+  - name: time_out
+    term: time_out
+    time_out: true
+  - name: body_z_termination
+    term: body_z_termination
+    params:
+      command_name: motion
+      body_z_terminate_thres: [-0.25, 0.35]
+      body_z_terminate_patterns:
+        - pelvis
+        - head_mimic
+        - .*_hand_mimic
+        - .*ankle_roll_link
+  - name: gravity_dir_termination
+    term: gravity_dir_termination
+    params:
+      command_name: motion
+      gravity_terminate_thres: 1.0

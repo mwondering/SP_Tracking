@@ -1,0 +1,103 @@
+defaults:
+  - command: multimotion
+  - obs: old_tracking
+  - reward: old_tracking
+  - _self_
+
+name: tracking_bfm
+num_envs: 1
+episode_length_s: 10.0
+decimation: 4
+seed: 42
+
+robot:
+  name: g1
+  entity_name: robot
+  anchor_body_name: torso_link
+  viewer_body_name: torso_link
+  self_collision_primary_pattern: pelvis
+  foot_geom_pattern: ^(left|right)_foot[1-7]_collision$
+  base_com_body_names: [torso_link]
+  termination_body_names:
+    - left_ankle_roll_link
+    - right_ankle_roll_link
+    - left_wrist_yaw_link
+    - right_wrist_yaw_link
+  body_names:
+    - pelvis
+    - left_hip_roll_link
+    - left_knee_link
+    - left_ankle_roll_link
+    - right_hip_roll_link
+    - right_knee_link
+    - right_ankle_roll_link
+    - torso_link
+    - left_shoulder_roll_link
+    - left_elbow_link
+    - left_wrist_yaw_link
+    - right_shoulder_roll_link
+    - right_elbow_link
+    - right_wrist_yaw_link
+
+scene:
+  terrain_type: plane
+  env_spacing: 2.0
+
+sim:
+  timestep: 0.005
+  iterations: 10
+  ls_iterations: 20
+  nconmax: 128
+  njmax: 512
+
+viewer:
+  distance: 2.8
+  fovy: 55.0
+  elevation: -5.0
+  azimuth: 120.0
+
+action:
+  scale: g1_action_scale
+  use_default_offset: true
+  actuator_names: [".*"]
+
+events:
+  push_robot:
+    enabled: true
+    interval_range_s: [1.0, 3.0]
+  base_com:
+    enabled: true
+    ranges:
+      0: [-0.075, 0.075]
+      1: [-0.075, 0.075]
+      2: [-0.075, 0.075]
+  encoder_bias:
+    enabled: true
+    bias_range: [-0.01, 0.01]
+  foot_friction:
+    enabled: true
+    ranges: [0.3, 2.0]
+    shared_random: true
+
+terminations:
+  - name: time_out
+    term: time_out
+    time_out: true
+  - name: anchor_pos
+    term: bad_anchor_pos_z_only
+    params:
+      command_name: motion
+      threshold: 0.5
+  - name: anchor_ori
+    term: bad_anchor_ori
+    params:
+      command_name: motion
+      threshold: 0.8
+      asset_cfg:
+        entity_name: robot
+  - name: ee_body_pos
+    term: bad_motion_body_pos_z_only
+    params:
+      command_name: motion
+      threshold: 0.5
+      body_names: ${task.robot.termination_body_names}

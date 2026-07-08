@@ -1,0 +1,45 @@
+experiment_name: g1_tracking
+save_interval: 1000
+num_steps_per_env: 24
+max_iterations: 300000
+seed: 42
+logger: wandb
+wandb_project: mjlab
+run_name: ""
+resume: false
+load_run: .*
+load_checkpoint: model_.*.pt
+clip_actions: null
+upload_model: true
+
+actor:
+  hidden_dims: [2048, 2048, 1024, 1024, 512, 256, 128]
+  activation: elu
+  obs_normalization: true
+  class_name: MLPModel
+  distribution_cfg:
+    class_name: GaussianDistribution
+    init_std: 1.0
+    std_type: scalar
+
+critic:
+  hidden_dims: [2048, 2048, 1024, 1024, 512, 256, 128]
+  activation: elu
+  obs_normalization: true
+  class_name: MLPModel
+  distribution_cfg: null
+
+algorithm:
+  class_name: PPO
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  entropy_coef: 0.005
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  learning_rate: 0.001
+  schedule: adaptive
+  gamma: 0.99
+  lam: 0.95
+  desired_kl: 0.01
+  max_grad_norm: 1.0
