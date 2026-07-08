@@ -1,11 +1,13 @@
 import os
 import time
+from pathlib import Path
 from typing import cast
 
 import torch
 import wandb
 from rsl_rl.env.vec_env import VecEnv
 from rsl_rl.utils import check_nan
+from rsl_rl.utils.log_writer import LogWriter
 from torch import nn
 
 from mjlab.rl import RslRlVecEnvWrapper
@@ -37,6 +39,20 @@ def _bootstrap_debug(message: str) -> None:
       f.flush()
   except Exception:
     pass
+
+
+def _upload_launch_script_artifact(
+  logger: object, launch_script_artifact_path: str | Path | None
+) -> bool:
+  if launch_script_artifact_path is None:
+    return False
+
+  writer = getattr(logger, "writer", None)
+  if not isinstance(writer, LogWriter):
+    return False
+
+  writer.save_file(str(launch_script_artifact_path))
+  return True
 
 
 class _OnnxMotionModel(nn.Module):
@@ -78,9 +94,19 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     log_dir: str | None = None,
     device: str = "cpu",
     registry_name: str | None = None,
+    launch_script_artifact_path: str | None = None,
   ):
     super().__init__(env, train_cfg, log_dir, device)
     self.registry_name = registry_name
+    self.launch_script_artifact_path = launch_script_artifact_path
+    self._launch_script_artifact_uploaded = False
+
+  def _upload_launch_script_artifact_once(self) -> None:
+    if self._launch_script_artifact_uploaded:
+      return
+    self._launch_script_artifact_uploaded = _upload_launch_script_artifact(
+      self.logger, self.launch_script_artifact_path
+    )
 
   def _begin_adaptive_sampling_iteration(self, iteration: int) -> None:
     _bootstrap_debug(f"before begin_adaptive_sampling_iteration iteration={iteration}")
@@ -233,6 +259,7 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     _bootstrap_debug("before logger.init_logging_writer")
     self.logger.init_logging_writer()
     _bootstrap_debug("after logger.init_logging_writer")
+    self._upload_launch_script_artifact_once()
 
     start_it = self.current_learning_iteration
     total_it = start_it + num_learning_iterations

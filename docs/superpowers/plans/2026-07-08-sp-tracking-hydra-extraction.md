@@ -4,7 +4,7 @@
 
 **Goal:** Build `SP_Tracking` as an external package that depends on `mjlab==1.5.0`, keeps the current tracking_bfm manager/rsl-rl training behavior, and moves task/agent parameters into Hydra YAML.
 
-**Architecture:** The package owns tracking-specific MDP terms, multi-motion commands, runner/PPO customizations, Hydra configs, and train/play entry points. mjlab remains an external runtime package that provides `ManagerBasedRlEnv`, manager cfg dataclasses, asset/entity/sensor APIs, and rsl-rl wrappers. YAML selects command/observation/reward/termination terms; Python builders translate YAML into mjlab manager cfg objects.
+**Architecture:** The package owns tracking-specific MDP terms, multi-motion commands, runner/PPO customizations, Hydra configs, task-specific G1 XML assets, and train/play entry points. mjlab remains an external runtime package that provides `ManagerBasedRlEnv`, manager cfg dataclasses, entity/sensor APIs, and rsl-rl wrappers. YAML selects command/observation/reward/termination terms and the robot asset; Python builders translate YAML into mjlab manager cfg objects.
 
 **Tech Stack:** Python 3.10+, uv, Hydra/OmegaConf, mjlab 1.5.0, rsl-rl-lib 5.4.0, pytest.
 
@@ -116,16 +116,16 @@ Expected: PASS.
 ### Task 3: Add Hydra YAML And Builder
 
 **Files:**
-- Create: `conf/train.yaml`
-- Create: `conf/task/tracking_bfm.yaml`
-- Create: `conf/task/tracking_bfm_sp.yaml`
-- Create: `conf/task/command/multimotion.yaml`
-- Create: `conf/task/command/largedataset.yaml`
-- Create: `conf/task/obs/old_tracking.yaml`
-- Create: `conf/task/obs/sp_tracking.yaml`
-- Create: `conf/task/reward/old_tracking.yaml`
-- Create: `conf/task/reward/sp_tracking.yaml`
-- Create: `conf/agent/tracking_bfm_ppo.yaml`
+- Create: `src/sp_tracking/conf/train.yaml`
+- Create: `src/sp_tracking/conf/task/tracking_bfm.yaml`
+- Create: `src/sp_tracking/conf/task/tracking_bfm_sp.yaml`
+- Create: `src/sp_tracking/conf/task/command/multimotion.yaml`
+- Create: `src/sp_tracking/conf/task/command/largedataset.yaml`
+- Create: `src/sp_tracking/conf/task/obs/old_tracking.yaml`
+- Create: `src/sp_tracking/conf/task/obs/sp_tracking.yaml`
+- Create: `src/sp_tracking/conf/task/reward/old_tracking.yaml`
+- Create: `src/sp_tracking/conf/task/reward/sp_tracking.yaml`
+- Create: `src/sp_tracking/conf/agent/tracking_bfm_ppo.yaml`
 - Create: `src/sp_tracking/config/build_env.py`
 - Create: `src/sp_tracking/config/build_agent.py`
 - Create: `tests/test_hydra_builders.py`
@@ -169,7 +169,7 @@ Expected: FAIL because train helpers are missing.
 
 - [ ] **Step 3: Implement the train entry**
 
-Use Hydra `@hydra.main(config_path="../../../conf", config_name="train")`. The entry composes env/agent configs, applies motion path overrides, creates `ManagerBasedRlEnv`, wraps with `RslRlVecEnvWrapper`, creates `MotionTrackingOnPolicyRunner`, handles resume/debug/log dir, and calls `runner.learn()`.
+Use Hydra `@hydra.main(config_path="../conf", config_name="train")`. The entry composes env/agent configs, applies motion path overrides, creates `ManagerBasedRlEnv`, wraps with `RslRlVecEnvWrapper`, creates `MotionTrackingOnPolicyRunner`, handles resume/debug/log dir, and calls `runner.learn()`.
 
 - [ ] **Step 4: Run train-entry tests**
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +57,23 @@ def _make_log_dir(cfg: DictConfig, agent_cfg: RslRlOnPolicyRunnerCfg) -> Path:
   return log_root_path / log_dir_name
 
 
+def _copy_launch_script_to_log_dir(
+  log_dir: Path, launch_script_path: str | os.PathLike[str] | None
+) -> Path | None:
+  if not launch_script_path:
+    return None
+
+  source = Path(launch_script_path).expanduser()
+  if not source.is_file():
+    raise FileNotFoundError(f"Launch script does not exist: {source}")
+
+  launch_dir = log_dir / "launch"
+  launch_dir.mkdir(parents=True, exist_ok=True)
+  target = launch_dir / source.name
+  shutil.copy2(source, target)
+  return target
+
+
 def run_train(cfg: DictConfig) -> None:
   prepared = prepare_train_cfg(cfg)
   selected_gpus, num_gpus = select_gpus(cfg.get("gpu_ids", [0]))
@@ -80,12 +98,18 @@ def run_train(cfg: DictConfig) -> None:
   )
   wrapped_env = RslRlVecEnvWrapper(env, clip_actions=prepared.agent.clip_actions)
   log_dir = _make_log_dir(cfg, prepared.agent)
+  launch_script_artifact_path = _copy_launch_script_to_log_dir(
+    log_dir, cfg.get("launch_script_path")
+  )
   runner = MotionTrackingOnPolicyRunner(
     wrapped_env,
     _asdict_dataclass(prepared.agent),
     str(log_dir),
     device,
     registry_name=cfg.get("registry_name"),
+    launch_script_artifact_path=(
+      str(launch_script_artifact_path) if launch_script_artifact_path else None
+    ),
   )
   runner.learn(
     num_learning_iterations=prepared.agent.max_iterations,

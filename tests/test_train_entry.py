@@ -1,15 +1,14 @@
-from hydra import compose, initialize_config_dir
-from hydra import initialize_config_module
+from hydra import compose, initialize_config_module
 from pathlib import Path
 
-from sp_tracking.scripts.train import prepare_train_cfg
+from rsl_rl.utils.log_writer import LogWriter
 
-
-CONF_DIR = Path(__file__).resolve().parents[1] / "conf"
+from sp_tracking.scripts.train import _copy_launch_script_to_log_dir, prepare_train_cfg
+from sp_tracking.tasks.tracking.rl.runner import _upload_launch_script_artifact
 
 
 def _compose(*overrides: str):
-  with initialize_config_dir(version_base=None, config_dir=str(CONF_DIR)):
+  with initialize_config_module(version_base=None, config_module="sp_tracking.conf"):
     return compose(config_name="train", overrides=list(overrides))
 
 
@@ -33,19 +32,53 @@ def test_prepare_train_cfg_applies_agent_overrides() -> None:
 
 
 def test_packaged_hydra_config_composes() -> None:
-  with initialize_config_module(version_base=None, config_module="sp_tracking.conf"):
-    cfg = compose(config_name="train", overrides=["task.num_envs=8"])
+  cfg = _compose("task.num_envs=8")
 
   prepared = prepare_train_cfg(cfg)
 
   assert prepared.env.scene.num_envs == 8
 
 
-def test_root_and_packaged_yaml_configs_match() -> None:
-  package_conf = Path(__file__).resolve().parents[1] / "src" / "sp_tracking" / "conf"
-  root_files = sorted(CONF_DIR.rglob("*.yaml"))
+def test_root_conf_directory_is_not_a_second_config_source() -> None:
+  root_conf = Path(__file__).resolve().parents[1] / "conf"
 
-  assert root_files
-  for root_file in root_files:
-    packaged_file = package_conf / root_file.relative_to(CONF_DIR)
-    assert packaged_file.read_text() == root_file.read_text()
+  assert not root_conf.exists()
+
+
+def test_copy_launch_script_to_log_dir(tmp_path: Path) -> None:
+  launch_script = tmp_path / "train_tracking_bfm.sh"
+  launch_script.write_text("#!/usr/bin/env bash\nuv run sp-train\n")
+  log_dir = tmp_path / "logs" / "run"
+
+  copied = _copy_launch_script_to_log_dir(log_dir, str(launch_script))
+
+  assert copied == log_dir / "launch" / "train_tracking_bfm.sh"
+  assert copied.read_text() == launch_script.read_text()
+
+
+class _FakeWriter(LogWriter):
+  def __init__(self) -> None:
+    self.saved_files: list[str] = []
+
+  def add_scalar(self, tag: str, scalar_value: float, global_step: int) -> None:
+    return None
+
+  def save_file(self, path: str) -> None:
+    self.saved_files.append(path)
+
+
+class _FakeLogger:
+  def __init__(self) -> None:
+    self.writer = _FakeWriter()
+
+
+def test_upload_launch_script_artifact_uses_log_writer(tmp_path: Path) -> None:
+  launch_script = tmp_path / "launch" / "train_tracking_bfm.sh"
+  launch_script.parent.mkdir()
+  launch_script.write_text("#!/usr/bin/env bash\n")
+  logger = _FakeLogger()
+
+  uploaded = _upload_launch_script_artifact(logger, launch_script)
+
+  assert uploaded is True
+  assert logger.writer.saved_files == [str(launch_script)]

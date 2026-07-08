@@ -5,7 +5,7 @@ from typing import Any
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from mjlab.asset_zoo.robots import G1_ACTION_SCALE, get_g1_robot_cfg
+from mjlab.asset_zoo.robots import G1_ACTION_SCALE
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as mjlab_mdp
 from mjlab.envs.mdp import dr
@@ -22,6 +22,10 @@ from mjlab.terrains import TerrainEntityCfg
 from mjlab.utils.noise import UniformNoiseCfg
 from mjlab.viewer import ViewerConfig
 
+from sp_tracking.assets.robots import (
+  get_g1_motion_tracking_robot_cfg,
+  get_g1_tracking_bfm_robot_cfg,
+)
 from sp_tracking.tasks.tracking import mdp
 from sp_tracking.tasks.tracking.mdp import sp as sp_mdp
 from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
@@ -257,6 +261,18 @@ def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
         "ranges": _params(cfg.events.base_com.ranges),
       },
     )
+  if cfg.events.get("base_mass") and cfg.events.base_mass.enabled:
+    events["base_mass"] = EventTermCfg(
+      mode="startup",
+      func=dr.body_mass,
+      params={
+        "asset_cfg": SceneEntityCfg(
+          "robot", body_names=_to_tuple(cfg.events.base_mass.body_names)
+        ),
+        "operation": "add",
+        "ranges": tuple(cfg.events.base_mass.ranges),
+      },
+    )
   if cfg.events.encoder_bias.enabled:
     events["encoder_bias"] = EventTermCfg(
       mode="startup",
@@ -333,6 +349,15 @@ def _build_sensors(cfg: DictConfig):
   return tuple(sensors)
 
 
+def _build_robot(cfg: DictConfig):
+  asset = str(cfg.robot.get("asset", "tracking_bfm_g1"))
+  if asset == "tracking_bfm_g1":
+    return get_g1_tracking_bfm_robot_cfg()
+  if asset == "motion_tracking_g1":
+    return get_g1_motion_tracking_robot_cfg()
+  raise ValueError(f"Unsupported robot asset: {asset}")
+
+
 def build_env_cfg(cfg: DictConfig | dict[str, Any]) -> ManagerBasedRlEnvCfg:
   if not isinstance(cfg, DictConfig):
     cfg = OmegaConf.create(cfg)
@@ -341,7 +366,7 @@ def build_env_cfg(cfg: DictConfig | dict[str, Any]) -> ManagerBasedRlEnvCfg:
     terrain=TerrainEntityCfg(terrain_type=str(cfg.scene.terrain_type)),
     num_envs=int(cfg.num_envs),
     env_spacing=float(cfg.scene.env_spacing),
-    entities={"robot": get_g1_robot_cfg()},
+    entities={"robot": _build_robot(cfg)},
     sensors=_build_sensors(cfg),
   )
   viewer = ViewerConfig(

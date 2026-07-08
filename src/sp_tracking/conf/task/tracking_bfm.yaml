@@ -12,6 +12,7 @@ seed: 42
 
 robot:
   name: g1
+  asset: tracking_bfm_g1
   entity_name: robot
   anchor_body_name: torso_link
   viewer_body_name: torso_link
@@ -71,6 +72,10 @@ events:
       0: [-0.075, 0.075]
       1: [-0.075, 0.075]
       2: [-0.075, 0.075]
+  base_mass:
+    enabled: true
+    body_names: [torso_link]
+    ranges: [-1.0, 1.0]
   encoder_bias:
     enabled: true
     bias_range: [-0.01, 0.01]

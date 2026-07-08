@@ -8,6 +8,7 @@ defaults:
 name: tracking_bfm_sp
 
 robot:
+  asset: motion_tracking_g1
   anchor_body_name: pelvis
   viewer_body_name: pelvis
   motion_type: mujoco

@@ -1,5 +1,4 @@
-from hydra import compose, initialize_config_dir
-from pathlib import Path
+from hydra import compose, initialize_config_module
 
 from sp_tracking.config.build_agent import build_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
@@ -11,11 +10,8 @@ from sp_tracking.tasks.tracking.mdp.multi_commands import (
 )
 
 
-CONF_DIR = Path(__file__).resolve().parents[1] / "conf"
-
-
 def _compose(*overrides: str):
-  with initialize_config_dir(version_base=None, config_dir=str(CONF_DIR)):
+  with initialize_config_module(version_base=None, config_module="sp_tracking.conf"):
     return compose(config_name="train", overrides=list(overrides))
 
 
@@ -38,6 +34,7 @@ def test_default_tracking_bfm_builds_multimotion_cfg() -> None:
   ]
   assert "motion_global_root_pos" in env_cfg.rewards
   assert "anchor_pos" in env_cfg.terminations
+  assert "base_mass" in env_cfg.events
 
 
 def test_sp_variant_builds_largedataset_cfg() -> None:

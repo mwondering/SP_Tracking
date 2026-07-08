@@ -1,6 +1,7 @@
 .venv/
 .pytest_cache/
 .ruff_cache/
+.cache/
 __pycache__/
 *.py[cod]
 dist/
@@ -8,3 +9,4 @@ dist/
 outputs/
 multirun/
 logs/
+wandb/
