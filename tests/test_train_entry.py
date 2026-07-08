@@ -3,7 +3,11 @@ from pathlib import Path
 
 from rsl_rl.utils.log_writer import LogWriter
 
-from sp_tracking.scripts.train import _copy_launch_script_to_log_dir, prepare_train_cfg
+from sp_tracking.scripts.train import (
+  _copy_launch_script_to_log_dir,
+  _resolve_runtime_device,
+  prepare_train_cfg,
+)
 from sp_tracking.tasks.tracking.rl.runner import _upload_launch_script_artifact
 
 
@@ -54,6 +58,29 @@ def test_copy_launch_script_to_log_dir(tmp_path: Path) -> None:
 
   assert copied == log_dir / "launch" / "train_tracking_bfm.sh"
   assert copied.read_text() == launch_script.read_text()
+
+
+def test_resolve_runtime_device_uses_local_rank_under_torchrun(monkeypatch) -> None:
+  monkeypatch.setenv("WORLD_SIZE", "4")
+  monkeypatch.setenv("RANK", "2")
+  monkeypatch.setenv("LOCAL_RANK", "2")
+  monkeypatch.delenv("MUJOCO_EGL_DEVICE_ID", raising=False)
+
+  device, rank, world_size = _resolve_runtime_device([0, 1, 2, 3])
+
+  assert device == "cuda:2"
+  assert rank == 2
+  assert world_size == 4
+  assert "CUDA_VISIBLE_DEVICES" not in __import__("os").environ
+  assert __import__("os").environ["MUJOCO_EGL_DEVICE_ID"] == "2"
+
+
+def test_prepare_train_cfg_keeps_num_envs_per_rank() -> None:
+  cfg = _compose("task.num_envs=32")
+
+  prepared = prepare_train_cfg(cfg)
+
+  assert prepared.env.scene.num_envs == 32
 
 
 class _FakeWriter(LogWriter):

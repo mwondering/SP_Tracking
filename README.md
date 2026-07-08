@@ -58,6 +58,19 @@ SP_TRACKING_WANDB_PROJECT=sp-tracking \
 scripts/train_tracking_bfm.sh /path/to/motions
 ```
 
+Use the torchrun launch script for multi-GPU training:
+
+```bash
+SP_TRACKING_GPUS=0,1 \
+SP_TRACKING_NUM_ENVS=4096 \
+scripts/train_tracking_bfm_multigpu.sh /path/to/motions
+```
+
+`SP_TRACKING_NUM_ENVS` and `task.num_envs` are per-rank values. With two GPUs
+and `SP_TRACKING_NUM_ENVS=4096`, each GPU creates 4096 environments and the
+global rollout batch is doubled. Override `SP_TRACKING_NPROC` only when it
+should differ from the number of comma-separated GPU IDs in `SP_TRACKING_GPUS`.
+
 The script forwards to:
 
 ```bash

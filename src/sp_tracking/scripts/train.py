@@ -26,6 +26,36 @@ class PreparedTrainCfg:
   raw: DictConfig
 
 
+def _get_world_size() -> int:
+  return int(os.environ.get("WORLD_SIZE", "1"))
+
+
+def _resolve_runtime_device(gpu_ids) -> tuple[str, int, int]:
+  world_size = _get_world_size()
+  if world_size > 1:
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    rank = int(os.environ.get("RANK", "0"))
+    os.environ.setdefault("MUJOCO_GL", "egl")
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = str(local_rank)
+    return f"cuda:{local_rank}", rank, world_size
+
+  selected_gpus, num_gpus = select_gpus(gpu_ids)
+  if int(num_gpus) > 1:
+    raise NotImplementedError(
+      "sp-train no longer launches multi-GPU workers itself. "
+      "Use torchrun, for example: "
+      "`uv run torchrun --standalone --nproc_per_node=2 -m sp_tracking.scripts.train ...`"
+    )
+  if selected_gpus is None:
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    device = "cpu"
+  else:
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, selected_gpus))
+    device = "cuda:0"
+  os.environ.setdefault("MUJOCO_GL", "egl")
+  return device, 0, 1
+
+
 def _apply_motion_path(env_cfg: ManagerBasedRlEnvCfg, motion_path: str | None) -> None:
   if not motion_path:
     return
@@ -76,20 +106,7 @@ def _copy_launch_script_to_log_dir(
 
 def run_train(cfg: DictConfig) -> None:
   prepared = prepare_train_cfg(cfg)
-  selected_gpus, num_gpus = select_gpus(cfg.get("gpu_ids", [0]))
-  if selected_gpus is None:
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    device = "cpu"
-  else:
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, selected_gpus))
-    device = "cuda:0"
-  os.environ.setdefault("MUJOCO_GL", "egl")
-
-  if int(num_gpus) > 1:
-    raise NotImplementedError(
-      "sp-train currently supports direct single-process launch. "
-      "Use torchrunx integration after the single-GPU path is validated."
-    )
+  device, _rank, _world_size = _resolve_runtime_device(cfg.get("gpu_ids", [0]))
 
   env = ManagerBasedRlEnv(
     cfg=prepared.env,
