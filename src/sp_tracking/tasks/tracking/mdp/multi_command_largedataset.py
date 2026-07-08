@@ -19,11 +19,13 @@ from mjlab.utils.lab_api.math import (
 )
 
 from .multi_commands import (
+  DEFAULT_MOTION_FPS,
   _ISAACLAB_TO_MUJOCO_BODY_REINDEX,
   _ISAACLAB_TO_MUJOCO_JOINT_REINDEX,
   MotionLoader,
   MultiMotionCommand,
   MultiMotionCommandCfg,
+  extract_motion_fps,
 )
 
 
@@ -508,7 +510,7 @@ class LargeDatasetMotionStore:
   """CPU/disk-side motion store that only stages requested motions on device."""
 
   _FIELD_NAMES = LargeDatasetMotionSlotBuffer._FIELD_NAMES
-  _DEFAULT_FPS = 30.0
+  _DEFAULT_FPS = DEFAULT_MOTION_FPS
 
   def __init__(
     self,
@@ -586,7 +588,7 @@ class LargeDatasetMotionStore:
         raise FileNotFoundError(f"Invalid motion file path: {motion_file}")
       with np.load(motion_file) as data:
         file_lengths.append(int(data["joint_pos"].shape[0]))
-        fps_value, is_non_scalar_fps, is_empty_fps = self._extract_fps_value(data["fps"])
+        fps_value, is_non_scalar_fps, is_empty_fps = extract_motion_fps(data)
         fps_values.append(fps_value)
         if is_non_scalar_fps:
           non_scalar_fps_count += 1
@@ -706,7 +708,7 @@ class LargeDatasetMotionStore:
   def _extract_fps_value(fps_data: np.ndarray) -> tuple[float, bool, bool]:
     fps_array = np.asarray(fps_data, dtype=np.float32)
     if fps_array.size == 0:
-      return LargeDatasetMotionStore._DEFAULT_FPS, False, True
+      return DEFAULT_MOTION_FPS, False, True
     return float(fps_array.reshape(-1)[0]), fps_array.size > 1, False
 
   def load_motion_ids(self, motion_ids: torch.Tensor) -> LargeDatasetMotionBuffer:

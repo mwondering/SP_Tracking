@@ -167,6 +167,18 @@ _ISAACLAB_TO_MUJOCO_BODY_REINDEX = [
   _ISAACLAB_BODY_NAMES.index(name) for name in _MUJOCO_BODY_NAMES
 ]
 
+DEFAULT_MOTION_FPS = 50.0
+
+
+def extract_motion_fps(data: np.lib.npyio.NpzFile) -> tuple[float, bool, bool]:
+  """Return ``(fps, is_non_scalar, used_default)`` for a motion archive."""
+  if "fps" not in data.files:
+    return DEFAULT_MOTION_FPS, False, True
+  fps_array = np.asarray(data["fps"], dtype=np.float32)
+  if fps_array.size == 0:
+    return DEFAULT_MOTION_FPS, False, True
+  return float(fps_array.reshape(-1)[0]), fps_array.size > 1, False
+
 
 class MotionLoader:
   def __init__(
@@ -178,7 +190,7 @@ class MotionLoader:
   ):
     assert os.path.isfile(motion_file), f"Invalid file path: {motion_file}"
     data = np.load(motion_file)
-    self.fps = data["fps"]
+    self.fps, _, _ = extract_motion_fps(data)
     joint_reindex = None
     body_reindex = None
     if motion_type == "isaaclab":
@@ -261,7 +273,8 @@ class MultiMotionLoader:
       assert os.path.isfile(motion_file), f"Invalid file path: {motion_file}"
       data = np.load(motion_file)
 
-      self.fps_list.append(data["fps"])
+      fps_value, _, _ = extract_motion_fps(data)
+      self.fps_list.append(fps_value)
 
       jp = torch.tensor(data["joint_pos"], dtype=torch.float32, device=self.device)
       jv = torch.tensor(data["joint_vel"], dtype=torch.float32, device=self.device)

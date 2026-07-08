@@ -49,6 +49,7 @@ mkdir -p "${MPLCONFIGDIR}"
 cmd=(
   uv run torchrun
   --standalone
+  "--local_ranks_filter=0"
   "--nproc_per_node=${NPROC}"
   -m sp_tracking.scripts.train
   task=tracking_bfm
@@ -59,8 +60,8 @@ cmd=(
   "agent.num_steps_per_env=${SP_TRACKING_NUM_STEPS_PER_ENV:-24}"
   "agent.logger=wandb"
   "agent.upload_model=False"
-  "agent.wandb_project=${SP_TRACKING_WANDB_PROJECT:-sp-tracking}"
-  "agent.save_interval=${SP_TRACKING_SAVE_INTERVAL:-1000}"
+  "agent.wandb_project=${SP_TRACKING_WANDB_PROJECT:-tracking_bfm}"
+  "agent.save_interval=${SP_TRACKING_SAVE_INTERVAL:-2000}"
   "log_root=${SP_TRACKING_LOG_ROOT:-logs/rsl_rl}"
 )
 
