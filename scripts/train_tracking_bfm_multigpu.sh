@@ -14,6 +14,8 @@ Environment:
   SP_TRACKING_GPUS=0,1              CUDA devices visible to torchrun.
   SP_TRACKING_NPROC=2              Number of torchrun workers. Defaults to the GPU count.
   SP_TRACKING_MOTION_PATH=<path>   Motion directory when no positional path is given.
+  SP_TRACKING_HISTORY_STEPS=0      Command history horizon; old h100 baseline default.
+  SP_TRACKING_FUTURE_STEPS=1       Command future horizon; old h100 baseline default.
 
 Examples:
   SP_TRACKING_GPUS=0,1 scripts/train_tracking_bfm_multigpu.sh
@@ -56,6 +58,8 @@ cmd=(
   "motion_path=${MOTION_PATH}"
   "launch_script_path=${LAUNCH_SCRIPT_PATH}"
   "task.num_envs=${SP_TRACKING_NUM_ENVS:-16}"
+  "task.command.command.history_steps=${SP_TRACKING_HISTORY_STEPS:-0}"
+  "task.command.command.future_steps=${SP_TRACKING_FUTURE_STEPS:-1}"
   "agent.max_iterations=${SP_TRACKING_MAX_ITERATIONS:-300000}"
   "agent.num_steps_per_env=${SP_TRACKING_NUM_STEPS_PER_ENV:-24}"
   "agent.logger=wandb"

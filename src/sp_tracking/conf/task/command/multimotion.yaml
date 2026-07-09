@@ -26,4 +26,16 @@ command:
   joint_position_range: [-0.1, 0.1]
   future_steps: 5
   history_steps: 5
+  adaptive_uniform_ratio: 0.1
+  adaptive_bin_width_s: 1.0
+  adaptive_bin_width_steps: null
+  adaptive_init_num_failures: 1.0
+  adaptive_failure_rate_window_iterations: null
+  adaptive_failure_rate_window_chunks: 40
+  adaptive_failure_rate_max_over_mean: 200.0
+  adaptive_sequence_length_agnostic: true
+  adaptive_max_prob_per_bin: auto
+  adaptive_max_prob_per_motion: auto
+  adaptive_pre_failure_sample_window_steps: 200
   sampling_mode: adaptive
+  if_log_metrics: true

@@ -26,12 +26,15 @@ def test_default_tracking_bfm_builds_multimotion_cfg() -> None:
     "command",
     "motion_anchor_pos_b",
     "motion_anchor_ori_b",
+    "body_pos",
+    "body_ori",
     "base_lin_vel",
     "base_ang_vel",
     "joint_pos",
     "joint_vel",
     "actions",
   ]
+  assert env_cfg.observations["actor"].terms["joint_pos"].params == {}
   assert "motion_global_root_pos" in env_cfg.rewards
   assert "anchor_pos" in env_cfg.terminations
   assert "base_mass" in env_cfg.events
@@ -47,6 +50,14 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert "root_pos_tracking" in env_cfg.rewards
   assert "body_z_termination" in env_cfg.terminations
   assert env_cfg.commands["motion"].motion_type == "mujoco"
+
+
+def test_tracking_bfm_command_adaptive_window_is_hydra_configurable() -> None:
+  cfg = _compose("++task.command.command.adaptive_pre_failure_sample_window_steps=123")
+
+  env_cfg = build_env_cfg(cfg.task)
+
+  assert env_cfg.commands["motion"].adaptive_pre_failure_sample_window_steps == 123
 
 
 def test_agent_cfg_matches_tracking_bfm_defaults() -> None:

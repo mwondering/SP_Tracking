@@ -136,6 +136,20 @@ def _to_tuple(value: Any) -> tuple[Any, ...]:
   return (value,)
 
 
+def _optional_int(value: Any) -> int | None:
+  value = _to_container(value)
+  if value is None:
+    return None
+  return int(value)
+
+
+def _optional_auto_float(value: Any) -> float | str | None:
+  value = _to_container(value)
+  if value is None or value == "auto":
+    return value
+  return float(value)
+
+
 def _params(raw: Any | None) -> dict[str, Any]:
   params = _to_container(raw) if raw is not None else {}
   params = dict(params)
@@ -228,7 +242,37 @@ def _build_command(cfg: DictConfig):
     "joint_position_range": tuple(command_cfg.joint_position_range),
     "future_steps": int(command_cfg.get("future_steps", 5)),
     "history_steps": int(command_cfg.get("history_steps", 5)),
+    "adaptive_uniform_ratio": float(command_cfg.get("adaptive_uniform_ratio", 0.1)),
+    "adaptive_bin_width_s": float(command_cfg.get("adaptive_bin_width_s", 1.0)),
+    "adaptive_bin_width_steps": _optional_int(
+      command_cfg.get("adaptive_bin_width_steps")
+    ),
+    "adaptive_init_num_failures": float(
+      command_cfg.get("adaptive_init_num_failures", 1.0)
+    ),
+    "adaptive_failure_rate_window_iterations": _optional_int(
+      command_cfg.get("adaptive_failure_rate_window_iterations")
+    ),
+    "adaptive_failure_rate_window_chunks": int(
+      command_cfg.get("adaptive_failure_rate_window_chunks", 40)
+    ),
+    "adaptive_failure_rate_max_over_mean": float(
+      command_cfg.get("adaptive_failure_rate_max_over_mean", 200.0)
+    ),
+    "adaptive_sequence_length_agnostic": bool(
+      command_cfg.get("adaptive_sequence_length_agnostic", True)
+    ),
+    "adaptive_max_prob_per_bin": _optional_auto_float(
+      command_cfg.get("adaptive_max_prob_per_bin", "auto")
+    ),
+    "adaptive_max_prob_per_motion": _optional_auto_float(
+      command_cfg.get("adaptive_max_prob_per_motion", "auto")
+    ),
+    "adaptive_pre_failure_sample_window_steps": int(
+      command_cfg.get("adaptive_pre_failure_sample_window_steps", 200)
+    ),
     "sampling_mode": str(command_cfg.get("sampling_mode", "adaptive")),
+    "if_log_metrics": bool(command_cfg.get("if_log_metrics", True)),
     "resampling_time_range": tuple(command_cfg.resampling_time_range),
     "debug_vis": bool(command_cfg.get("debug_vis", True)),
   }

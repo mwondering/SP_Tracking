@@ -14,6 +14,14 @@ observations:
         term: motion_anchor_ori_b
         params: {command_name: motion}
         noise: [-0.05, 0.05]
+      - name: body_pos
+        term: robot_body_pos_b
+        params: {command_name: motion}
+        noise: [-0.25, 0.25]
+      - name: body_ori
+        term: robot_body_ori_b
+        params: {command_name: motion}
+        noise: [-0.05, 0.05]
       - name: base_lin_vel
         term: builtin_sensor
         params: {sensor_name: robot/imu_lin_vel}
@@ -24,7 +32,6 @@ observations:
         noise: [-0.2, 0.2]
       - name: joint_pos
         term: joint_pos_rel
-        params: {biased: true}
         noise: [-0.01, 0.01]
       - name: joint_vel
         term: joint_vel_rel

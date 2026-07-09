@@ -1,8 +1,11 @@
 from hydra import compose, initialize_config_module
 from pathlib import Path
+from types import SimpleNamespace
 
+from omegaconf import OmegaConf
 from rsl_rl.utils.log_writer import LogWriter
 
+from sp_tracking.scripts import train as train_module
 from sp_tracking.scripts.train import (
   _copy_launch_script_to_log_dir,
   _resolve_runtime_device,
@@ -81,6 +84,57 @@ def test_prepare_train_cfg_keeps_num_envs_per_rank() -> None:
   prepared = prepare_train_cfg(cfg)
 
   assert prepared.env.scene.num_envs == 32
+
+
+def test_run_train_configures_torch_backends_before_env(monkeypatch, tmp_path: Path) -> None:
+  events: list[str] = []
+  prepared = SimpleNamespace(
+    env=SimpleNamespace(),
+    agent=SimpleNamespace(
+      clip_actions=None,
+      experiment_name="exp",
+      max_iterations=0,
+      run_name="",
+    ),
+  )
+
+  monkeypatch.setattr(train_module, "prepare_train_cfg", lambda cfg: prepared)
+  monkeypatch.setattr(train_module, "_resolve_runtime_device", lambda gpu_ids: ("cpu", 0, 1))
+  monkeypatch.setattr(train_module, "_make_log_dir", lambda cfg, agent: tmp_path / "run")
+  monkeypatch.setattr(train_module, "_copy_launch_script_to_log_dir", lambda log_dir, path: None)
+  monkeypatch.setattr(train_module, "_asdict_dataclass", lambda obj: {})
+  monkeypatch.setattr(
+    train_module,
+    "configure_torch_backends",
+    lambda: events.append("torch"),
+    raising=False,
+  )
+
+  class FakeEnv:
+    def __init__(self, *args, **kwargs) -> None:
+      events.append("env")
+
+  class FakeWrapper:
+    def __init__(self, env, clip_actions=None) -> None:
+      events.append("wrapper")
+
+    def close(self) -> None:
+      events.append("close")
+
+  class FakeRunner:
+    def __init__(self, *args, **kwargs) -> None:
+      events.append("runner")
+
+    def learn(self, *args, **kwargs) -> None:
+      events.append("learn")
+
+  monkeypatch.setattr(train_module, "ManagerBasedRlEnv", FakeEnv)
+  monkeypatch.setattr(train_module, "RslRlVecEnvWrapper", FakeWrapper)
+  monkeypatch.setattr(train_module, "MotionTrackingOnPolicyRunner", FakeRunner)
+
+  train_module.run_train(OmegaConf.create({"gpu_ids": [0]}))
+
+  assert events[:2] == ["torch", "env"]
 
 
 class _FakeWriter(LogWriter):

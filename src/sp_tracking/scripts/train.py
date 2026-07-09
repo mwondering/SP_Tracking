@@ -13,6 +13,7 @@ from omegaconf import DictConfig
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from mjlab.utils.gpu import select_gpus
+from mjlab.utils.torch import configure_torch_backends
 
 from sp_tracking.config.build_agent import build_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
@@ -107,6 +108,7 @@ def _copy_launch_script_to_log_dir(
 def run_train(cfg: DictConfig) -> None:
   prepared = prepare_train_cfg(cfg)
   device, _rank, _world_size = _resolve_runtime_device(cfg.get("gpu_ids", [0]))
+  configure_torch_backends()
 
   env = ManagerBasedRlEnv(
     cfg=prepared.env,

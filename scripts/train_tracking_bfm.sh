@@ -11,6 +11,10 @@ Usage:
   scripts/train_tracking_bfm.sh [motion_path] [hydra_overrides...]
   SP_TRACKING_MOTION_PATH=<motion_path> scripts/train_tracking_bfm.sh [hydra_overrides...]
 
+Environment:
+  SP_TRACKING_HISTORY_STEPS=0       Command history horizon; old h100 baseline default.
+  SP_TRACKING_FUTURE_STEPS=1        Command future horizon; old h100 baseline default.
+
 Examples:
   scripts/train_tracking_bfm.sh
   scripts/train_tracking_bfm.sh /path/to/motions
@@ -44,6 +48,8 @@ cmd=(
   "motion_path=${MOTION_PATH}"
   "launch_script_path=${LAUNCH_SCRIPT_PATH}"
   "task.num_envs=${SP_TRACKING_NUM_ENVS:-16}"
+  "task.command.command.history_steps=${SP_TRACKING_HISTORY_STEPS:-0}"
+  "task.command.command.future_steps=${SP_TRACKING_FUTURE_STEPS:-1}"
   "agent.max_iterations=${SP_TRACKING_MAX_ITERATIONS:-300000}"
   "agent.num_steps_per_env=${SP_TRACKING_NUM_STEPS_PER_ENV:-24}"
   "agent.logger=wandb"
