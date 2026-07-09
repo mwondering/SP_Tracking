@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
@@ -18,6 +18,10 @@ from mjlab.utils.torch import configure_torch_backends
 from sp_tracking.config.build_agent import build_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
+from sp_tracking.tasks.tracking.rl.checkpoints import (
+  get_wandb_checkpoint_path,
+  resolve_local_checkpoint_path,
+)
 
 
 @dataclass
@@ -105,6 +109,40 @@ def _copy_launch_script_to_log_dir(
   return target
 
 
+def _save_resolved_cfg(log_dir: Path, cfg: DictConfig) -> None:
+  log_dir.mkdir(parents=True, exist_ok=True)
+  OmegaConf.save(cfg, log_dir / "cfg.yaml", resolve=True)
+  OmegaConf.save(cfg, log_dir / "config.yaml", resolve=True)
+
+
+def _resolve_resume_path(
+  cfg: DictConfig,
+  agent_cfg: RslRlOnPolicyRunnerCfg,
+) -> Path | None:
+  checkpoint_path = cfg.get("checkpoint_path")
+  if checkpoint_path:
+    path = Path(str(checkpoint_path)).expanduser()
+    if not path.is_file():
+      raise FileNotFoundError(f"Checkpoint file not found: {path}")
+    return path
+  if cfg.get("wandb_run_path"):
+    log_root = Path(str(cfg.get("log_root", "logs/rsl_rl"))) / agent_cfg.experiment_name
+    path, _ = get_wandb_checkpoint_path(
+      log_root=log_root,
+      run_path=str(cfg.get("wandb_run_path")),
+      checkpoint_name=cfg.get("wandb_checkpoint_name"),
+    )
+    return path
+  if not bool(agent_cfg.resume):
+    return None
+  log_root = Path(str(cfg.get("log_root", "logs/rsl_rl"))) / agent_cfg.experiment_name
+  return resolve_local_checkpoint_path(
+    log_root=log_root,
+    load_run=str(agent_cfg.load_run),
+    load_checkpoint=str(agent_cfg.load_checkpoint),
+  )
+
+
 def run_train(cfg: DictConfig) -> None:
   prepared = prepare_train_cfg(cfg)
   device, _rank, _world_size = _resolve_runtime_device(cfg.get("gpu_ids", [0]))
@@ -117,6 +155,7 @@ def run_train(cfg: DictConfig) -> None:
   )
   wrapped_env = RslRlVecEnvWrapper(env, clip_actions=prepared.agent.clip_actions)
   log_dir = _make_log_dir(cfg, prepared.agent)
+  _save_resolved_cfg(log_dir, cfg)
   launch_script_artifact_path = _copy_launch_script_to_log_dir(
     log_dir, cfg.get("launch_script_path")
   )
@@ -130,6 +169,10 @@ def run_train(cfg: DictConfig) -> None:
       str(launch_script_artifact_path) if launch_script_artifact_path else None
     ),
   )
+  resume_path = _resolve_resume_path(cfg, prepared.agent)
+  if resume_path is not None:
+    print(f"[INFO] Loading checkpoint: {resume_path}")
+    runner.load(str(resume_path), map_location=device)
   runner.learn(
     num_learning_iterations=prepared.agent.max_iterations,
     init_at_random_ep_len=True,

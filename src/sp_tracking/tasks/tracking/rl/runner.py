@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from pathlib import Path
@@ -8,15 +9,12 @@ import wandb
 from rsl_rl.env.vec_env import VecEnv
 from rsl_rl.utils import check_nan
 from rsl_rl.utils.log_writer import LogWriter
-from torch import nn
 
 from mjlab.rl import RslRlVecEnvWrapper
-from mjlab.rl.exporter_utils import (
-  attach_metadata_to_onnx,
-  get_base_metadata,
-)
+from mjlab.rl.exporter_utils import get_base_metadata
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from sp_tracking.tasks.tracking.mdp import MotionCommand
+from sp_tracking.tasks.tracking.rl.export import export_sim2real_policy_onnx
 
 
 def _bootstrap_debug(message: str) -> None:
@@ -53,35 +51,6 @@ def _upload_launch_script_artifact(
 
   writer.save_file(str(launch_script_artifact_path))
   return True
-
-
-class _OnnxMotionModel(nn.Module):
-  """ONNX-exportable model that wraps the policy and bundles motion reference data."""
-
-  def __init__(self, actor, motion):
-    super().__init__()
-    self.policy = actor.as_onnx(verbose=False)
-    self.register_buffer("joint_pos", motion.joint_pos.to("cpu"))
-    self.register_buffer("joint_vel", motion.joint_vel.to("cpu"))
-    self.register_buffer("body_pos_w", motion.body_pos_w.to("cpu"))
-    self.register_buffer("body_quat_w", motion.body_quat_w.to("cpu"))
-    self.register_buffer("body_lin_vel_w", motion.body_lin_vel_w.to("cpu"))
-    self.register_buffer("body_ang_vel_w", motion.body_ang_vel_w.to("cpu"))
-    self.time_step_total: int = self.joint_pos.shape[0]  # type: ignore[index]
-
-  def forward(self, x, time_step):
-    time_step_clamped = torch.clamp(
-      time_step.long().squeeze(-1), max=self.time_step_total - 1
-    )
-    return (
-      self.policy(x),
-      self.joint_pos[time_step_clamped],  # type: ignore[index]
-      self.joint_vel[time_step_clamped],  # type: ignore[index]
-      self.body_pos_w[time_step_clamped],  # type: ignore[index]
-      self.body_quat_w[time_step_clamped],  # type: ignore[index]
-      self.body_lin_vel_w[time_step_clamped],  # type: ignore[index]
-      self.body_ang_vel_w[time_step_clamped],  # type: ignore[index]
-    )
 
 
 class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
@@ -397,9 +366,7 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
 
     if self.logger.writer is not None:
       _bootstrap_debug("before final save")
-      self.save(
-        os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt")
-      )
+      self.save(os.path.join(self.logger.log_dir, "model_final.pt"))
       self.logger.stop_logging_writer()
       _bootstrap_debug("after final save")
     _bootstrap_debug("learn done")
@@ -407,45 +374,37 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
   def export_policy_to_onnx(
     self, path: str, filename: str = "policy.onnx", verbose: bool = False
   ) -> None:
-    os.makedirs(path, exist_ok=True)
-    cmd = cast(MotionCommand, self.env.unwrapped.command_manager.get_term("motion"))
-    model = _OnnxMotionModel(self.alg.get_policy(), cmd.motion)
-    model.to("cpu")
-    model.eval()
-    obs = torch.zeros(1, model.policy.input_size)
-    time_step = torch.zeros(1, 1)
-    torch.onnx.export(
-      model,
-      (obs, time_step),
-      os.path.join(path, filename),
-      export_params=True,
-      opset_version=18,
-      verbose=verbose,
-      input_names=["obs", "time_step"],
-      output_names=[
-        "actions",
-        "joint_pos",
-        "joint_vel",
-        "body_pos_w",
-        "body_quat_w",
-        "body_lin_vel_w",
-        "body_ang_vel_w",
-      ],
-      dynamic_axes={},
-      dynamo=False,
+    del verbose
+    checkpoint_name = getattr(
+      self, "_export_checkpoint_name", f"model_{self.current_learning_iteration}.pt"
+    )
+    export_sim2real_policy_onnx(
+      policy=self.alg.get_policy(),
+      env=self.env,
+      path=Path(path) / filename,
+      run_name=self._run_name(),
+      iteration=int(self.current_learning_iteration),
+      checkpoint_name=str(checkpoint_name),
+      metadata=self._deploy_metadata(),
     )
 
-  def save(self, path: str, infos=None):
-    super().save(path, infos)
-    if not self.cfg["upload_model"]:
-      return
-    policy_dir, filename, onnx_path = self._get_export_paths(path)
+  def _run_name(self) -> str:
+    return (
+      wandb.run.name
+      if self.logger.logger_type in {"wandb", "WandbLogWriter"} and wandb.run
+      else "local"
+    )
+
+  def _env_state(self) -> dict[str, int]:
+    return {"common_step_counter": int(self.env.unwrapped.common_step_counter)}
+
+  def _deploy_metadata(self) -> dict:
+    metadata = {}
     try:
-      self.export_policy_to_onnx(str(policy_dir), filename)
-      run_name: str = (
-        wandb.run.name if self.logger.logger_type == "wandb" and wandb.run else "local"
-      )  # type: ignore[assignment]
-      metadata = get_base_metadata(self.env.unwrapped, run_name)
+      metadata = get_base_metadata(self.env.unwrapped, self._run_name())
+    except Exception:
+      metadata = {}
+    try:
       motion_term = cast(
         MotionCommand, self.env.unwrapped.command_manager.get_term("motion")
       )
@@ -455,11 +414,116 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
           "body_names": list(motion_term.cfg.body_names),
         }
       )
-      attach_metadata_to_onnx(str(onnx_path), metadata)
-      if self.logger.logger_type in ["wandb"] and self.cfg["upload_model"]:
-        wandb.save(str(onnx_path), base_path=str(policy_dir))
-        if self.registry_name is not None:
-          wandb.run.use_artifact(self.registry_name)  # type: ignore
-          self.registry_name = None
+    except Exception:
+      pass
+    return metadata
+
+  def _checkpoint_payload(self, infos=None) -> dict:
+    env_state = self._env_state()
+    infos = {**(infos or {}), "env_state": env_state}
+    rsl_rl_state = self.alg.save()
+    payload = {
+      **rsl_rl_state,
+      "policy": rsl_rl_state.get("actor_state_dict", {}),
+      "env": env_state,
+      "rsl_rl": rsl_rl_state,
+      "iter": int(self.current_learning_iteration),
+      "infos": infos,
+    }
+    if self.logger.logger_type == "wandb" and wandb.run:
+      payload["wandb"] = {"name": wandb.run.name, "id": wandb.run.id}
+    return payload
+
+  def _write_deploy_metadata(self, policy_dir: Path, checkpoint_path: Path) -> None:
+    metadata = {
+      **self._deploy_metadata(),
+      "checkpoint": checkpoint_path.name,
+      "iteration": int(self.current_learning_iteration),
+      "run_name": self._run_name(),
+    }
+    (policy_dir / "deploy_metadata.json").write_text(
+      json.dumps(metadata, indent=2) + "\n"
+    )
+
+  def _export_deploy_artifacts(self, checkpoint_path: str | Path) -> None:
+    policy_dir = Path(checkpoint_path).parent
+    filename = "policy.onnx"
+    self._export_checkpoint_name = Path(checkpoint_path).name
+    try:
+      self.export_policy_to_onnx(str(policy_dir), filename)
+    finally:
+      del self._export_checkpoint_name
+    self._write_deploy_metadata(policy_dir, Path(checkpoint_path))
+
+    onnx_path = policy_dir / filename
+    writer = getattr(self.logger, "writer", None)
+    if self.cfg["upload_model"] and isinstance(writer, LogWriter):
+      writer.save_file(str(onnx_path))
+      policy_json = onnx_path.with_suffix(".json")
+      if policy_json.exists():
+        writer.save_file(str(policy_json))
+      deploy_metadata = policy_dir / "deploy_metadata.json"
+      if deploy_metadata.exists():
+        writer.save_file(str(deploy_metadata))
+      if self.registry_name is not None and self.logger.logger_type in {"wandb", "WandbLogWriter"}:
+        wandb.run.use_artifact(self.registry_name)  # type: ignore[union-attr]
+        self.registry_name = None
+
+  def save(self, path: str, infos=None):
+    torch.save(self._checkpoint_payload(infos), path)
+    if self.cfg["upload_model"]:
+      self.logger.save_model(path, self.current_learning_iteration)
+    try:
+      self._export_deploy_artifacts(path)
     except Exception as e:
       print(f"[WARN] ONNX export failed (training continues): {e}")
+
+  def load(
+    self,
+    path: str,
+    load_cfg: dict | None = None,
+    strict: bool = True,
+    map_location: str | None = None,
+  ) -> dict:
+    loaded_dict = torch.load(path, map_location=map_location, weights_only=False)
+    rsl_rl_state = dict(loaded_dict.get("rsl_rl", loaded_dict))
+    if "policy" in loaded_dict and "actor_state_dict" not in rsl_rl_state:
+      rsl_rl_state["actor_state_dict"] = loaded_dict["policy"]
+
+    if "model_state_dict" in rsl_rl_state:
+      print(f"Detected legacy checkpoint at {path}. Migrating to new format...")
+      model_state_dict = rsl_rl_state.pop("model_state_dict")
+      actor_state_dict = {}
+      critic_state_dict = {}
+      for key, value in model_state_dict.items():
+        if key.startswith("actor."):
+          actor_state_dict[key.replace("actor.", "mlp.")] = value
+        elif key.startswith("actor_obs_normalizer."):
+          actor_state_dict[key.replace("actor_obs_normalizer.", "obs_normalizer.")] = value
+        elif key in ["std", "log_std"]:
+          actor_state_dict[key] = value
+
+        if key.startswith("critic."):
+          critic_state_dict[key.replace("critic.", "mlp.")] = value
+        elif key.startswith("critic_obs_normalizer."):
+          critic_state_dict[key.replace("critic_obs_normalizer.", "obs_normalizer.")] = value
+      rsl_rl_state["actor_state_dict"] = actor_state_dict
+      rsl_rl_state["critic_state_dict"] = critic_state_dict
+
+    actor_sd = rsl_rl_state.get("actor_state_dict", {})
+    if "std" in actor_sd:
+      actor_sd["distribution.std_param"] = actor_sd.pop("std")
+    if "log_std" in actor_sd:
+      actor_sd["distribution.log_std_param"] = actor_sd.pop("log_std")
+
+    load_iteration = self.alg.load(rsl_rl_state, load_cfg, strict)
+    if load_iteration:
+      self.current_learning_iteration = int(loaded_dict.get("iter", rsl_rl_state.get("iter", 0)))
+
+    infos = loaded_dict.get("infos") or rsl_rl_state.get("infos") or {}
+    env_state = loaded_dict.get("env")
+    if not env_state and isinstance(infos, dict):
+      env_state = infos.get("env_state")
+    if env_state and "common_step_counter" in env_state:
+      self.env.unwrapped.common_step_counter = env_state["common_step_counter"]
+    return infos

@@ -15,7 +15,7 @@ class MotionTrackingJointPositionActionCfg(JointPositionActionCfg):
   max_delay: int = 2
   delay_full_progress: float = 0.8
   alpha: tuple[float, float] = (0.8, 1.0)
-  torque_limit_scale_range: tuple[float, float] = (4.0, 1.0)
+  torque_limit_scale_range: tuple[float, float] = (1.0, 1.0)
   torque_limit_progress_range: tuple[float, float] = (0.0, 0.8)
 
   def build(self, env: "ManagerBasedRlEnv") -> "MotionTrackingJointPositionAction":
@@ -135,10 +135,11 @@ class MotionTrackingJointPositionAction(JointPositionAction):
       scale = float(start_scale) + ratio * (float(end_scale) - float(start_scale))
     if self._torque_limit_scale is not None and abs(scale - self._torque_limit_scale) < 1.0e-6:
       return scale
-    force_range = self._default_forcerange.unsqueeze(0) * scale
+    safe_scale = min(float(scale), 1.0)
+    force_range = self._default_forcerange.unsqueeze(0) * safe_scale
     self._env.sim.model.actuator_forcerange[:, self._ctrl_ids] = force_range
-    self._torque_limit_scale = scale
-    return scale
+    self._torque_limit_scale = safe_scale
+    return safe_scale
 
   def process_actions(self, actions: torch.Tensor) -> None:
     self._raw_actions[:] = actions

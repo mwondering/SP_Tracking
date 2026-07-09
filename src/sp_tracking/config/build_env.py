@@ -436,7 +436,7 @@ def _build_action(cfg: DictConfig):
       "delay_full_progress": float(cfg.action.get("delay_full_progress", 0.8)),
       "alpha": tuple(cfg.action.get("alpha", (0.8, 1.0))),
       "torque_limit_scale_range": tuple(
-        cfg.action.get("torque_limit_scale_range", (4.0, 1.0))
+        cfg.action.get("torque_limit_scale_range", (1.0, 1.0))
       ),
       "torque_limit_progress_range": tuple(
         cfg.action.get("torque_limit_progress_range", (0.0, 0.8))

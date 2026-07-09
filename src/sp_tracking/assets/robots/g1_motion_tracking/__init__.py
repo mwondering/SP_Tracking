@@ -6,10 +6,11 @@ import mujoco
 
 from mjlab.asset_zoo.robots.unitree_g1.g1_constants import (
   FULL_COLLISION,
-  G1_ARTICULATION,
   KNEES_BENT_KEYFRAME,
 )
 from mjlab.entity import EntityCfg
+
+from sp_tracking.assets.robots.safety import get_safe_g1_articulation
 
 
 G1_MOTION_TRACKING_XML = Path(__file__).with_name("g1.xml")
@@ -24,5 +25,5 @@ def get_g1_motion_tracking_robot_cfg() -> EntityCfg:
     init_state=KNEES_BENT_KEYFRAME,
     collisions=(FULL_COLLISION,),
     spec_fn=get_g1_motion_tracking_spec,
-    articulation=G1_ARTICULATION,
+    articulation=get_safe_g1_articulation(),
   )

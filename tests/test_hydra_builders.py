@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import yaml
 from hydra import compose, initialize_config_module
 
 from sp_tracking.config.build_agent import build_agent_cfg
@@ -69,6 +72,16 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
     {"push_robot", "base_com", "base_mass", "encoder_bias", "foot_friction"}
   )
   assert "motion_tracking_progress" in env_cfg.curriculum
+
+
+def test_sp_variant_does_not_inherit_tracking_bfm_task_yaml() -> None:
+  task_yaml = Path("src/sp_tracking/conf/task/tracking_bfm_sp.yaml")
+  raw = yaml.safe_load(task_yaml.read_text())
+
+  assert "tracking_bfm" not in raw["defaults"]
+  assert {"command": "largedataset"} in raw["defaults"]
+  assert {"obs": "sp_tracking"} in raw["defaults"]
+  assert {"reward": "sp_tracking"} in raw["defaults"]
 
 
 def test_sp_variant_supports_multimotion_command_override() -> None:

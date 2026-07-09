@@ -1,17 +1,25 @@
 defaults:
-  - tracking_bfm
-  - override command: largedataset
-  - override obs: sp_tracking
-  - override reward: sp_tracking
+  - command: largedataset
+  - obs: sp_tracking
+  - reward: sp_tracking
   - _self_
 
 name: tracking_bfm_sp
+num_envs: 1
+episode_length_s: 10.0
+decimation: 4
+seed: 42
 
 robot:
+  name: g1
   asset: motion_tracking_g1
+  entity_name: robot
   anchor_body_name: pelvis
   viewer_body_name: pelvis
   motion_type: mujoco
+  self_collision_primary_pattern: pelvis
+  foot_geom_pattern: ^(left|right)_ankle_roll_link$
+  base_com_body_names: [pelvis]
   body_names:
     - pelvis
     - left_hip_yaw_link
@@ -29,6 +37,23 @@ robot:
     - right_wrist_roll_link
     - right_hand_mimic
 
+scene:
+  terrain_type: plane
+  env_spacing: 2.0
+
+sim:
+  timestep: 0.005
+  iterations: 10
+  ls_iterations: 20
+  nconmax: 128
+  njmax: 512
+
+viewer:
+  distance: 2.8
+  fovy: 55.0
+  elevation: -5.0
+  azimuth: 120.0
+
 command:
   command:
     fk_from_joint_pos: true
@@ -41,7 +66,7 @@ action:
   max_delay: 2
   delay_full_progress: 0.8
   alpha: [0.8, 1.0]
-  torque_limit_scale_range: [4.0, 1.0]
+  torque_limit_scale_range: [1.0, 1.0]
   torque_limit_progress_range: [0.0, 0.8]
 
 events:

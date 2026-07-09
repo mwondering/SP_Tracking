@@ -8,7 +8,9 @@ from rsl_rl.utils.log_writer import LogWriter
 from sp_tracking.scripts import train as train_module
 from sp_tracking.scripts.train import (
   _copy_launch_script_to_log_dir,
+  _resolve_resume_path,
   _resolve_runtime_device,
+  _save_resolved_cfg,
   prepare_train_cfg,
 )
 from sp_tracking.tasks.tracking.rl.runner import _upload_launch_script_artifact
@@ -63,6 +65,25 @@ def test_copy_launch_script_to_log_dir(tmp_path: Path) -> None:
   assert copied.read_text() == launch_script.read_text()
 
 
+def test_save_resolved_cfg_writes_cfg_and_config(tmp_path: Path) -> None:
+  cfg = OmegaConf.create({"task": {"num_envs": 4}, "agent": {"run_name": "x"}})
+
+  _save_resolved_cfg(tmp_path, cfg)
+
+  assert (tmp_path / "cfg.yaml").exists()
+  assert (tmp_path / "config.yaml").exists()
+  assert "num_envs: 4" in (tmp_path / "cfg.yaml").read_text()
+
+
+def test_resolve_resume_path_uses_explicit_checkpoint_path(tmp_path: Path) -> None:
+  checkpoint = tmp_path / "model_final.pt"
+  checkpoint.write_bytes(b"ckpt")
+  cfg = OmegaConf.create({"checkpoint_path": str(checkpoint)})
+  agent_cfg = SimpleNamespace(resume=False, experiment_name="exp")
+
+  assert _resolve_resume_path(cfg, agent_cfg) == checkpoint
+
+
 def test_resolve_runtime_device_uses_local_rank_under_torchrun(monkeypatch) -> None:
   monkeypatch.setenv("WORLD_SIZE", "4")
   monkeypatch.setenv("RANK", "2")
@@ -95,6 +116,7 @@ def test_run_train_configures_torch_backends_before_env(monkeypatch, tmp_path: P
       experiment_name="exp",
       max_iterations=0,
       run_name="",
+      resume=False,
     ),
   )
 

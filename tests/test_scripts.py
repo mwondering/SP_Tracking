@@ -36,3 +36,19 @@ def test_tracking_bfm_multigpu_script_uses_torchrun() -> None:
   assert "task=tracking_bfm" in contents
   assert "launch_script_path=" in contents
   assert '"$@"' in contents
+
+
+def test_tracking_bfm_play_script_contract() -> None:
+  root = Path(__file__).resolve().parents[1]
+  script = root / "scripts" / "play_tracking_bfm.sh"
+
+  assert script.exists()
+  assert script.stat().st_mode & 0o111
+
+  contents = script.read_text()
+  assert "uv run sp-play" in contents
+  assert "--checkpoint-file" in contents
+  assert "--wandb-run-path" in contents
+  assert "--motion-file" in contents
+  assert "--motion-path" in contents
+  assert "--dry-run" in contents

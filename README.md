@@ -40,6 +40,8 @@ scripts/train_tracking_bfm.sh /path/to/motions task.num_envs=2048 agent.max_iter
   `tracking_bfm_sp`.
 - `scripts/train_tracking_bfm.sh`: repo-local launch script for the default
   training run.
+- `scripts/play_tracking_bfm.sh`: repo-local play script for local or W&B
+  checkpoints.
 
 ## Training
 
@@ -114,6 +116,34 @@ and debugging.
 These tasks are configured under `src/sp_tracking/conf/task`. Shared PPO defaults
 live in `src/sp_tracking/conf/agent/tracking_bfm_ppo.yaml`.
 
+## Checkpoints, Resume, and Deployment Export
+
+Checkpoints keep the `model_*.pt` naming convention:
+
+```text
+model_<iteration>.pt
+model_final.pt
+policy.onnx
+policy.json
+deploy_metadata.json
+cfg.yaml
+config.yaml
+```
+
+`model_*.pt` contains the rsl-rl training state for resume plus
+motion-tracking-style keys such as `policy`, `env`, `iter`, and `infos`.
+Training resume supports:
+
+```bash
+uv run sp-train checkpoint_path=/path/to/model_final.pt
+uv run sp-train agent.resume=true agent.load_run='.*' agent.load_checkpoint='model_.*.pt'
+uv run sp-train wandb_run_path=entity/project/run_id wandb_checkpoint_name=model_final.pt
+```
+
+`policy.onnx` is exported after every save and is intentionally deployment
+oriented: input key `policy`, output key `action`, with `policy.json` sidecar
+metadata matching `motion_tracking_sim2real`'s ONNX runtime loader.
+
 ## Logging
 
 Training logs are written under `logs/rsl_rl` by default. The launch script also
@@ -128,6 +158,38 @@ When wandb logging is enabled, the copied launch script is uploaded through the
 rsl-rl log writer as a run file. The default script sets `agent.logger=wandb`;
 model checkpoint upload can be controlled with the `agent.upload_model` Hydra
 override.
+
+## Play
+
+Use the play script with a local checkpoint:
+
+```bash
+scripts/play_tracking_bfm.sh \
+  --task tracking_bfm \
+  --checkpoint-file logs/rsl_rl/g1_tracking/<run>/model_final.pt \
+  --motion-file /path/to/motion.npz
+```
+
+For large-dataset play/debug:
+
+```bash
+scripts/play_tracking_bfm.sh \
+  --task tracking_bfm_largedataset \
+  --checkpoint-file logs/rsl_rl/g1_tracking/<run>/model_final.pt \
+  --motion-path /path/to/motions
+```
+
+The script forwards to `uv run sp-play` and supports `--wandb-run-path`,
+`--wandb-checkpoint-name`, `--num-envs`, `--viewer`, and
+`--domain-randomization`.
+
+## Torque Safety
+
+All packaged G1 tasks use the same conservative sim2real effort limits:
+hip yaw / waist yaw 88, hip pitch 88, hip roll / knee 139,
+ankle pitch / roll 35, waist pitch / roll 35, shoulder / elbow / wrist roll 25,
+and wrist pitch / yaw 5. The motion-tracking action curriculum also clamps
+scheduled torque scaling so it cannot exceed the safe asset limits.
 
 ## Development Checks
 

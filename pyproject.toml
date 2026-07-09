@@ -12,10 +12,12 @@ dependencies = [
   "hydra-core>=1.3.2",
   "mjlab==1.5.0",
   "omegaconf>=2.3.0",
+  "tyro>=0.9.0",
 ]
 
 [project.scripts]
 sp-train = "sp_tracking.scripts.train:main"
+sp-play = "sp_tracking.scripts.play:main"
 
 [project.entry-points."mjlab.tasks"]
 sp_tracking = "sp_tracking.tasks.tracking.registry"
