@@ -277,6 +277,52 @@ def _build_command(cfg: DictConfig):
     "debug_vis": bool(command_cfg.get("debug_vis", True)),
   }
   if command_cfg.type == "large_dataset":
+    kwargs.update(
+      {
+        "active_subset_size": int(command_cfg.get("active_subset_size", 20_000)),
+        "subset_refresh_count": int(command_cfg.get("subset_refresh_count", 10)),
+        "subset_min_resident_iterations": int(
+          command_cfg.get("subset_min_resident_iterations", 50)
+        ),
+        "subset_adaptive_refresh_ratio": float(
+          command_cfg.get("subset_adaptive_refresh_ratio", 0.5)
+        ),
+        "subset_adaptive_candidate_pool_size": int(
+          command_cfg.get("subset_adaptive_candidate_pool_size", 10_000)
+        ),
+        "adaptive_bin_pool_reset_interval_iterations": int(
+          command_cfg.get("adaptive_bin_pool_reset_interval_iterations", 5000)
+        ),
+        "adaptive_bin_snapshot_interval_iterations": int(
+          command_cfg.get("adaptive_bin_snapshot_interval_iterations", 0)
+        ),
+        "adaptive_bin_snapshot_num_buckets": int(
+          command_cfg.get("adaptive_bin_snapshot_num_buckets", 2048)
+        ),
+        "adaptive_bin_snapshot_dir": str(
+          command_cfg.get("adaptive_bin_snapshot_dir", "")
+        ),
+        "motion_manifest_file": str(command_cfg.get("motion_manifest_file", "")),
+        "motion_metadata_cache_file": str(
+          command_cfg.get("motion_metadata_cache_file", "")
+        ),
+        "motion_metadata_cache_wait_timeout_s": float(
+          command_cfg.get("motion_metadata_cache_wait_timeout_s", 7200.0)
+        ),
+        "motion_metadata_cache_poll_interval_s": float(
+          command_cfg.get("motion_metadata_cache_poll_interval_s", 0.25)
+        ),
+        "motion_manifest_wait_timeout_s": float(
+          command_cfg.get("motion_manifest_wait_timeout_s", 600.0)
+        ),
+        "motion_manifest_poll_interval_s": float(
+          command_cfg.get("motion_manifest_poll_interval_s", 0.25)
+        ),
+        "motion_scan_log_interval_s": float(
+          command_cfg.get("motion_scan_log_interval_s", 10.0)
+        ),
+      }
+    )
     return LargeDatasetMotionCommandCfg(**kwargs)
   if command_cfg.type == "multi":
     return MultiMotionCommandCfg(**kwargs)

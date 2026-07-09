@@ -4,7 +4,7 @@ command:
   motion_path: ""
   motion_file: ""
   extra_reference_motion_file: ""
-  motion_type: ${oc.select:task.robot.motion_type,mujoco}
+  motion_type: ${oc.select:task.robot.motion_type,isaaclab}
   anchor_body_name: ${task.robot.anchor_body_name}
   body_names: ${task.robot.body_names}
   resampling_time_range: [1000000000.0, 1000000000.0]
@@ -24,6 +24,34 @@ command:
     pitch: [-0.52, 0.52]
     yaw: [-0.78, 0.78]
   joint_position_range: [-0.1, 0.1]
-  future_steps: 5
-  history_steps: 5
+  future_steps: 1
+  history_steps: 0
+  adaptive_uniform_ratio: 0.1
+  adaptive_bin_width_s: 1.0
+  adaptive_bin_width_steps: null
+  adaptive_init_num_failures: 1.0
+  adaptive_failure_rate_window_iterations: null
+  adaptive_failure_rate_window_chunks: 40
+  adaptive_failure_rate_max_over_mean: 200.0
+  adaptive_sequence_length_agnostic: true
+  adaptive_max_prob_per_bin: auto
+  adaptive_max_prob_per_motion: auto
+  adaptive_pre_failure_sample_window_steps: 200
   sampling_mode: adaptive
+  if_log_metrics: true
+  active_subset_size: 20000
+  subset_refresh_count: 10
+  subset_min_resident_iterations: 50
+  subset_adaptive_refresh_ratio: 0.5
+  subset_adaptive_candidate_pool_size: 10000
+  adaptive_bin_pool_reset_interval_iterations: 5000
+  adaptive_bin_snapshot_interval_iterations: 0
+  adaptive_bin_snapshot_num_buckets: 2048
+  adaptive_bin_snapshot_dir: ""
+  motion_manifest_file: ""
+  motion_metadata_cache_file: ""
+  motion_metadata_cache_wait_timeout_s: 7200.0
+  motion_metadata_cache_poll_interval_s: 0.25
+  motion_manifest_wait_timeout_s: 600.0
+  motion_manifest_poll_interval_s: 0.25
+  motion_scan_log_interval_s: 10.0

@@ -21,6 +21,8 @@ def test_default_tracking_bfm_builds_multimotion_cfg() -> None:
   env_cfg = build_env_cfg(cfg.task)
 
   assert isinstance(env_cfg.commands["motion"], MultiMotionCommandCfg)
+  assert env_cfg.commands["motion"].history_steps == 0
+  assert env_cfg.commands["motion"].future_steps == 1
   assert list(env_cfg.observations.keys()) == ["actor", "critic"]
   assert list(env_cfg.observations["actor"].terms.keys()) == [
     "command",
@@ -50,6 +52,42 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert "root_pos_tracking" in env_cfg.rewards
   assert "body_z_termination" in env_cfg.terminations
   assert env_cfg.commands["motion"].motion_type == "mujoco"
+
+
+def test_tracking_bfm_largedataset_matches_old_tracking_task() -> None:
+  cfg = _compose(
+    "task=tracking_bfm_largedataset",
+    "++task.command.command.motion_manifest_file=/tmp/manifest.txt",
+    "++task.command.command.adaptive_bin_snapshot_interval_iterations=1",
+    "++task.command.command.adaptive_bin_snapshot_num_buckets=123",
+  )
+
+  env_cfg = build_env_cfg(cfg.task)
+  motion_cmd = env_cfg.commands["motion"]
+
+  assert isinstance(motion_cmd, LargeDatasetMotionCommandCfg)
+  assert motion_cmd.history_steps == 0
+  assert motion_cmd.future_steps == 1
+  assert motion_cmd.motion_type == "isaaclab"
+  assert motion_cmd.motion_manifest_file == "/tmp/manifest.txt"
+  assert motion_cmd.adaptive_bin_snapshot_interval_iterations == 1
+  assert motion_cmd.adaptive_bin_snapshot_num_buckets == 123
+  assert list(env_cfg.observations["actor"].terms.keys()) == [
+    "command",
+    "motion_anchor_pos_b",
+    "motion_anchor_ori_b",
+    "body_pos",
+    "body_ori",
+    "base_lin_vel",
+    "base_ang_vel",
+    "joint_pos",
+    "joint_vel",
+    "actions",
+  ]
+  assert "motion_global_root_pos" in env_cfg.rewards
+  assert "anchor_pos" in env_cfg.terminations
+  robot = env_cfg.scene.entities["robot"]
+  assert robot.spec_fn.__module__.startswith("sp_tracking.assets.robots.g1_tracking_bfm")
 
 
 def test_tracking_bfm_command_adaptive_window_is_hydra_configurable() -> None:

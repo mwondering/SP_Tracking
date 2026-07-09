@@ -24,8 +24,8 @@ command:
     pitch: [-0.52, 0.52]
     yaw: [-0.78, 0.78]
   joint_position_range: [-0.1, 0.1]
-  future_steps: 5
-  history_steps: 5
+  future_steps: 1
+  history_steps: 0
   adaptive_uniform_ratio: 0.1
   adaptive_bin_width_s: 1.0
   adaptive_bin_width_steps: null

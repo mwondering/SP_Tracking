@@ -90,19 +90,28 @@ Use the SP large-dataset/observation/reward variant:
 uv run sp-train task=tracking_bfm_sp motion_path=/path/to/motions
 ```
 
+Use the old BFM LargeDataset-equivalent task:
+
+```bash
+uv run sp-train task=tracking_bfm_largedataset motion_path=/path/to/motions
+```
+
 The default `tracking_bfm` task keeps the old BFM tracking observation, reward,
-termination, and `multi_commands.py` loader defaults. `tracking_bfm_sp` switches
-to `multi_command_largedataset.py` plus the SP observation/reward/termination
-sets for ablations and debugging.
+termination, and `multi_commands.py` loader defaults.
+`tracking_bfm_largedataset` keeps the same old BFM surface and only switches the
+loader to `multi_command_largedataset.py`. `tracking_bfm_sp` switches to the
+motion-tracking asset plus SP observation/reward/termination sets for ablations
+and debugging.
 
 ## Tasks
 
 | Task | Loader | Observation/Reward Set | Robot Asset |
 | --- | --- | --- | --- |
 | `tracking_bfm` | `multi_commands.py` | old BFM tracking defaults | `tracking_bfm_g1` |
+| `tracking_bfm_largedataset` | `multi_command_largedataset.py` | old BFM tracking defaults | `tracking_bfm_g1` |
 | `tracking_bfm_sp` | `multi_command_largedataset.py` | SP tracking defaults | `motion_tracking_g1` |
 
-Both tasks are configured under `src/sp_tracking/conf/task`. Shared PPO defaults
+These tasks are configured under `src/sp_tracking/conf/task`. Shared PPO defaults
 live in `src/sp_tracking/conf/agent/tracking_bfm_ppo.yaml`.
 
 ## Logging

@@ -12,6 +12,7 @@ from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
 
 
 TRACKING_BFM_TASK_ID = "SPTracking-G1-BFM"
+TRACKING_BFM_LARGEDATASET_TASK_ID = "SPTracking-G1-BFM-LargeDataset"
 TRACKING_BFM_SP_TASK_ID = "SPTracking-G1-BFM-SP"
 
 
@@ -38,10 +39,15 @@ def _register_task(task_id: str, overrides: list[str] | None = None) -> None:
 
 
 _register_task(TRACKING_BFM_TASK_ID)
+_register_task(
+  TRACKING_BFM_LARGEDATASET_TASK_ID,
+  ["task=tracking_bfm_largedataset"],
+)
 _register_task(TRACKING_BFM_SP_TASK_ID, ["task=tracking_bfm_sp"])
 
 
 __all__ = [
   "TRACKING_BFM_TASK_ID",
+  "TRACKING_BFM_LARGEDATASET_TASK_ID",
   "TRACKING_BFM_SP_TASK_ID",
 ]
