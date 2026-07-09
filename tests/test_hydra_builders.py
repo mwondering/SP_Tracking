@@ -48,10 +48,52 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   env_cfg = build_env_cfg(cfg.task)
 
   assert isinstance(env_cfg.commands["motion"], LargeDatasetMotionCommandCfg)
+  assert env_cfg.commands["motion"].history_steps == 0
+  assert env_cfg.commands["motion"].future_steps == 1
   assert list(env_cfg.observations["actor"].terms.keys())[0] == "boot_indicator_state_obs"
   assert "root_pos_tracking" in env_cfg.rewards
   assert "body_z_termination" in env_cfg.terminations
   assert env_cfg.commands["motion"].motion_type == "mujoco"
+  assert env_cfg.commands["motion"].fk_from_joint_pos is True
+  assert type(env_cfg.actions["joint_pos"]).__name__ == "MotionTrackingJointPositionActionCfg"
+  assert set(env_cfg.events) == {
+    "perturb_body_com",
+    "perturb_body_materials",
+    "motor_params_implicit",
+    "random_joint_offset",
+    "perturb_root_vel",
+    "perturb_body_wrench",
+    "perturb_gravity",
+  }
+  assert set(env_cfg.events).isdisjoint(
+    {"push_robot", "base_com", "base_mass", "encoder_bias", "foot_friction"}
+  )
+  assert "motion_tracking_progress" in env_cfg.curriculum
+
+
+def test_sp_variant_supports_multimotion_command_override() -> None:
+  cfg = _compose("task=tracking_bfm_sp", "task/command=multimotion")
+
+  env_cfg = build_env_cfg(cfg.task)
+
+  assert isinstance(env_cfg.commands["motion"], MultiMotionCommandCfg)
+  assert env_cfg.commands["motion"].history_steps == 0
+  assert env_cfg.commands["motion"].future_steps == 1
+  assert env_cfg.commands["motion"].motion_type == "mujoco"
+  assert env_cfg.commands["motion"].fk_from_joint_pos is True
+  assert env_cfg.commands["motion"].sampling_mode == "adaptive"
+
+
+def test_tracking_bfm_keeps_original_events_and_action() -> None:
+  cfg = _compose("task=tracking_bfm")
+
+  env_cfg = build_env_cfg(cfg.task)
+
+  assert type(env_cfg.actions["joint_pos"]).__name__ == "JointPositionActionCfg"
+  assert env_cfg.commands["motion"].fk_from_joint_pos is False
+  assert "base_mass" in env_cfg.events
+  assert "motor_params_implicit" not in env_cfg.events
+  assert env_cfg.curriculum == {}
 
 
 def test_tracking_bfm_largedataset_matches_old_tracking_task() -> None:
@@ -69,6 +111,7 @@ def test_tracking_bfm_largedataset_matches_old_tracking_task() -> None:
   assert motion_cmd.history_steps == 0
   assert motion_cmd.future_steps == 1
   assert motion_cmd.motion_type == "isaaclab"
+  assert motion_cmd.fk_from_joint_pos is False
   assert motion_cmd.motion_manifest_file == "/tmp/manifest.txt"
   assert motion_cmd.adaptive_bin_snapshot_interval_iterations == 1
   assert motion_cmd.adaptive_bin_snapshot_num_buckets == 123

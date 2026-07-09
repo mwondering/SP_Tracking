@@ -108,6 +108,67 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
       self.logger, self.launch_script_artifact_path
     )
 
+  def _has_motion_tracking_curriculum(self) -> bool:
+    unwrapped_env = getattr(self.env, "unwrapped", None)
+    curriculum_manager = getattr(unwrapped_env, "curriculum_manager", None)
+    active_terms = getattr(curriculum_manager, "active_terms", ())
+    return "motion_tracking_progress" in active_terms
+
+  @staticmethod
+  def _record_schedule_state(
+    state: dict[str, float], prefix: str, name: str, result: object
+  ) -> None:
+    if not isinstance(result, dict):
+      return
+    for key, value in result.items():
+      try:
+        state[f"{prefix}/{name}/{key}"] = float(value)
+      except (TypeError, ValueError):
+        continue
+
+  def _step_motion_tracking_curriculum(self, iteration: int) -> None:
+    if not self._has_motion_tracking_curriculum():
+      return
+    max_iterations = max(int(self.cfg.get("max_iterations", iteration + 1)), 1)
+    progress = min(max(float(iteration + 1) / float(max_iterations), 0.0), 1.0)
+    unwrapped_env = self.env.unwrapped
+    state: dict[str, float] = {"progress": progress}
+
+    command_manager = getattr(unwrapped_env, "command_manager", None)
+    for name in getattr(command_manager, "active_terms", ()):
+      term = command_manager.get_term(name)
+      step_schedule = getattr(term, "step_schedule", None)
+      if callable(step_schedule):
+        result = step_schedule(progress, iteration)
+        self._record_schedule_state(state, "command", str(name), result)
+
+    action_manager = getattr(unwrapped_env, "action_manager", None)
+    for name in getattr(action_manager, "active_terms", ()):
+      term = action_manager.get_term(name)
+      step_schedule = getattr(term, "step_schedule", None)
+      if callable(step_schedule):
+        result = step_schedule(progress, iteration)
+        self._record_schedule_state(state, "action", str(name), result)
+
+    event_manager = getattr(unwrapped_env, "event_manager", None)
+    for names in getattr(event_manager, "active_terms", {}).values():
+      for name in names:
+        term = event_manager.get_term_cfg(name).func
+        step_schedule = getattr(term, "step_schedule", None)
+        if callable(step_schedule):
+          result = step_schedule(progress, iteration)
+          self._record_schedule_state(state, "event", str(name), result)
+
+    reward_manager = getattr(unwrapped_env, "reward_manager", None)
+    for name in getattr(reward_manager, "active_terms", ()):
+      term = reward_manager.get_term_cfg(name).func
+      step_schedule = getattr(term, "step_schedule", None)
+      if callable(step_schedule):
+        result = step_schedule(progress, iteration)
+        self._record_schedule_state(state, "reward", str(name), result)
+
+    unwrapped_env._motion_tracking_curriculum_state = state
+
   def _begin_adaptive_sampling_iteration(self, iteration: int) -> None:
     _bootstrap_debug(f"before begin_adaptive_sampling_iteration iteration={iteration}")
     motion_cmd = self.env.unwrapped.command_manager.get_term("motion")
@@ -265,6 +326,7 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     total_it = start_it + num_learning_iterations
     for it in range(start_it, total_it):
       _bootstrap_debug(f"iteration {it}: start")
+      self._step_motion_tracking_curriculum(it)
       self._begin_adaptive_sampling_iteration(it)
       self._write_large_dataset_snapshot(it)
       start = time.time()

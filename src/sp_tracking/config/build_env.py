@@ -10,6 +10,7 @@ from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as mjlab_mdp
 from mjlab.envs.mdp import dr
 from mjlab.envs.mdp.actions import JointPositionActionCfg
+from mjlab.managers.curriculum_manager import CurriculumTermCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
@@ -27,6 +28,8 @@ from sp_tracking.assets.robots import (
   get_g1_tracking_bfm_robot_cfg,
 )
 from sp_tracking.tasks.tracking import mdp
+from sp_tracking.tasks.tracking.mdp.actions import MotionTrackingJointPositionActionCfg
+from sp_tracking.tasks.tracking.mdp import randomizations as sp_randomizations
 from sp_tracking.tasks.tracking.mdp import sp as sp_mdp
 from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
   MotionCommandCfg as LargeDatasetMotionCommandCfg,
@@ -116,6 +119,20 @@ TERMINATION_TERMS = {
   "bad_motion_body_pos_z_only": mdp.bad_motion_body_pos_z_only,
   "body_z_termination": sp_mdp.body_z_termination,
   "gravity_dir_termination": sp_mdp.gravity_dir_termination,
+}
+
+EVENT_TERMS = {
+  "perturb_body_com": sp_randomizations.perturb_body_com,
+  "perturb_body_materials": sp_randomizations.perturb_body_materials,
+  "motor_params_implicit": sp_randomizations.motor_params_implicit,
+  "random_joint_offset": sp_randomizations.random_joint_offset,
+  "perturb_root_vel": sp_randomizations.perturb_root_vel,
+  "perturb_body_wrench": sp_randomizations.perturb_body_wrench,
+  "perturb_gravity": sp_randomizations.perturb_gravity,
+}
+
+CURRICULUM_TERMS = {
+  "motion_tracking_progress": sp_randomizations.motion_tracking_progress,
 }
 
 
@@ -235,6 +252,7 @@ def _build_command(cfg: DictConfig):
     "motion_file": str(command_cfg.get("motion_file", "")),
     "extra_reference_motion_file": str(command_cfg.get("extra_reference_motion_file", "")),
     "motion_type": str(command_cfg.motion_type),
+    "fk_from_joint_pos": bool(command_cfg.get("fk_from_joint_pos", False)),
     "anchor_body_name": str(command_cfg.anchor_body_name),
     "body_names": _to_tuple(command_cfg.body_names),
     "pose_range": _params(command_cfg.get("pose_range")),
@@ -334,14 +352,14 @@ def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
   velocity_range = _params(command_cfg.velocity_range)
   robot = cfg.robot
   events = OrderedDict()
-  if cfg.events.push_robot.enabled:
+  if cfg.events.get("push_robot") and cfg.events.push_robot.enabled:
     events["push_robot"] = EventTermCfg(
       func=mdp.push_by_setting_velocity,
       mode="interval",
       interval_range_s=tuple(cfg.events.push_robot.interval_range_s),
       params={"velocity_range": velocity_range},
     )
-  if cfg.events.base_com.enabled:
+  if cfg.events.get("base_com") and cfg.events.base_com.enabled:
     events["base_com"] = EventTermCfg(
       mode="startup",
       func=dr.body_com_offset,
@@ -363,7 +381,7 @@ def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
         "ranges": tuple(cfg.events.base_mass.ranges),
       },
     )
-  if cfg.events.encoder_bias.enabled:
+  if cfg.events.get("encoder_bias") and cfg.events.encoder_bias.enabled:
     events["encoder_bias"] = EventTermCfg(
       mode="startup",
       func=dr.encoder_bias,
@@ -372,7 +390,7 @@ def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
         "bias_range": tuple(cfg.events.encoder_bias.bias_range),
       },
     )
-  if cfg.events.foot_friction.enabled:
+  if cfg.events.get("foot_friction") and cfg.events.foot_friction.enabled:
     events["foot_friction"] = EventTermCfg(
       mode="startup",
       func=dr.geom_friction,
@@ -383,19 +401,68 @@ def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
         "shared_random": bool(cfg.events.foot_friction.shared_random),
       },
     )
+  for name, event_cfg in cfg.events.items():
+    if name in {"push_robot", "base_com", "base_mass", "encoder_bias", "foot_friction"}:
+      continue
+    if not event_cfg.get("enabled", True):
+      continue
+    events[str(name)] = EventTermCfg(
+      mode=str(event_cfg.mode),
+      func=EVENT_TERMS[str(event_cfg.term)],
+      interval_range_s=(
+        tuple(event_cfg.interval_range_s) if event_cfg.get("interval_range_s") else None
+      ),
+      is_global_time=bool(event_cfg.get("is_global_time", False)),
+      min_step_count_between_reset=int(
+        event_cfg.get("min_step_count_between_reset", 0)
+      ),
+      params=_params(event_cfg.get("params")),
+    )
   return events
 
 
 def _build_action(cfg: DictConfig):
   scale = G1_ACTION_SCALE if cfg.action.scale == "g1_action_scale" else cfg.action.scale
+  action_type = str(cfg.action.get("type", "joint_position"))
+  cfg_cls = (
+    MotionTrackingJointPositionActionCfg
+    if action_type == "motion_tracking"
+    else JointPositionActionCfg
+  )
+  extra_kwargs = {}
+  if cfg_cls is MotionTrackingJointPositionActionCfg:
+    extra_kwargs = {
+      "max_delay": int(cfg.action.get("max_delay", 2)),
+      "delay_full_progress": float(cfg.action.get("delay_full_progress", 0.8)),
+      "alpha": tuple(cfg.action.get("alpha", (0.8, 1.0))),
+      "torque_limit_scale_range": tuple(
+        cfg.action.get("torque_limit_scale_range", (4.0, 1.0))
+      ),
+      "torque_limit_progress_range": tuple(
+        cfg.action.get("torque_limit_progress_range", (0.0, 0.8))
+      ),
+    }
   return {
-    "joint_pos": JointPositionActionCfg(
+    "joint_pos": cfg_cls(
       entity_name=str(cfg.robot.entity_name),
       actuator_names=_to_tuple(cfg.action.actuator_names),
       scale=scale,
       use_default_offset=bool(cfg.action.use_default_offset),
+      **extra_kwargs,
     )
   }
+
+
+def _build_curriculum(cfg: DictConfig) -> dict[str, CurriculumTermCfg]:
+  terms = OrderedDict()
+  for name, term_cfg in cfg.get("curriculum", {}).items():
+    if not term_cfg.get("enabled", True):
+      continue
+    terms[str(name)] = CurriculumTermCfg(
+      func=CURRICULUM_TERMS[str(term_cfg.term)],
+      params=_params(term_cfg.get("params")),
+    )
+  return terms
 
 
 def _build_sensors(cfg: DictConfig):
@@ -486,6 +553,7 @@ def build_env_cfg(cfg: DictConfig | dict[str, Any]) -> ManagerBasedRlEnvCfg:
     events=_build_events(cfg),
     rewards=_build_rewards(cfg),
     terminations=_build_terminations(cfg),
+    curriculum=_build_curriculum(cfg),
     viewer=viewer,
     sim=sim,
     episode_length_s=float(cfg.episode_length_s),

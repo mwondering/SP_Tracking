@@ -26,7 +26,9 @@ from .multi_commands import (
   MultiMotionCommand,
   MultiMotionCommandCfg,
   extract_motion_fps,
+  _select_or_fk_body_fields,
 )
+from .motion_fk import MotionFKHelper
 
 
 def _bootstrap_debug(message: str) -> None:
@@ -521,6 +523,8 @@ class LargeDatasetMotionStore:
     metadata_cache_file: str = "",
     metadata_cache_wait_timeout_s: float = 7200.0,
     metadata_cache_poll_interval_s: float = 0.25,
+    fk_from_joint_pos: bool = False,
+    fk_helper: MotionFKHelper | None = None,
   ) -> None:
     if len(motion_files) == 0:
       raise ValueError("motion_files cannot be empty")
@@ -533,6 +537,8 @@ class LargeDatasetMotionStore:
     self.device = torch.device(device)
     self.motion_type = motion_type
     self._body_indexes = torch.as_tensor(body_indexes, dtype=torch.long).cpu()
+    self.fk_from_joint_pos = bool(fk_from_joint_pos)
+    self.fk_helper = fk_helper
     self._joint_reindex: list[int] | None = None
     self._body_reindex: list[int] | None = None
     if motion_type == "isaaclab":
@@ -812,25 +818,36 @@ class LargeDatasetMotionStore:
       body_lin_vel_w = body_lin_vel_w[:, self._body_reindex, :]
       body_ang_vel_w = body_ang_vel_w[:, self._body_reindex, :]
 
-    body_indices = self._body_indexes.numpy()
-    body_pos_w = body_pos_w[:, body_indices, :]
-    body_quat_w = body_quat_w[:, body_indices, :]
-    body_lin_vel_w = body_lin_vel_w[:, body_indices, :]
-    body_ang_vel_w = body_ang_vel_w[:, body_indices, :]
+    joint_pos_t = torch.as_tensor(joint_pos, dtype=torch.float32, device=self.device)
+    body_pos_w_t = torch.as_tensor(body_pos_w, dtype=torch.float32, device=self.device)
+    body_quat_w_t = torch.as_tensor(body_quat_w, dtype=torch.float32, device=self.device)
+    body_lin_vel_w_t = torch.as_tensor(
+      body_lin_vel_w, dtype=torch.float32, device=self.device
+    )
+    body_ang_vel_w_t = torch.as_tensor(
+      body_ang_vel_w, dtype=torch.float32, device=self.device
+    )
+    body_pos_w_t, body_quat_w_t, body_lin_vel_w_t, body_ang_vel_w_t = (
+      _select_or_fk_body_fields(
+        joint_pos=joint_pos_t,
+        body_pos_w=body_pos_w_t,
+        body_quat_w=body_quat_w_t,
+        body_lin_vel_w=body_lin_vel_w_t,
+        body_ang_vel_w=body_ang_vel_w_t,
+        body_indexes=self._body_indexes,
+        fps=self.fps_list[motion_id],
+        fk_from_joint_pos=self.fk_from_joint_pos,
+        fk_helper=self.fk_helper,
+      )
+    )
 
     return {
-      "joint_pos": torch.as_tensor(joint_pos, dtype=torch.float32, device=self.device),
+      "joint_pos": joint_pos_t,
       "joint_vel": torch.as_tensor(joint_vel, dtype=torch.float32, device=self.device),
-      "body_pos_w": torch.as_tensor(body_pos_w, dtype=torch.float32, device=self.device),
-      "body_quat_w": torch.as_tensor(
-        body_quat_w, dtype=torch.float32, device=self.device
-      ),
-      "body_lin_vel_w": torch.as_tensor(
-        body_lin_vel_w, dtype=torch.float32, device=self.device
-      ),
-      "body_ang_vel_w": torch.as_tensor(
-        body_ang_vel_w, dtype=torch.float32, device=self.device
-      ),
+      "body_pos_w": body_pos_w_t,
+      "body_quat_w": body_quat_w_t,
+      "body_lin_vel_w": body_lin_vel_w_t,
+      "body_ang_vel_w": body_ang_vel_w_t,
     }
 
 
@@ -1717,6 +1734,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     _bootstrap_debug("before resolve motion files")
     motion_files = self._resolve_all_motion_files()
     _bootstrap_debug(f"after resolve motion files count={len(motion_files)}")
+    fk_helper = self._build_fk_helper()
     store_start = time.perf_counter()
     self.motion_store = LargeDatasetMotionStore(
       motion_files,
@@ -1726,6 +1744,8 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       metadata_cache_file=self._resolve_motion_metadata_cache_file(),
       metadata_cache_wait_timeout_s=self.cfg.motion_metadata_cache_wait_timeout_s,
       metadata_cache_poll_interval_s=self.cfg.motion_metadata_cache_poll_interval_s,
+      fk_from_joint_pos=self.cfg.fk_from_joint_pos,
+      fk_helper=fk_helper,
     )
     _bootstrap_debug(
       f"after LargeDatasetMotionStore elapsed={time.perf_counter() - store_start:.3f}s"
@@ -1844,6 +1864,8 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
         self.body_indexes,
         motion_type=self.cfg.motion_type,
         device=self.device,
+        fk_from_joint_pos=self.cfg.fk_from_joint_pos,
+        fk_helper=fk_helper,
       )
       if self.cfg.extra_reference_motion_file
       else None

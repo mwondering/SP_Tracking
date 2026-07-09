@@ -73,6 +73,7 @@ SP_TERMINATION_BODY_NAMES = (
   "left_ankle_roll_link",
   "right_ankle_roll_link",
 )
+SP_TERMINATION_KILL_FRAMES = 5
 
 
 def _command(env: "ManagerBasedRlEnv", command_name: str) -> MultiMotionCommand:
@@ -151,6 +152,53 @@ def _body_indices(names: tuple[str, ...], selected: tuple[str, ...]) -> list[int
   return [names.index(name) for name in selected]
 
 
+def _basename(name: str) -> str:
+  return name.split("/")[-1]
+
+
+def _termination_buffer(
+  env: "ManagerBasedRlEnv", cmd: MultiMotionCommand, name: str
+) -> torch.Tensor:
+  buffer = getattr(cmd, name, None)
+  if (
+    not isinstance(buffer, torch.Tensor)
+    or buffer.shape != (env.num_envs,)
+    or buffer.device != torch.device(env.device)
+  ):
+    buffer = torch.zeros(env.num_envs, dtype=torch.int32, device=env.device)
+    setattr(cmd, name, buffer)
+  return buffer
+
+
+def _continuous_termination(
+  env: "ManagerBasedRlEnv", trigger: torch.Tensor, buffer: torch.Tensor
+) -> torch.Tensor:
+  trigger = trigger.reshape(env.num_envs, -1).any(dim=1)
+  buffer.add_(trigger.to(buffer.dtype))
+  buffer.masked_fill_(~trigger, 0)
+  buffer.clamp_(max=max(int(SP_TERMINATION_KILL_FRAMES), 1))
+  return buffer >= int(SP_TERMINATION_KILL_FRAMES)
+
+
+def _body_z_values(
+  env: "ManagerBasedRlEnv",
+  command_name: str,
+  body_z_terminate_patterns: tuple[str, ...],
+) -> tuple[MultiMotionCommand, torch.Tensor, torch.Tensor]:
+  cmd = _command(env, command_name)
+  asset = env.scene["robot"]
+  body_ids, body_names = asset.find_bodies(
+    body_z_terminate_patterns, preserve_order=True
+  )
+  motion_body_names = tuple(cmd.cfg.body_names)
+  motion_ids = [motion_body_names.index(_basename(name)) for name in body_names]
+  motion_ids_t = torch.as_tensor(motion_ids, dtype=torch.long, device=env.device)
+  asset_ids_t = torch.as_tensor(body_ids, dtype=torch.long, device=env.device)
+  target_z = _gather_current(env, command_name, "body_pos_w")[:, motion_ids_t, 2]
+  current_z = asset.data.body_link_pos_w[:, asset_ids_t, 2]
+  return cmd, target_z, current_z
+
+
 def _robot_body_indices(asset, selected: tuple[str, ...], device: str) -> torch.Tensor:
   ids = asset.find_bodies(selected, preserve_order=True)[0]
   return torch.as_tensor(ids, device=device, dtype=torch.long)
@@ -172,7 +220,43 @@ def _quat_apply_inverse(quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
 
 
 def _action_tensor(env: "ManagerBasedRlEnv") -> torch.Tensor:
-  return env.action_manager.applied_action
+  action_manager = env.action_manager
+  term = _joint_action_term(env)
+  if term is not None and hasattr(term, "applied_action"):
+    return term.applied_action
+  if hasattr(action_manager, "applied_action"):
+    return action_manager.applied_action
+  return action_manager.action
+
+
+def _joint_action_term(env: "ManagerBasedRlEnv"):
+  action_manager = env.action_manager
+  get_term = getattr(action_manager, "get_term", None)
+  if callable(get_term):
+    try:
+      return get_term("joint_pos")
+    except KeyError:
+      return None
+  return None
+
+
+def _event_observation(
+  env: "ManagerBasedRlEnv", term_name: str, fallback: torch.Tensor
+) -> torch.Tensor:
+  event_manager = getattr(env, "event_manager", None)
+  if event_manager is None:
+    return fallback
+  try:
+    term_cfg = event_manager.get_term_cfg(term_name)
+  except (KeyError, ValueError):
+    return fallback
+  observe = getattr(term_cfg.func, "observe", None)
+  if not callable(observe):
+    return fallback
+  try:
+    return observe()
+  except NotImplementedError:
+    return fallback
 
 
 def _target_feet_standing(
@@ -306,6 +390,10 @@ def target_projected_gravity_b_obs(
 
 
 def prev_actions(env: "ManagerBasedRlEnv", steps: int) -> torch.Tensor:
+  term = _joint_action_term(env)
+  get_recent = getattr(term, "get_recent_action_obs", None)
+  if callable(get_recent):
+    return get_recent(steps).reshape(env.num_envs, -1)
   action = env.action_manager.action
   prev = env.action_manager.prev_action
   if steps <= 1:
@@ -444,23 +532,22 @@ def applied_torque(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 def body_z_termination_obs(env: "ManagerBasedRlEnv", command_name: str) -> torch.Tensor:
-  cmd = _command(env, command_name)
-  motion_ids = _body_indices(tuple(cmd.cfg.body_names), SP_TERMINATION_BODY_NAMES)
-  asset_ids = _robot_body_indices(
-    env.scene["robot"], SP_TERMINATION_BODY_NAMES, env.device
+  cmd, target_z, current_z = _body_z_values(
+    env, command_name, SP_TERMINATION_BODY_NAMES
   )
-  target_z = _gather_current(env, command_name, "body_pos_w")[:, motion_ids, 2]
-  current_z = env.scene["robot"].data.body_link_pos_w[:, asset_ids, 2]
-  buffer = torch.zeros((env.num_envs, 1), device=env.device)
+  buffer = _termination_buffer(env, cmd, "_body_z_termination_buffer").float().unsqueeze(1)
   return torch.cat((current_z, target_z, buffer), dim=-1)
 
 
 def gravity_dir_termination_obs(
   env: "ManagerBasedRlEnv", command_name: str
 ) -> torch.Tensor:
+  cmd = _command(env, command_name)
   robot_g = _projected_gravity(env.scene["robot"].data.root_link_quat_w)
   motion_g = _projected_gravity(_root_motion_current(env, command_name, "body_quat_w"))
-  buffer = torch.zeros((env.num_envs, 1), device=env.device)
+  buffer = _termination_buffer(
+    env, cmd, "_gravity_dir_termination_buffer"
+  ).float().unsqueeze(1)
   return torch.cat((robot_g, motion_g, buffer), dim=-1)
 
 
@@ -470,13 +557,18 @@ def body_z_termination(
   body_z_terminate_thres: tuple[float, float],
   body_z_terminate_patterns: tuple[str, ...],
 ) -> torch.Tensor:
-  del command_name
-  asset = env.scene["robot"]
-  body_ids, _ = asset.find_bodies(body_z_terminate_patterns, preserve_order=True)
-  body_ids_t = torch.as_tensor(body_ids, dtype=torch.long, device=env.device)
-  body_z = asset.data.body_link_pos_w[:, body_ids_t, 2]
   low, high = body_z_terminate_thres
-  return ((body_z < float(low)) | (body_z > float(high))).any(dim=1)
+  cmd, target_z, current_z = _body_z_values(
+    env, command_name, body_z_terminate_patterns
+  )
+  target_z_min_thres = target_z + float(low)
+  target_z_max_thres = target_z + float(high)
+  target_z_min = target_z.amin(dim=1, keepdim=True)
+  lower_relax = ((target_z_min - 0.1) / 0.2).clamp(0.0, 1.0) * 0.2
+  target_z_min_thres = target_z_min_thres - lower_relax
+  exceed = (current_z < target_z_min_thres) | (current_z > target_z_max_thres)
+  buffer = _termination_buffer(env, cmd, "_body_z_termination_buffer")
+  return _continuous_termination(env, exceed, buffer)
 
 
 def gravity_dir_termination(
@@ -484,10 +576,13 @@ def gravity_dir_termination(
   command_name: str,
   gravity_terminate_thres: float,
 ) -> torch.Tensor:
+  cmd = _command(env, command_name)
   obs = gravity_dir_termination_obs(env, command_name)
   robot_g = obs[:, :3]
   motion_g = obs[:, 3:6]
-  return torch.norm(robot_g - motion_g, dim=-1) > float(gravity_terminate_thres)
+  exceed = torch.norm(robot_g - motion_g, dim=-1) > float(gravity_terminate_thres)
+  buffer = _termination_buffer(env, cmd, "_gravity_dir_termination_buffer")
+  return _continuous_termination(env, exceed, buffer)
 
 
 def feet_contact_state(env: "ManagerBasedRlEnv", sensor_name: str) -> torch.Tensor:
@@ -520,21 +615,25 @@ def target_feet_contact_state_obs(
 
 def domain_motor_params_implicit(env: "ManagerBasedRlEnv") -> torch.Tensor:
   joints = len(env.scene["robot"].joint_names)
-  return torch.ones((env.num_envs, joints * 3), device=env.device)
+  fallback = torch.ones((env.num_envs, joints * 3), device=env.device)
+  return _event_observation(env, "motor_params_implicit", fallback)
 
 
 def domain_perturb_body_materials(env: "ManagerBasedRlEnv") -> torch.Tensor:
-  return torch.ones((env.num_envs, 3), device=env.device)
+  fallback = torch.ones((env.num_envs, 3), device=env.device)
+  return _event_observation(env, "perturb_body_materials", fallback)
 
 
 def domain_random_joint_offset(env: "ManagerBasedRlEnv") -> torch.Tensor:
-  return torch.zeros(
+  fallback = torch.zeros(
     (env.num_envs, len(env.scene["robot"].joint_names)), device=env.device
   )
+  return _event_observation(env, "random_joint_offset", fallback)
 
 
 def domain_perturb_gravity(env: "ManagerBasedRlEnv") -> torch.Tensor:
-  return torch.tensor((0.0, 0.0, -9.81), device=env.device).repeat(env.num_envs, 1)
+  fallback = torch.tensor((0.0, 0.0, -9.81), device=env.device).repeat(env.num_envs, 1)
+  return _event_observation(env, "perturb_gravity", fallback)
 
 
 class _RewardBase:
@@ -700,6 +799,12 @@ def joint_vel_l2(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 def action_rate_l2(env: "ManagerBasedRlEnv") -> torch.Tensor:
+  term = _joint_action_term(env)
+  get_recent = getattr(term, "get_recent_action_rate_actions", None)
+  if callable(get_recent):
+    action_buf = get_recent(2)
+    diff = action_buf[:, 0] - action_buf[:, 1]
+    return -diff.square().sum(dim=-1)
   diff = env.action_manager.action - env.action_manager.prev_action
   return -diff.square().sum(dim=-1)
 

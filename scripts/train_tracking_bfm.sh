@@ -44,7 +44,7 @@ mkdir -p "${MPLCONFIGDIR}"
 
 cmd=(
   uv run sp-train
-  task=tracking_bfm
+  task=tracking_bfm_sp
   "motion_path=${MOTION_PATH}"
   "launch_script_path=${LAUNCH_SCRIPT_PATH}"
   "task.num_envs=${SP_TRACKING_NUM_ENVS:-16}"

@@ -29,6 +29,108 @@ robot:
     - right_wrist_roll_link
     - right_hand_mimic
 
+command:
+  command:
+    fk_from_joint_pos: true
+
+action:
+  type: motion_tracking
+  scale: g1_action_scale
+  use_default_offset: true
+  actuator_names: [".*"]
+  max_delay: 2
+  delay_full_progress: 0.8
+  alpha: [0.8, 1.0]
+  torque_limit_scale_range: [4.0, 1.0]
+  torque_limit_progress_range: [0.0, 0.8]
+
+events:
+  push_robot:
+    enabled: false
+  base_com:
+    enabled: false
+  base_mass:
+    enabled: false
+  encoder_bias:
+    enabled: false
+  foot_friction:
+    enabled: false
+  perturb_body_com:
+    enabled: true
+    term: perturb_body_com
+    mode: startup
+    params:
+      body_names:
+        - pelvis
+        - torso_link
+      com_range: [-0.03, 0.03]
+  perturb_body_materials:
+    enabled: true
+    term: perturb_body_materials
+    mode: startup
+    params:
+      body_names: ".*"
+      static_friction_range: [0.5, 1.2]
+      solref_time_constant_range: [0.015, 0.03]
+      solref_dampratio_range: [0.8, 1.2]
+      homogeneous: true
+  motor_params_implicit:
+    enabled: true
+    term: motor_params_implicit
+    mode: startup
+    params:
+      mode: uniform
+      stiffness_range:
+        ".*(shoulder|elbow|wrist).*": [0.9, 1.1]
+        ".*(waist|hip|knee|ankle).*": [0.8, 1.2]
+      damping_range:
+        ".*(shoulder|elbow|wrist).*": [0.9, 1.1]
+        ".*(waist|hip|knee|ankle).*": [0.8, 1.2]
+      armature_range:
+        ".*": [0.8, 1.2]
+  random_joint_offset:
+    enabled: true
+    term: random_joint_offset
+    mode: reset
+    params:
+      ranges:
+        ".*": [-0.01, 0.01]
+  perturb_root_vel:
+    enabled: true
+    term: perturb_root_vel
+    mode: step
+    params:
+      min_s: 3.0
+      max_s: 6.0
+      x: [-0.5, 0.5]
+      y: [-0.5, 0.5]
+      z: [-0.2, 0.2]
+      roll: [-0.52, 0.52]
+      pitch: [-0.52, 0.52]
+      yaw: [-0.78, 0.78]
+  perturb_body_wrench:
+    enabled: true
+    term: perturb_body_wrench
+    mode: step
+    params:
+      body_name: torso_link
+      total_duration_range_s: [3.0, 6.0]
+      active_duration_range_s: [1.0, 4.0]
+      force_magnitude_range_n: [0.0, 10.0]
+      lever_arm_length_range_m: [0.0, 0.4]
+  perturb_gravity:
+    enabled: true
+    term: perturb_gravity
+    mode: startup
+    params:
+      mean: [0.0, 0.0, -9.81]
+      std: 0.1
+
+curriculum:
+  motion_tracking_progress:
+    enabled: true
+    term: motion_tracking_progress
+
 terminations:
   - name: time_out
     term: time_out

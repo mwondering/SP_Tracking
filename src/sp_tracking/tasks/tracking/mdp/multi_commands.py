@@ -23,6 +23,8 @@ from mjlab.utils.lab_api.math import (
 )
 from mjlab.viewer.debug_visualizer import DebugVisualizer
 
+from .motion_fk import MotionFKHelper
+
 if TYPE_CHECKING:
   from mjlab.entity import Entity
   from mjlab.envs import ManagerBasedRlEnv
@@ -180,6 +182,47 @@ def extract_motion_fps(data: np.lib.npyio.NpzFile) -> tuple[float, bool, bool]:
   return float(fps_array.reshape(-1)[0]), fps_array.size > 1, False
 
 
+def _select_or_fk_body_fields(
+  *,
+  joint_pos: torch.Tensor,
+  body_pos_w: torch.Tensor,
+  body_quat_w: torch.Tensor,
+  body_lin_vel_w: torch.Tensor,
+  body_ang_vel_w: torch.Tensor,
+  body_indexes: torch.Tensor,
+  fps: float,
+  fk_from_joint_pos: bool,
+  fk_helper: MotionFKHelper | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+  body_indexes = torch.as_tensor(body_indexes, dtype=torch.long, device=body_pos_w.device)
+  if body_indexes.numel() == 0:
+    raise ValueError("body_indexes cannot be empty")
+  if int(body_indexes.max().item()) < int(body_pos_w.shape[1]):
+    return (
+      body_pos_w[:, body_indexes, :],
+      body_quat_w[:, body_indexes, :],
+      body_lin_vel_w[:, body_indexes, :],
+      body_ang_vel_w[:, body_indexes, :],
+    )
+  if not fk_from_joint_pos:
+    return (
+      body_pos_w[:, body_indexes, :],
+      body_quat_w[:, body_indexes, :],
+      body_lin_vel_w[:, body_indexes, :],
+      body_ang_vel_w[:, body_indexes, :],
+    )
+  if fk_helper is None:
+    raise ValueError("fk_helper is required when fk_from_joint_pos is enabled")
+
+  fk = fk_helper.expand_motion(
+    root_pos_w=body_pos_w[:, 0, :],
+    root_quat_w=body_quat_w[:, 0, :],
+    joint_pos=joint_pos,
+    fps=fps,
+  )
+  return fk.body_pos_w, fk.body_quat_w, fk.body_lin_vel_w, fk.body_ang_vel_w
+
+
 class MotionLoader:
   def __init__(
     self,
@@ -187,6 +230,8 @@ class MotionLoader:
     body_indexes: torch.Tensor,
     motion_type: Literal["isaaclab", "mujoco"] = "isaaclab",
     device: str = "cpu",
+    fk_from_joint_pos: bool = False,
+    fk_helper: MotionFKHelper | None = None,
   ):
     assert os.path.isfile(motion_file), f"Invalid file path: {motion_file}"
     data = np.load(motion_file)
@@ -220,24 +265,39 @@ class MotionLoader:
       self._body_quat_w = self._body_quat_w[:, body_reindex, :]
       self._body_lin_vel_w = self._body_lin_vel_w[:, body_reindex, :]
       self._body_ang_vel_w = self._body_ang_vel_w[:, body_reindex, :]
-    self._body_indexes = body_indexes
+    (
+      self._body_pos_w,
+      self._body_quat_w,
+      self._body_lin_vel_w,
+      self._body_ang_vel_w,
+    ) = _select_or_fk_body_fields(
+      joint_pos=self.joint_pos,
+      body_pos_w=self._body_pos_w,
+      body_quat_w=self._body_quat_w,
+      body_lin_vel_w=self._body_lin_vel_w,
+      body_ang_vel_w=self._body_ang_vel_w,
+      body_indexes=body_indexes,
+      fps=self.fps,
+      fk_from_joint_pos=fk_from_joint_pos,
+      fk_helper=fk_helper,
+    )
     self.time_step_total = self.joint_pos.shape[0]
 
   @property
   def body_pos_w(self) -> torch.Tensor:
-    return self._body_pos_w[:, self._body_indexes]
+    return self._body_pos_w
 
   @property
   def body_quat_w(self) -> torch.Tensor:
-    return self._body_quat_w[:, self._body_indexes]
+    return self._body_quat_w
 
   @property
   def body_lin_vel_w(self) -> torch.Tensor:
-    return self._body_lin_vel_w[:, self._body_indexes]
+    return self._body_lin_vel_w
 
   @property
   def body_ang_vel_w(self) -> torch.Tensor:
-    return self._body_ang_vel_w[:, self._body_indexes]
+    return self._body_ang_vel_w
 
 
 class MultiMotionLoader:
@@ -247,6 +307,8 @@ class MultiMotionLoader:
     body_indexes: torch.Tensor,
     motion_type: Literal["isaaclab", "mujoco"] = "isaaclab",
     device: str = "cpu",
+    fk_from_joint_pos: bool = False,
+    fk_helper: MotionFKHelper | None = None,
   ):
     assert len(motion_files) > 0, "motion_files cannot be empty"
     self.num_files = len(motion_files)
@@ -295,10 +357,17 @@ class MultiMotionLoader:
         blv = blv[:, body_reindex, :]
         bav = bav[:, body_reindex, :]
 
-      bp = bp[:, self._body_indexes, :]
-      bq = bq[:, self._body_indexes, :]
-      blv = blv[:, self._body_indexes, :]
-      bav = bav[:, self._body_indexes, :]
+      bp, bq, blv, bav = _select_or_fk_body_fields(
+        joint_pos=jp,
+        body_pos_w=bp,
+        body_quat_w=bq,
+        body_lin_vel_w=blv,
+        body_ang_vel_w=bav,
+        body_indexes=self._body_indexes,
+        fps=fps_value,
+        fk_from_joint_pos=fk_from_joint_pos,
+        fk_helper=fk_helper,
+      )
 
       joint_pos_list.append(jp)
       joint_vel_list.append(jv)
@@ -480,11 +549,14 @@ class MultiMotionCommand(CommandTerm):
     )
 
     motion_files = self._resolve_motion_files()
+    fk_helper = self._build_fk_helper()
     self.motion = MultiMotionLoader(
       motion_files,
       self.body_indexes,
       motion_type=self.cfg.motion_type,
       device=self.device,
+      fk_from_joint_pos=self.cfg.fk_from_joint_pos,
+      fk_helper=fk_helper,
     )
 
     # 初始化状态变量
@@ -606,9 +678,20 @@ class MultiMotionCommand(CommandTerm):
         self.body_indexes,
         motion_type=self.cfg.motion_type,
         device=self.device,
+        fk_from_joint_pos=self.cfg.fk_from_joint_pos,
+        fk_helper=fk_helper,
       )
       if self.cfg.extra_reference_motion_file
       else None
+    )
+
+  def _build_fk_helper(self) -> MotionFKHelper | None:
+    if not self.cfg.fk_from_joint_pos:
+      return None
+    return MotionFKHelper.from_mjlab_asset(
+      asset=self.robot,
+      dataset_joint_names=_MUJOCO_JOINT_NAMES,
+      output_body_names=self.cfg.body_names,
     )
 
   def _resolve_motion_files(self) -> list[str]:
@@ -655,6 +738,15 @@ class MultiMotionCommand(CommandTerm):
         "  - motion_file: path to a single .npz file"
       )
     return resolved_motion_files
+
+  def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
+    extras = super().reset(env_ids)
+    if isinstance(env_ids, torch.Tensor):
+      for name in ("_body_z_termination_buffer", "_gravity_dir_termination_buffer"):
+        buffer = getattr(self, name, None)
+        if isinstance(buffer, torch.Tensor):
+          buffer[env_ids] = 0
+    return extras
 
   def _compute_motion_bin_indices(
     self, time_steps: torch.Tensor, motion_indices: torch.Tensor
@@ -1398,6 +1490,8 @@ class MultiMotionCommand(CommandTerm):
     env_ids = torch.where(self.time_steps >= self.motion_length)[0]
     if env_ids.numel() > 0:
       self._resample_command(env_ids)
+      # Resampling writes qpos/qvel; refresh derived robot poses before re-anchoring.
+      self._env.sim.forward()
 
     anchor_pos_w_repeat = self.anchor_pos_w[:, None, :].repeat(
       1, len(self.cfg.body_names), 1
@@ -1537,6 +1631,7 @@ class MultiMotionCommandCfg(CommandTermCfg):
   motion_file: str = ""
   extra_reference_motion_file: str = ""
   motion_type: Literal["isaaclab", "mujoco"] = "isaaclab"
+  fk_from_joint_pos: bool = False
   anchor_body_name: str
   body_names: tuple[str, ...]
   pose_range: dict[str, tuple[float, float]] = field(default_factory=dict)

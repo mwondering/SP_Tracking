@@ -5,6 +5,7 @@ command:
   motion_file: ""
   extra_reference_motion_file: ""
   motion_type: ${oc.select:task.robot.motion_type,isaaclab}
+  fk_from_joint_pos: false
   anchor_body_name: ${task.robot.anchor_body_name}
   body_names: ${task.robot.body_names}
   resampling_time_range: [1000000000.0, 1000000000.0]

@@ -36,6 +36,8 @@ def test_registered_sp_task_uses_large_dataset_command() -> None:
   env_cfg = load_env_cfg(registry.TRACKING_BFM_SP_TASK_ID)
 
   assert isinstance(env_cfg.commands["motion"], LargeDatasetMotionCommandCfg)
+  assert "motor_params_implicit" in env_cfg.events
+  assert "motion_tracking_progress" in env_cfg.curriculum
 
 
 def test_registered_largedataset_task_keeps_old_tracking_surface() -> None:
