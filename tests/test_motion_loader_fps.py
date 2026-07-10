@@ -152,6 +152,31 @@ def test_large_dataset_store_prints_metadata_progress(
   assert "metadata progress 2/2" in stdout
 
 
+def test_large_dataset_store_can_read_metadata_in_parallel(
+  tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+  motion_a = tmp_path / "a.npz"
+  motion_b = tmp_path / "b.npz"
+  _write_motion(motion_a, include_fps=False)
+  _write_motion(motion_b, include_fps=True)
+
+  store = LargeDatasetMotionStore(
+    [str(motion_a), str(motion_b)],
+    torch.tensor([0, 2], dtype=torch.long),
+    motion_type="mujoco",
+    device="cpu",
+    metadata_read_workers=2,
+  )
+
+  stdout = capsys.readouterr().out
+  assert "metadata read start count=2 backend=parallel workers=2" in stdout
+  assert "metadata progress 2/2" in stdout
+  assert store.file_lengths.tolist() == [4, 4]
+  assert store.fps_list[0] == pytest.approx(50.0)
+  assert store.fps_list[1] == pytest.approx(60.0)
+  assert store.empty_fps_count == 1
+
+
 def test_multi_motion_loader_can_fk_legacy_30_body_motion_for_sp_asset(
   tmp_path: Path,
 ) -> None:

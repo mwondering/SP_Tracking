@@ -546,6 +546,7 @@ class LargeDatasetMotionStore:
     metadata_cache_file: str = "",
     metadata_cache_wait_timeout_s: float = 7200.0,
     metadata_cache_poll_interval_s: float = 0.25,
+    metadata_read_workers: int = 0,
     fk_from_joint_pos: bool = False,
     fk_helper: MotionFKHelper | None = None,
   ) -> None:
@@ -563,6 +564,7 @@ class LargeDatasetMotionStore:
     self._body_indexes = torch.as_tensor(body_indexes, dtype=torch.long).cpu()
     self.fk_from_joint_pos = bool(fk_from_joint_pos)
     self.fk_helper = fk_helper
+    self.metadata_read_workers = max(int(metadata_read_workers), 0)
     self._joint_reindex: list[int] | None = None
     self._body_reindex: list[int] | None = None
     if motion_type == "isaaclab":
@@ -610,24 +612,33 @@ class LargeDatasetMotionStore:
     )
 
   def _read_motion_metadata_from_files(self) -> tuple[list[int], list[float], int, int]:
+    worker_count = self.metadata_read_workers
+    if worker_count > 1:
+      return self._read_motion_metadata_from_files_parallel(worker_count)
+    return self._read_motion_metadata_from_files_serial()
+
+  def _read_motion_metadata_from_files_serial(
+    self,
+  ) -> tuple[list[int], list[float], int, int]:
     start = time.perf_counter()
     file_lengths: list[int] = []
     fps_values: list[float] = []
     non_scalar_fps_count = 0
     empty_fps_count = 0
     total_files = len(self.motion_files)
-    _bootstrap_debug(f"metadata read start count={total_files}", stdout=True)
+    _bootstrap_debug(
+      f"metadata read start count={total_files} backend=serial", stdout=True
+    )
     for index, motion_file in enumerate(self.motion_files):
-      if not os.path.isfile(motion_file):
-        raise FileNotFoundError(f"Invalid motion file path: {motion_file}")
-      with np.load(motion_file) as data:
-        file_lengths.append(int(data["joint_pos"].shape[0]))
-        fps_value, is_non_scalar_fps, is_empty_fps = extract_motion_fps(data)
-        fps_values.append(fps_value)
-        if is_non_scalar_fps:
-          non_scalar_fps_count += 1
-        if is_empty_fps:
-          empty_fps_count += 1
+      file_length, fps_value, is_non_scalar_fps, is_empty_fps = (
+        self._read_one_motion_metadata(motion_file)
+      )
+      file_lengths.append(file_length)
+      fps_values.append(fps_value)
+      if is_non_scalar_fps:
+        non_scalar_fps_count += 1
+      if is_empty_fps:
+        empty_fps_count += 1
       completed_count = index + 1
       if completed_count % 5000 == 0 or completed_count == total_files:
         _bootstrap_debug(
@@ -636,6 +647,67 @@ class LargeDatasetMotionStore:
           stdout=True,
         )
     return file_lengths, fps_values, non_scalar_fps_count, empty_fps_count
+
+  def _read_motion_metadata_from_files_parallel(
+    self, worker_count: int
+  ) -> tuple[list[int], list[float], int, int]:
+    start = time.perf_counter()
+    total_files = len(self.motion_files)
+    worker_count = min(max(int(worker_count), 1), total_files)
+    file_lengths = [0] * total_files
+    fps_values = [0.0] * total_files
+    non_scalar_fps_count = 0
+    empty_fps_count = 0
+    completed_count = 0
+    _bootstrap_debug(
+      f"metadata read start count={total_files} backend=parallel workers={worker_count}",
+      stdout=True,
+    )
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+      pending: dict[concurrent.futures.Future, tuple[int, str]] = {}
+      next_index = 0
+      max_pending = max(worker_count * 4, worker_count)
+
+      def submit_until_full() -> None:
+        nonlocal next_index
+        while next_index < total_files and len(pending) < max_pending:
+          motion_file = self.motion_files[next_index]
+          future = executor.submit(self._read_one_motion_metadata, motion_file)
+          pending[future] = (next_index, motion_file)
+          next_index += 1
+
+      submit_until_full()
+      while pending:
+        done, _ = concurrent.futures.wait(
+          pending, return_when=concurrent.futures.FIRST_COMPLETED
+        )
+        for future in done:
+          index, motion_file = pending.pop(future)
+          file_length, fps_value, is_non_scalar_fps, is_empty_fps = future.result()
+          file_lengths[index] = file_length
+          fps_values[index] = fps_value
+          if is_non_scalar_fps:
+            non_scalar_fps_count += 1
+          if is_empty_fps:
+            empty_fps_count += 1
+          completed_count += 1
+          if completed_count % 5000 == 0 or completed_count == total_files:
+            _bootstrap_debug(
+              f"metadata progress {completed_count}/{total_files} "
+              f"elapsed={time.perf_counter() - start:.3f}s file={motion_file}",
+              stdout=True,
+            )
+        submit_until_full()
+    return file_lengths, fps_values, non_scalar_fps_count, empty_fps_count
+
+  @staticmethod
+  def _read_one_motion_metadata(motion_file: str) -> tuple[int, float, bool, bool]:
+    if not os.path.isfile(motion_file):
+      raise FileNotFoundError(f"Invalid motion file path: {motion_file}")
+    with np.load(motion_file) as data:
+      file_length = int(data["joint_pos"].shape[0])
+      fps_value, is_non_scalar_fps, is_empty_fps = extract_motion_fps(data)
+    return file_length, fps_value, is_non_scalar_fps, is_empty_fps
 
   def _try_load_metadata_cache(
     self, metadata_cache_file: str
@@ -1807,6 +1879,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       metadata_cache_file=self._resolve_motion_metadata_cache_file(),
       metadata_cache_wait_timeout_s=self.cfg.motion_metadata_cache_wait_timeout_s,
       metadata_cache_poll_interval_s=self.cfg.motion_metadata_cache_poll_interval_s,
+      metadata_read_workers=self.cfg.motion_metadata_read_workers,
       fk_from_joint_pos=self.cfg.fk_from_joint_pos,
       fk_helper=fk_helper,
     )
@@ -2833,6 +2906,7 @@ class LargeDatasetMultiMotionCommandCfg(MultiMotionCommandCfg):
   motion_metadata_cache_file: str = ""
   motion_metadata_cache_wait_timeout_s: float = 7200.0
   motion_metadata_cache_poll_interval_s: float = 0.25
+  motion_metadata_read_workers: int = 0
   motion_manifest_wait_timeout_s: float = 600.0
   motion_manifest_poll_interval_s: float = 0.25
   motion_scan_backend: Literal["auto", "fd", "python"] = "auto"
