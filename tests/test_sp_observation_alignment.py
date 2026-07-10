@@ -60,6 +60,17 @@ class _FakeScene(dict):
     )
 
 
+class _SceneWithoutContains:
+  def __init__(self, robot: _FakeAsset):
+    self._items = {"robot": robot}
+    self.env_origins = torch.zeros((1, 3), dtype=torch.float32)
+
+  def __getitem__(self, key):
+    if not isinstance(key, str):
+      raise KeyError(f"Scene element '{key}' not found")
+    return self._items[key]
+
+
 def _make_env(
   *,
   asset: _FakeAsset,
@@ -247,7 +258,7 @@ def test_projected_gravity_normalizes_helper_output(monkeypatch) -> None:
 
 def test_feet_contact_state_uses_robot_mass_for_force_normalization() -> None:
   asset = _FakeAsset(
-    data=SimpleNamespace(),
+    data=SimpleNamespace(body_mass=torch.tensor([[10.0]], dtype=torch.float32)),
     body_names=("pelvis",),
     joint_count=1,
   )
@@ -262,6 +273,30 @@ def test_feet_contact_state_uses_robot_mass_for_force_normalization() -> None:
     )
   )
   env.scene["contact_forces"] = sensor
+
+  obs = sp.feet_contact_state(env, sensor_name="contact_forces")
+
+  assert torch.allclose(obs[:, :3], torch.tensor([[0.0, 0.0, 1.0]]))
+
+
+def test_feet_contact_state_does_not_require_scene_contains_protocol() -> None:
+  asset = _FakeAsset(
+    data=SimpleNamespace(body_mass=torch.tensor([[10.0]], dtype=torch.float32)),
+    body_names=("pelvis",),
+    joint_count=1,
+  )
+  env = _make_env(asset=asset)
+  env.cfg = SimpleNamespace(robot=SimpleNamespace())
+  env.scene = _SceneWithoutContains(asset)
+  sensor = SimpleNamespace(
+    data=SimpleNamespace(
+      force=torch.tensor([[[0.0, 0.0, 98.1]]], dtype=torch.float32),
+      force_history=None,
+      current_contact_time=torch.tensor([[0.04]], dtype=torch.float32),
+      current_air_time=torch.tensor([[0.0]], dtype=torch.float32),
+    )
+  )
+  env.scene._items["contact_forces"] = sensor
 
   obs = sp.feet_contact_state(env, sensor_name="contact_forces")
 

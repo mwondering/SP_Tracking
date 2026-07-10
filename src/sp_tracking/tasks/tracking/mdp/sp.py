@@ -625,7 +625,12 @@ def _robot_mass(env: "ManagerBasedRlEnv") -> float | torch.Tensor | None:
   mass = getattr(robot_cfg, "mass", None) if robot_cfg is not None else None
   if mass is not None:
     return mass
-  asset = env.scene["robot"] if hasattr(env, "scene") and "robot" in env.scene else None
+  asset = None
+  if hasattr(env, "scene"):
+    try:
+      asset = env.scene["robot"]
+    except KeyError:
+      asset = None
   data = getattr(asset, "data", None)
   for name in ("body_mass", "default_body_mass"):
     value = getattr(data, name, None)
