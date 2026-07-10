@@ -1,8 +1,9 @@
 import json
+import math
 import os
 import time
 from pathlib import Path
-from typing import cast
+from typing import Iterable, cast
 
 import torch
 import wandb
@@ -51,6 +52,144 @@ def _upload_launch_script_artifact(
 
   writer.save_file(str(launch_script_artifact_path))
   return True
+
+
+def _finite_mask(tensor: torch.Tensor) -> torch.Tensor:
+  if tensor.is_floating_point() or tensor.is_complex():
+    return torch.isfinite(tensor)
+  return torch.ones_like(tensor, dtype=torch.bool)
+
+
+def _nonfinite_env_ids(tensor: torch.Tensor) -> list[int]:
+  if tensor.numel() == 0:
+    return []
+  mask = ~_finite_mask(tensor)
+  if mask.ndim == 0:
+    return [0] if bool(mask.item()) else []
+  per_env = mask.reshape(mask.shape[0], -1).any(dim=1)
+  return torch.where(per_env)[0].detach().cpu().tolist()
+
+
+def _motion_context(env: object, env_ids: Iterable[int]) -> str:
+  unwrapped = getattr(env, "unwrapped", env)
+  command_manager = getattr(unwrapped, "command_manager", None)
+  get_term = getattr(command_manager, "get_term", None)
+  if not callable(get_term):
+    return ""
+  try:
+    command = get_term("motion")
+  except Exception:
+    return ""
+
+  motion_idx = getattr(command, "motion_idx", None)
+  time_steps = getattr(command, "time_steps", None)
+  if not isinstance(motion_idx, torch.Tensor) or not isinstance(time_steps, torch.Tensor):
+    return ""
+
+  env_id_list = [env_id for env_id in env_ids if env_id < int(motion_idx.numel())]
+  if not env_id_list:
+    return ""
+  env_id_tensor = torch.as_tensor(
+    env_id_list, dtype=torch.long, device=motion_idx.device
+  )
+  motion_ids = motion_idx[env_id_tensor].detach().cpu().tolist()
+  step_values = time_steps[env_id_tensor].detach().cpu().tolist()
+  parts = [f"motion_ids={motion_ids}", f"time_steps={step_values}"]
+
+  motion_store = getattr(command, "motion_store", None)
+  motion_files = getattr(motion_store, "motion_files", None)
+  if isinstance(motion_files, list):
+    file_examples = []
+    for motion_id in motion_ids[:5]:
+      if isinstance(motion_id, int) and 0 <= motion_id < len(motion_files):
+        file_examples.append(str(motion_files[motion_id]))
+    if file_examples:
+      parts.append(f"motion_files={file_examples}")
+  return " ".join(parts)
+
+
+def _diagnose_concatenated_obs_group(
+  observation_manager: object,
+  group_name: str,
+  tensor: torch.Tensor,
+) -> list[tuple[str, list[int]]]:
+  active_terms = getattr(observation_manager, "active_terms", {})
+  group_obs_term_dim = getattr(observation_manager, "group_obs_term_dim", {})
+  group_obs_concatenate = getattr(observation_manager, "group_obs_concatenate", {})
+  if not isinstance(active_terms, dict) or not isinstance(group_obs_term_dim, dict):
+    return []
+  if not group_obs_concatenate.get(group_name, False):
+    return []
+  term_names = active_terms.get(group_name, [])
+  term_dims = group_obs_term_dim.get(group_name, [])
+  if not term_names or not term_dims:
+    return []
+
+  flat = tensor.reshape(tensor.shape[0], -1)
+  cursor = 0
+  results: list[tuple[str, list[int]]] = []
+  for term_name, term_dim in zip(term_names, term_dims, strict=False):
+    term_width = int(math.prod(term_dim))
+    term = flat[:, cursor : cursor + term_width]
+    env_ids = _nonfinite_env_ids(term)
+    if env_ids:
+      results.append((str(term_name), env_ids))
+    cursor += term_width
+  return results
+
+
+def _format_nonfinite_env_output_diagnostics(
+  env: object,
+  obs: object,
+  rewards: torch.Tensor,
+  dones: torch.Tensor,
+) -> str:
+  lines: list[str] = ["Non-finite environment output diagnostics:"]
+  unwrapped = getattr(env, "unwrapped", env)
+  observation_manager = getattr(unwrapped, "observation_manager", None)
+
+  obs_items = getattr(obs, "items", None)
+  if callable(obs_items):
+    for group_name, tensor in obs_items():
+      if not isinstance(tensor, torch.Tensor):
+        continue
+      group_env_ids = _nonfinite_env_ids(tensor)
+      if not group_env_ids:
+        continue
+      term_hits = (
+        _diagnose_concatenated_obs_group(observation_manager, str(group_name), tensor)
+        if observation_manager is not None
+        else []
+      )
+      if term_hits:
+        for term_name, env_ids in term_hits[:12]:
+          motion_context = _motion_context(env, env_ids)
+          suffix = f" {motion_context}" if motion_context else ""
+          lines.append(f"- obs[{group_name}]/{term_name}: envs={env_ids[:10]}{suffix}")
+      else:
+        motion_context = _motion_context(env, group_env_ids)
+        suffix = f" {motion_context}" if motion_context else ""
+        lines.append(f"- obs[{group_name}]: envs={group_env_ids[:10]}{suffix}")
+
+  reward_env_ids = _nonfinite_env_ids(rewards)
+  if reward_env_ids:
+    lines.append(f"- rewards: envs={reward_env_ids[:10]}")
+  done_env_ids = _nonfinite_env_ids(dones)
+  if done_env_ids:
+    lines.append(f"- dones: envs={done_env_ids[:10]}")
+
+  if len(lines) == 1:
+    return ""
+  return "\n".join(lines)
+
+
+def _format_nonfinite_action_diagnostics(env: object, actions: torch.Tensor) -> str:
+  env_ids = _nonfinite_env_ids(actions)
+  if not env_ids:
+    return ""
+  motion_context = _motion_context(env, env_ids)
+  suffix = f" {motion_context}" if motion_context else ""
+  return f"Policy action contains NaN/Inf: envs={env_ids[:10]}{suffix}"
 
 
 class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
@@ -306,13 +445,27 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
           if step_idx == 0 or step_idx == num_steps_per_env - 1:
             _bootstrap_debug(f"iteration {it}: before alg.act step={step_idx}")
           actions = self.alg.act(obs)
+          if self.cfg.get("check_for_nan", True):
+            action_diagnostics = _format_nonfinite_action_diagnostics(
+              self.env, actions
+            )
+            if action_diagnostics:
+              raise ValueError(action_diagnostics)
           if step_idx == 0 or step_idx == num_steps_per_env - 1:
             _bootstrap_debug(f"iteration {it}: before env.step step={step_idx}")
           obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
           if step_idx == 0 or step_idx == num_steps_per_env - 1:
             _bootstrap_debug(f"iteration {it}: after env.step step={step_idx}")
           if self.cfg.get("check_for_nan", True):
-            check_nan(obs, rewards, dones)
+            try:
+              check_nan(obs, rewards, dones)
+            except ValueError as exc:
+              diagnostics = _format_nonfinite_env_output_diagnostics(
+                self.env, obs, rewards, dones
+              )
+              if diagnostics:
+                raise ValueError(f"{exc}\n{diagnostics}") from exc
+              raise
           obs, rewards, dones = (
             obs.to(self.device),
             rewards.to(self.device),

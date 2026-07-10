@@ -97,6 +97,19 @@ def test_sp_variant_supports_multimotion_command_override() -> None:
   assert env_cfg.commands["motion"].sampling_mode == "adaptive"
 
 
+def test_observation_nan_policy_is_hydra_configurable() -> None:
+  cfg = _compose(
+    "task=tracking_bfm_sp",
+    "++task.obs.observations.actor.nan_policy=error",
+    "++task.obs.observations.actor.nan_check_per_term=true",
+  )
+
+  env_cfg = build_env_cfg(cfg.task)
+
+  assert env_cfg.observations["actor"].nan_policy == "error"
+  assert env_cfg.observations["actor"].nan_check_per_term is True
+
+
 def test_tracking_bfm_keeps_original_events_and_action() -> None:
   cfg = _compose("task=tracking_bfm")
 
@@ -126,6 +139,9 @@ def test_tracking_bfm_largedataset_matches_old_tracking_task() -> None:
   assert motion_cmd.motion_type == "isaaclab"
   assert motion_cmd.fk_from_joint_pos is False
   assert motion_cmd.motion_manifest_file == "/tmp/manifest.txt"
+  assert motion_cmd.motion_scan_backend == "auto"
+  assert motion_cmd.motion_scan_workers == 0
+  assert motion_cmd.motion_scan_fd_executable == "fd"
   assert motion_cmd.adaptive_bin_snapshot_interval_iterations == 1
   assert motion_cmd.adaptive_bin_snapshot_num_buckets == 123
   assert list(env_cfg.observations["actor"].terms.keys()) == [

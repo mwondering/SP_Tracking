@@ -217,6 +217,8 @@ def _build_observations(cfg: DictConfig) -> dict[str, ObservationGroupCfg]:
       terms=terms,
       concatenate_terms=bool(group_cfg.get("concatenate_terms", True)),
       enable_corruption=bool(group_cfg.get("enable_corruption", False)),
+      nan_policy=str(group_cfg.get("nan_policy", "disabled")),
+      nan_check_per_term=bool(group_cfg.get("nan_check_per_term", True)),
     )
   return groups
 

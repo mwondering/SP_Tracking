@@ -132,6 +132,26 @@ def test_large_dataset_store_uses_50hz_default_when_fps_missing(
   assert store.empty_fps_count == 1
 
 
+def test_large_dataset_store_prints_metadata_progress(
+  tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+  motion_a = tmp_path / "a.npz"
+  motion_b = tmp_path / "b.npz"
+  _write_motion(motion_a, include_fps=True)
+  _write_motion(motion_b, include_fps=True)
+
+  LargeDatasetMotionStore(
+    [str(motion_a), str(motion_b)],
+    torch.tensor([0, 2], dtype=torch.long),
+    motion_type="mujoco",
+    device="cpu",
+  )
+
+  stdout = capsys.readouterr().out
+  assert "metadata read start count=2" in stdout
+  assert "metadata progress 2/2" in stdout
+
+
 def test_multi_motion_loader_can_fk_legacy_30_body_motion_for_sp_asset(
   tmp_path: Path,
 ) -> None:

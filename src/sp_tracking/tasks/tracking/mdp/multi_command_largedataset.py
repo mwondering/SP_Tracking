@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import math
 import os
+import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import Literal
@@ -31,19 +34,39 @@ from .multi_commands import (
 from .motion_fk import MotionFKHelper
 
 
-def _bootstrap_debug(message: str) -> None:
-  debug_dir = os.environ.get("MJLAB_BOOTSTRAP_DEBUG_DIR", "")
-  if not debug_dir:
-    return
+def _bootstrap_log_line(message: str) -> str:
   rank = os.environ.get("RANK", "unknown")
   local_rank = os.environ.get("LOCAL_RANK", "unknown")
   pid = os.getpid()
-  line = (
+  return (
     f"[BOOT][{time.strftime('%Y-%m-%d %H:%M:%S')}] "
     f"rank={rank} local_rank={local_rank} pid={pid}: large_motion: {message}"
   )
+
+
+def _bootstrap_should_print_stdout() -> bool:
+  stdout_flag = os.environ.get("SP_TRACKING_BOOTSTRAP_STDOUT", "1").lower()
+  if stdout_flag in {"0", "false", "no", "off"}:
+    return False
+  try:
+    return int(os.environ.get("RANK", "0")) == 0
+  except ValueError:
+    return True
+
+
+def _bootstrap_debug(message: str, *, stdout: bool = False) -> None:
+  line = _bootstrap_log_line(message)
+  if stdout and _bootstrap_should_print_stdout():
+    print(line, flush=True)
+
+  debug_dir = os.environ.get("MJLAB_BOOTSTRAP_DEBUG_DIR", "")
+  if not debug_dir:
+    return
   try:
     os.makedirs(debug_dir, exist_ok=True)
+    rank = os.environ.get("RANK", "unknown")
+    local_rank = os.environ.get("LOCAL_RANK", "unknown")
+    pid = os.getpid()
     log_file = os.path.join(debug_dir, f"rank_{rank}_local_{local_rank}_pid_{pid}.log")
     with open(log_file, "a", encoding="utf-8") as f:
       f.write(line + "\n")
@@ -530,7 +553,8 @@ class LargeDatasetMotionStore:
       raise ValueError("motion_files cannot be empty")
     start = time.perf_counter()
     _bootstrap_debug(
-      f"LargeDatasetMotionStore init start num_motion_files={len(motion_files)} device={device}"
+      f"LargeDatasetMotionStore init start num_motion_files={len(motion_files)} device={device}",
+      stdout=True,
     )
     self.motion_files = list(motion_files)
     self.num_files = len(self.motion_files)
@@ -581,14 +605,18 @@ class LargeDatasetMotionStore:
       f"num_files={self.num_files} total_frames={int(sum(file_lengths))} "
       f"non_scalar_fps_count={non_scalar_fps_count} "
       f"empty_fps_count={empty_fps_count} "
-      f"elapsed={time.perf_counter() - start:.3f}s"
+      f"elapsed={time.perf_counter() - start:.3f}s",
+      stdout=True,
     )
 
   def _read_motion_metadata_from_files(self) -> tuple[list[int], list[float], int, int]:
+    start = time.perf_counter()
     file_lengths: list[int] = []
     fps_values: list[float] = []
     non_scalar_fps_count = 0
     empty_fps_count = 0
+    total_files = len(self.motion_files)
+    _bootstrap_debug(f"metadata read start count={total_files}", stdout=True)
     for index, motion_file in enumerate(self.motion_files):
       if not os.path.isfile(motion_file):
         raise FileNotFoundError(f"Invalid motion file path: {motion_file}")
@@ -600,9 +628,12 @@ class LargeDatasetMotionStore:
           non_scalar_fps_count += 1
         if is_empty_fps:
           empty_fps_count += 1
-      if (index + 1) % 5000 == 0:
+      completed_count = index + 1
+      if completed_count % 5000 == 0 or completed_count == total_files:
         _bootstrap_debug(
-          f"LargeDatasetMotionStore metadata progress {index + 1}/{len(self.motion_files)}"
+          f"metadata progress {completed_count}/{total_files} "
+          f"elapsed={time.perf_counter() - start:.3f}s file={motion_file}",
+          stdout=True,
         )
     return file_lengths, fps_values, non_scalar_fps_count, empty_fps_count
 
@@ -625,12 +656,14 @@ class LargeDatasetMotionStore:
         non_scalar_fps_count = int(data["non_scalar_fps_count"].item())
         empty_fps_count = int(data["empty_fps_count"].item())
       _bootstrap_debug(
-        f"LargeDatasetMotionStore metadata cache hit file={metadata_cache_file}"
+        f"LargeDatasetMotionStore metadata cache hit file={metadata_cache_file}",
+        stdout=True,
       )
       return file_lengths, fps_values, non_scalar_fps_count, empty_fps_count
     except Exception as exc:
       _bootstrap_debug(
-        f"LargeDatasetMotionStore metadata cache ignored file={metadata_cache_file} error={exc}"
+        f"LargeDatasetMotionStore metadata cache ignored file={metadata_cache_file} error={exc}",
+        stdout=True,
       )
       return None
 
@@ -645,7 +678,8 @@ class LargeDatasetMotionStore:
     timeout_s = max(float(timeout_s), 0.0)
     poll_interval_s = max(float(poll_interval_s), 0.01)
     _bootstrap_debug(
-      f"LargeDatasetMotionStore waiting for metadata cache file={metadata_cache_file}"
+      f"LargeDatasetMotionStore waiting for metadata cache file={metadata_cache_file}",
+      stdout=True,
     )
     while time.perf_counter() - start <= timeout_s:
       cached_metadata = self._try_load_metadata_cache(metadata_cache_file)
@@ -653,7 +687,8 @@ class LargeDatasetMotionStore:
         return cached_metadata
       time.sleep(poll_interval_s)
     _bootstrap_debug(
-      f"LargeDatasetMotionStore metadata cache wait timed out file={metadata_cache_file}"
+      f"LargeDatasetMotionStore metadata cache wait timed out file={metadata_cache_file}",
+      stdout=True,
     )
     return None
 
@@ -684,11 +719,13 @@ class LargeDatasetMotionStore:
       )
       os.replace(tmp_file, metadata_cache_file)
       _bootstrap_debug(
-        f"LargeDatasetMotionStore metadata cache wrote file={metadata_cache_file}"
+        f"LargeDatasetMotionStore metadata cache wrote file={metadata_cache_file}",
+        stdout=True,
       )
     except Exception as exc:
       _bootstrap_debug(
-        f"LargeDatasetMotionStore metadata cache write skipped file={metadata_cache_file} error={exc}"
+        f"LargeDatasetMotionStore metadata cache write skipped file={metadata_cache_file} error={exc}",
+        stdout=True,
       )
 
   def _motion_files_hash(self) -> str:
@@ -716,6 +753,21 @@ class LargeDatasetMotionStore:
     if fps_array.size == 0:
       return DEFAULT_MOTION_FPS, False, True
     return float(fps_array.reshape(-1)[0]), fps_array.size > 1, False
+
+  @staticmethod
+  def _validate_motion_field(
+    motion_file: str, field_name: str, value: np.ndarray
+  ) -> None:
+    if np.isfinite(value).all():
+      return
+    bad_indices = np.argwhere(~np.isfinite(value))
+    first_index = tuple(int(i) for i in bad_indices[0].tolist())
+    bad_count = int(bad_indices.shape[0])
+    raise ValueError(
+      "Non-finite motion data "
+      f"field={field_name} file={motion_file} "
+      f"first_index={first_index} count={bad_count}"
+    )
 
   def load_motion_ids(self, motion_ids: torch.Tensor) -> LargeDatasetMotionBuffer:
     loaded = self.load_motion_chunks(motion_ids)
@@ -801,13 +853,24 @@ class LargeDatasetMotionStore:
     return loaded
 
   def _load_one_motion(self, motion_id: int) -> dict[str, torch.Tensor]:
-    with np.load(self.motion_files[motion_id]) as data:
+    motion_file = self.motion_files[motion_id]
+    with np.load(motion_file) as data:
       joint_pos = np.asarray(data["joint_pos"], dtype=np.float32)
       joint_vel = np.asarray(data["joint_vel"], dtype=np.float32)
       body_pos_w = np.asarray(data["body_pos_w"], dtype=np.float32)
       body_quat_w = np.asarray(data["body_quat_w"], dtype=np.float32)
       body_lin_vel_w = np.asarray(data["body_lin_vel_w"], dtype=np.float32)
       body_ang_vel_w = np.asarray(data["body_ang_vel_w"], dtype=np.float32)
+    raw_fields = {
+      "joint_pos": joint_pos,
+      "joint_vel": joint_vel,
+      "body_pos_w": body_pos_w,
+      "body_quat_w": body_quat_w,
+      "body_lin_vel_w": body_lin_vel_w,
+      "body_ang_vel_w": body_ang_vel_w,
+    }
+    for field_name, value in raw_fields.items():
+      self._validate_motion_field(motion_file, field_name, value)
 
     if self._joint_reindex is not None:
       joint_pos = joint_pos[:, self._joint_reindex]
@@ -1951,13 +2014,15 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     rank, world_size = self._runtime_rank_context()
     _bootstrap_debug(
       "resolve motion files with manifest "
-      f"path={motion_path} manifest={manifest_file} rank={rank} world_size={world_size}"
+      f"path={motion_path} manifest={manifest_file} rank={rank} world_size={world_size}",
+      stdout=True,
     )
 
     if os.path.exists(manifest_file):
       motion_files = self._read_motion_manifest(manifest_file)
       _bootstrap_debug(
-        f"read existing motion manifest count={len(motion_files)} file={manifest_file}"
+        f"read existing motion manifest count={len(motion_files)} file={manifest_file}",
+        stdout=True,
       )
       return motion_files
 
@@ -1965,7 +2030,8 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       motion_files = self._scan_motion_path(motion_path)
       self._write_motion_manifest(manifest_file, motion_files)
       _bootstrap_debug(
-        f"wrote motion manifest count={len(motion_files)} file={manifest_file}"
+        f"wrote motion manifest count={len(motion_files)} file={manifest_file}",
+        stdout=True,
       )
       return motion_files
 
@@ -1983,13 +2049,222 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     return rank, max(world_size, 1)
 
   def _scan_motion_path(self, motion_path: str) -> list[str]:
+    backend = str(getattr(self.cfg, "motion_scan_backend", "auto")).lower()
+    if backend not in {"auto", "fd", "python"}:
+      raise ValueError(
+        "motion_scan_backend must be one of: auto, fd, python"
+      )
+
+    if backend in {"auto", "fd"}:
+      fd_executable = str(getattr(self.cfg, "motion_scan_fd_executable", "fd"))
+      fd_path = shutil.which(fd_executable)
+      if fd_path:
+        try:
+          return self._scan_motion_path_with_fd(motion_path, fd_path)
+        except (OSError, subprocess.SubprocessError) as exc:
+          if backend == "fd":
+            raise RuntimeError(
+              f"fd motion scan failed for path {motion_path}: {exc}"
+            ) from exc
+          _bootstrap_debug(
+            "fd motion scan failed, falling back to python scanner "
+            f"path={motion_path} error={exc}",
+            stdout=True,
+          )
+      elif backend == "fd":
+        raise FileNotFoundError(
+          f"motion_scan_backend='fd' requested, but executable not found: "
+          f"{fd_executable}"
+        )
+
+    return self._scan_motion_path_with_python(motion_path)
+
+  def _scan_motion_path_with_fd(self, motion_path: str, fd_path: str) -> list[str]:
+    start = time.perf_counter()
+    worker_count = int(getattr(self.cfg, "motion_scan_workers", 0))
+    if worker_count < 0:
+      raise ValueError("motion_scan_workers must be non-negative")
+
+    cmd = [
+      fd_path,
+      "--hidden",
+      "--no-ignore",
+      "--type",
+      "f",
+      "--color",
+      "never",
+    ]
+    if worker_count > 0:
+      cmd.extend(["--threads", str(worker_count)])
+    cmd.extend([r"(?i)\.npz$", motion_path])
+
+    _bootstrap_debug(
+      "scan motion path start "
+      f"path={motion_path} backend=fd fd={fd_path} workers={worker_count}",
+      stdout=True,
+    )
+    process = subprocess.Popen(
+      cmd,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      text=True,
+    )
+    resolved_motion_files: list[str] = []
+    last_log_time = start
+    log_interval = float(getattr(self.cfg, "motion_scan_log_interval_s", 10.0))
+    assert process.stdout is not None
+    for line in process.stdout:
+      motion_file = line.strip()
+      if motion_file:
+        resolved_motion_files.append(motion_file)
+      now = time.perf_counter()
+      if log_interval > 0.0 and now - last_log_time >= log_interval:
+        _bootstrap_debug(
+          "scan motion path progress "
+          f"backend=fd motions={len(resolved_motion_files)} "
+          f"elapsed={now - start:.3f}s",
+          stdout=True,
+        )
+        last_log_time = now
+
+    stderr = ""
+    if process.stderr is not None:
+      stderr = process.stderr.read()
+    return_code = process.wait()
+    if return_code != 0:
+      raise subprocess.CalledProcessError(
+        return_code, cmd, output="\n".join(resolved_motion_files), stderr=stderr
+      )
+    resolved_motion_files.sort()
+    if stderr.strip():
+      _bootstrap_debug(
+        "fd motion scan stderr "
+        f"path={motion_path} stderr={stderr.strip()}",
+        stdout=True,
+      )
+    _bootstrap_debug(
+      "scan motion path done "
+      f"backend=fd motions={len(resolved_motion_files)} "
+      f"elapsed={time.perf_counter() - start:.3f}s",
+      stdout=True,
+    )
+    return resolved_motion_files
+
+  def _scan_motion_path_with_python(self, motion_path: str) -> list[str]:
+    worker_count = self._motion_scan_worker_count()
+    if worker_count <= 1:
+      return self._scan_motion_path_with_os_walk(motion_path)
+    return self._scan_motion_path_with_parallel_os_walk(motion_path, worker_count)
+
+  def _motion_scan_worker_count(self, item_count: int | None = None) -> int:
+    configured_workers = int(getattr(self.cfg, "motion_scan_workers", 0))
+    if configured_workers < 0:
+      raise ValueError("motion_scan_workers must be non-negative")
+    if configured_workers > 0:
+      return configured_workers
+
+    worker_count = min(os.cpu_count() or 1, 32)
+    if item_count is not None:
+      worker_count = min(worker_count, max(item_count, 1))
+    return max(worker_count, 1)
+
+  def _scan_motion_path_with_parallel_os_walk(
+    self, motion_path: str, worker_count: int
+  ) -> list[str]:
+    root_motion_files: list[str] = []
+    child_dirs: list[str] = []
+    root_file_count = 0
+    with os.scandir(motion_path) as entries:
+      for entry in entries:
+        try:
+          is_dir = entry.is_dir(follow_symlinks=False)
+        except OSError as exc:
+          _bootstrap_debug(
+            f"scan motion path skipped entry path={entry.path} error={exc}"
+          )
+          continue
+
+        if is_dir:
+          child_dirs.append(entry.path)
+        else:
+          root_file_count += 1
+          if entry.name.lower().endswith(".npz"):
+            root_motion_files.append(entry.path)
+
+    worker_count = self._motion_scan_worker_count(len(child_dirs))
+    if worker_count <= 1 or len(child_dirs) < 2:
+      return self._scan_motion_path_with_os_walk(motion_path)
+
+    start = time.perf_counter()
+    last_log_time = start
+    log_interval = float(getattr(self.cfg, "motion_scan_log_interval_s", 10.0))
+    resolved_motion_files = list(root_motion_files)
+    scanned_dirs = 1
+    scanned_files = root_file_count
+    completed_roots = 0
+    _bootstrap_debug(
+      "scan motion path start "
+      f"path={motion_path} backend=python_parallel workers={worker_count} "
+      f"root_dirs={len(child_dirs)}",
+      stdout=True,
+    )
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+      futures = [
+        executor.submit(self._collect_motion_files_os_walk, child_dir)
+        for child_dir in child_dirs
+      ]
+      for future in concurrent.futures.as_completed(futures):
+        motion_files, dir_count, file_count = future.result()
+        resolved_motion_files.extend(motion_files)
+        scanned_dirs += dir_count
+        scanned_files += file_count
+        completed_roots += 1
+
+        now = time.perf_counter()
+        if log_interval > 0.0 and now - last_log_time >= log_interval:
+          _bootstrap_debug(
+            "scan motion path progress "
+            f"backend=python_parallel dirs={scanned_dirs} files={scanned_files} "
+            f"motions={len(resolved_motion_files)} "
+            f"completed_roots={completed_roots}/{len(child_dirs)} "
+            f"elapsed={now - start:.3f}s",
+            stdout=True,
+          )
+          last_log_time = now
+
+    resolved_motion_files.sort()
+    _bootstrap_debug(
+      "scan motion path done "
+      f"backend=python_parallel dirs={scanned_dirs} files={scanned_files} "
+      f"motions={len(resolved_motion_files)} "
+      f"elapsed={time.perf_counter() - start:.3f}s",
+      stdout=True,
+    )
+    return resolved_motion_files
+
+  @staticmethod
+  def _collect_motion_files_os_walk(motion_path: str) -> tuple[list[str], int, int]:
+    resolved_motion_files: list[str] = []
+    scanned_dirs = 0
+    scanned_files = 0
+    for root, _, files in os.walk(motion_path):
+      scanned_dirs += 1
+      scanned_files += len(files)
+      for filename in files:
+        if filename.lower().endswith(".npz"):
+          resolved_motion_files.append(os.path.join(root, filename))
+    return resolved_motion_files, scanned_dirs, scanned_files
+
+  def _scan_motion_path_with_os_walk(self, motion_path: str) -> list[str]:
     start = time.perf_counter()
     last_log_time = start
     log_interval = float(getattr(self.cfg, "motion_scan_log_interval_s", 10.0))
     resolved_motion_files: list[str] = []
     scanned_dirs = 0
     scanned_files = 0
-    _bootstrap_debug(f"scan motion path start path={motion_path}")
+    _bootstrap_debug(
+      f"scan motion path start path={motion_path} backend=python", stdout=True
+    )
     for root, _, files in os.walk(motion_path):
       scanned_dirs += 1
       scanned_files += len(files)
@@ -2003,15 +2278,18 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
           "scan motion path progress "
           f"dirs={scanned_dirs} files={scanned_files} "
           f"motions={len(resolved_motion_files)} elapsed={now - start:.3f}s "
-          f"root={root}"
+          f"root={root}",
+          stdout=True,
         )
         last_log_time = now
 
     resolved_motion_files.sort()
     _bootstrap_debug(
       "scan motion path done "
-      f"dirs={scanned_dirs} files={scanned_files} motions={len(resolved_motion_files)} "
-      f"elapsed={time.perf_counter() - start:.3f}s"
+      f"backend=python dirs={scanned_dirs} files={scanned_files} "
+      f"motions={len(resolved_motion_files)} "
+      f"elapsed={time.perf_counter() - start:.3f}s",
+      stdout=True,
     )
     return resolved_motion_files
 
@@ -2042,13 +2320,15 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     start = time.perf_counter()
     last_log_time = start
     _bootstrap_debug(
-      f"waiting for motion manifest file={manifest_file} timeout={timeout_s:.1f}s"
+      f"waiting for motion manifest file={manifest_file} timeout={timeout_s:.1f}s",
+      stdout=True,
     )
     while True:
       if os.path.exists(manifest_file):
         motion_files = self._read_motion_manifest(manifest_file)
         _bootstrap_debug(
-          f"read motion manifest count={len(motion_files)} file={manifest_file}"
+          f"read motion manifest count={len(motion_files)} file={manifest_file}",
+          stdout=True,
         )
         return motion_files
 
@@ -2062,7 +2342,8 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       if now - last_log_time >= log_interval_s:
         _bootstrap_debug(
           f"still waiting for motion manifest elapsed={elapsed:.3f}s "
-          f"file={manifest_file}"
+          f"file={manifest_file}",
+          stdout=True,
         )
         last_log_time = now
       time.sleep(poll_interval_s)
@@ -2554,6 +2835,9 @@ class LargeDatasetMultiMotionCommandCfg(MultiMotionCommandCfg):
   motion_metadata_cache_poll_interval_s: float = 0.25
   motion_manifest_wait_timeout_s: float = 600.0
   motion_manifest_poll_interval_s: float = 0.25
+  motion_scan_backend: Literal["auto", "fd", "python"] = "auto"
+  motion_scan_workers: int = 0
+  motion_scan_fd_executable: str = "fd"
   motion_scan_log_interval_s: float = 10.0
 
   def build(self, env) -> LargeDatasetMultiMotionCommand:
