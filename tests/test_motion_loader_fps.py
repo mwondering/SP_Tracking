@@ -253,6 +253,32 @@ def test_large_dataset_store_writes_and_reuses_json_metadata_cache(
   assert second_store.fps_list[1] == pytest.approx(50.0)
 
 
+def test_large_dataset_store_prints_motion_chunk_load_progress(
+  tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+  motion_files = []
+  for index in range(100):
+    motion_file = tmp_path / f"motion_{index}.npz"
+    _write_motion(motion_file, include_fps=True)
+    motion_files.append(str(motion_file))
+
+  store = LargeDatasetMotionStore(
+    motion_files,
+    torch.tensor([0, 2], dtype=torch.long),
+    motion_type="mujoco",
+    device="cpu",
+  )
+  capsys.readouterr()
+
+  store.load_motion_chunks(torch.arange(len(motion_files), dtype=torch.long))
+
+  stdout = capsys.readouterr().out
+  assert "load_motion_chunks start count=100" in stdout
+  assert "load_motion_chunks progress 100/100" in stdout
+  assert "file=" in stdout
+  assert "load_motion_chunks done count=100" in stdout
+
+
 def test_multi_motion_loader_can_fk_legacy_30_body_motion_for_sp_asset(
   tmp_path: Path,
 ) -> None:

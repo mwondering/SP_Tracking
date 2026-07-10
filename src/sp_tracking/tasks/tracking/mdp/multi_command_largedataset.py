@@ -966,10 +966,25 @@ class LargeDatasetMotionStore:
     if motion_ids.min() < 0 or motion_ids.max() >= self.num_files:
       raise IndexError("Motion id is outside the full dataset range")
     should_log = motion_ids.numel() >= 100
+    try:
+      progress_interval = max(
+        int(os.environ.get("SP_TRACKING_MOTION_LOAD_LOG_INTERVAL", "100")),
+        1,
+      )
+    except ValueError:
+      progress_interval = 100
+    motion_id_list = motion_ids.detach().cpu().tolist()
+    requested_file_lengths = self.file_lengths[motion_ids].detach().cpu().tolist()
+    requested_total_frames = int(sum(requested_file_lengths))
     if should_log:
+      first_motion_id = int(motion_id_list[0])
       _bootstrap_debug(
         f"load_motion_chunks start count={int(motion_ids.numel())} "
-        f"first_ids={motion_ids[:5].detach().cpu().tolist()}"
+        f"total_frames={requested_total_frames} "
+        f"progress_interval={progress_interval} "
+        f"first_ids={motion_ids[:5].detach().cpu().tolist()} "
+        f"first_file={self.motion_files[first_motion_id]}",
+        stdout=True,
       )
 
     loaded: dict[str, object] = {
@@ -979,18 +994,34 @@ class LargeDatasetMotionStore:
     for field_name in self._FIELD_NAMES:
       loaded[field_name] = []
 
-    motion_id_list = motion_ids.detach().cpu().tolist()
+    loaded_frames = 0
     for offset, motion_id in enumerate(motion_id_list):
+      if should_log and offset % progress_interval == 0:
+        _bootstrap_debug(
+          f"load_motion_chunks loading {offset + 1}/{len(motion_id_list)} "
+          f"elapsed={time.perf_counter() - start:.3f}s "
+          f"file={self.motion_files[motion_id]}",
+          stdout=True,
+        )
       fields = self._load_one_motion(motion_id)
       for field_name in self._FIELD_NAMES:
         loaded[field_name].append(fields[field_name])
-      if should_log and (offset + 1) % 1000 == 0:
+      loaded_frames += int(requested_file_lengths[offset])
+      completed_count = offset + 1
+      if should_log and (
+        completed_count % progress_interval == 0
+        or completed_count == len(motion_id_list)
+      ):
+        elapsed = time.perf_counter() - start
+        files_per_s = completed_count / max(elapsed, 1.0e-9)
         _bootstrap_debug(
-          f"load_motion_chunks progress {offset + 1}/{len(motion_id_list)} "
-          f"elapsed={time.perf_counter() - start:.3f}s"
+          f"load_motion_chunks progress {completed_count}/{len(motion_id_list)} "
+          f"frames={loaded_frames}/{requested_total_frames} "
+          f"elapsed={elapsed:.3f}s files_per_s={files_per_s:.1f} "
+          f"file={self.motion_files[motion_id]}",
+          stdout=True,
         )
     if should_log:
-      total_frames = int(self.file_lengths[motion_ids].sum().item())
       allocated = (
         torch.cuda.memory_allocated(self.device)
         if self.device.type == "cuda"
@@ -1003,8 +1034,11 @@ class LargeDatasetMotionStore:
       )
       _bootstrap_debug(
         f"load_motion_chunks done count={int(motion_ids.numel())} "
-        f"total_frames={total_frames} elapsed={time.perf_counter() - start:.3f}s "
+        f"total_frames={requested_total_frames} "
+        f"elapsed={time.perf_counter() - start:.3f}s "
         f"cuda_allocated={allocated} cuda_reserved={reserved}"
+        f" device={self.device}",
+        stdout=True,
       )
     return loaded
 

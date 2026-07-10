@@ -210,13 +210,35 @@ def _joint_target_ids(asset) -> torch.Tensor:
 
 def _projected_gravity(quat: torch.Tensor) -> torch.Tensor:
   gravity = quat.new_tensor((0.0, 0.0, -1.0))
-  return _quat_apply_inverse(quat, gravity.expand(*quat.shape[:-1], 3))
+  projected = _quat_apply_inverse(quat, gravity.expand(*quat.shape[:-1], 3))
+  return projected / projected.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
 
 
 def _quat_apply_inverse(quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
   if quat.shape[:-1] != vec.shape[:-1]:
     quat = quat.expand(*vec.shape[:-1], 4)
   return quat_apply_inverse(quat, vec)
+
+
+def _action_offset_like(env: "ManagerBasedRlEnv", reference: torch.Tensor) -> torch.Tensor:
+  offset = getattr(getattr(env, "action_manager", None), "offset", None)
+  if offset is None:
+    return torch.zeros_like(reference)
+  if not isinstance(offset, torch.Tensor):
+    return torch.full_like(reference, float(offset))
+  offset = offset.to(device=reference.device, dtype=reference.dtype)
+  if offset.shape == reference.shape:
+    return offset
+  if offset.ndim == 1 and offset.shape[0] == reference.shape[-1]:
+    return offset.unsqueeze(0).expand_as(reference)
+  if (
+    offset.ndim == 2
+    and reference.ndim == 2
+    and offset.shape[0] == reference.shape[0]
+    and offset.shape[1] >= reference.shape[1]
+  ):
+    return offset[:, : reference.shape[1]]
+  return torch.zeros_like(reference)
 
 
 def _action_tensor(env: "ManagerBasedRlEnv") -> torch.Tensor:
@@ -328,7 +350,8 @@ class root_linvel_b_history(_HistoryObservation):
 
 class joint_pos_history(_HistoryObservation):
   def _sample(self, env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return self.asset.data.joint_pos
+    joint_pos = self.asset.data.joint_pos
+    return joint_pos - _action_offset_like(env, joint_pos)
 
 
 class joint_vel_history(_HistoryObservation):
@@ -365,7 +388,9 @@ def target_joint_pos_obs(
   horizon: Literal["teacher", "student"],
 ) -> torch.Tensor:
   target = _gather(env, command_name, "joint_pos", _steps(horizon))
-  current = env.scene["robot"].data.joint_pos.unsqueeze(1)
+  current = env.scene["robot"].data.joint_pos
+  current = current - _action_offset_like(env, current)
+  current = current.unsqueeze(1)
   diff = target - current
   return torch.cat(
     (target.reshape(env.num_envs, -1), diff.reshape(env.num_envs, -1)), dim=-1
@@ -404,7 +429,13 @@ def prev_actions(env: "ManagerBasedRlEnv", steps: int) -> torch.Tensor:
 
 
 def target_pos_b_obs(env: "ManagerBasedRlEnv", command_name: str) -> torch.Tensor:
-  root_pos = env.scene["robot"].data.root_link_pos_w.unsqueeze(1)
+  env_origins = getattr(env.scene, "env_origins", None)
+  root_pos_w = env.scene["robot"].data.root_link_pos_w
+  if isinstance(env_origins, torch.Tensor):
+    root_pos_w = root_pos_w - env_origins.to(
+      device=root_pos_w.device, dtype=root_pos_w.dtype
+    )
+  root_pos = root_pos_w.unsqueeze(1)
   root_quat = env.scene["robot"].data.root_link_quat_w.unsqueeze(1)
   target_pos = _root_motion(env, command_name, "body_pos_w", TEACHER_STEPS)
   return _quat_apply_inverse(root_quat, target_pos - root_pos).reshape(env.num_envs, -1)
@@ -495,7 +526,10 @@ class target_keypoints_pos_b_obs(_KeypointObservation):
     )
     if not include_diff:
       return target_b.reshape(env.num_envs, -1)
-    diff = target_b - self._current()[0].unsqueeze(1)
+    target_ref_b = _quat_apply_inverse(
+      root_quat[:, :1].unsqueeze(2), target_w - root_pos[:, :1].unsqueeze(2)
+    )
+    diff = target_ref_b - self._current()[0].unsqueeze(1)
     return torch.cat(
       (target_b.reshape(env.num_envs, -1), diff.reshape(env.num_envs, -1)), dim=-1
     )
@@ -517,7 +551,8 @@ class target_keypoints_rot_b_obs(_KeypointObservation):
     target_rot = _rot6d(target_b)
     if not include_diff:
       return target_rot.reshape(env.num_envs, -1)
-    diff = _rot6d(_quat_delta(self._current()[1].unsqueeze(1), target_b))
+    target_ref_b = _quat_delta(root_quat[:, :1].unsqueeze(2), target_w)
+    diff = _rot6d(_quat_delta(self._current()[1].unsqueeze(1), target_ref_b))
     return torch.cat(
       (target_rot.reshape(env.num_envs, -1), diff.reshape(env.num_envs, -1)), dim=-1
     )
@@ -585,7 +620,43 @@ def gravity_dir_termination(
   return _continuous_termination(env, exceed, buffer)
 
 
-def feet_contact_state(env: "ManagerBasedRlEnv", sensor_name: str) -> torch.Tensor:
+def _robot_mass(env: "ManagerBasedRlEnv") -> float | torch.Tensor | None:
+  robot_cfg = getattr(getattr(env, "cfg", None), "robot", None)
+  mass = getattr(robot_cfg, "mass", None) if robot_cfg is not None else None
+  if mass is not None:
+    return mass
+  asset = env.scene["robot"] if hasattr(env, "scene") and "robot" in env.scene else None
+  data = getattr(asset, "data", None)
+  for name in ("body_mass", "default_body_mass"):
+    value = getattr(data, name, None)
+    if isinstance(value, torch.Tensor):
+      return value.sum(dim=-1) if value.ndim > 1 else value.sum()
+  sim = getattr(env, "sim", None)
+  model = getattr(sim, "model", None)
+  value = getattr(model, "body_mass", None)
+  if isinstance(value, torch.Tensor):
+    return value.sum(dim=-1) if value.ndim > 1 else value.sum()
+  return None
+
+
+def _contact_force_denominator(
+  env: "ManagerBasedRlEnv", force: torch.Tensor, divide_by_mass: bool
+) -> torch.Tensor:
+  if not divide_by_mass:
+    return force.new_tensor(1.0)
+  mass = _robot_mass(env)
+  if mass is None:
+    mass = 33.341142
+  denom = torch.as_tensor(mass, dtype=force.dtype, device=force.device) * 9.81
+  denom = denom.clamp_min(1.0e-6)
+  if denom.ndim == 1 and force.ndim >= 2 and denom.shape[0] == force.shape[0]:
+    denom = denom.reshape(force.shape[0], *([1] * (force.ndim - 1)))
+  return denom
+
+
+def feet_contact_state(
+  env: "ManagerBasedRlEnv", sensor_name: str, divide_by_mass: bool = True
+) -> torch.Tensor:
   sensor: ContactSensor = env.scene[sensor_name]
   force = sensor.data.force
   if sensor.data.force_history is not None:
@@ -595,7 +666,7 @@ def feet_contact_state(env: "ManagerBasedRlEnv", sensor_name: str) -> torch.Tens
   air_time = sensor.data.current_air_time
   assert contact_time is not None and air_time is not None
   in_contact = (contact_time > env.physics_dt).float()
-  denom = 33.341142 * 9.81
+  denom = _contact_force_denominator(env, force, divide_by_mass)
   return torch.cat(
     (
       (force / denom).clamp(-10.0, 10.0).reshape(env.num_envs, -1),
