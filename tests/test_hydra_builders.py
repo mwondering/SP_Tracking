@@ -169,6 +169,8 @@ def test_tracking_bfm_largedataset_scan_config_is_hydra_configurable() -> None:
     "++task.command.command.motion_scan_workers=32",
     "++task.command.command.motion_scan_fd_executable=fdfind",
     "++task.command.command.motion_metadata_read_workers=24",
+    "++task.command.command.motion_metadata_read_backend=process",
+    "++task.command.command.motion_metadata_read_chunksize=128",
   )
 
   env_cfg = build_env_cfg(cfg.task)
@@ -178,6 +180,8 @@ def test_tracking_bfm_largedataset_scan_config_is_hydra_configurable() -> None:
   assert motion_cmd.motion_scan_workers == 32
   assert motion_cmd.motion_scan_fd_executable == "fdfind"
   assert motion_cmd.motion_metadata_read_workers == 24
+  assert motion_cmd.motion_metadata_read_backend == "process"
+  assert motion_cmd.motion_metadata_read_chunksize == 128
 
 
 def test_tracking_bfm_command_adaptive_window_is_hydra_configurable() -> None:

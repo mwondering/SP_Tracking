@@ -335,6 +335,12 @@ def _build_command(cfg: DictConfig):
         "motion_metadata_read_workers": int(
           command_cfg.get("motion_metadata_read_workers", 0)
         ),
+        "motion_metadata_read_backend": str(
+          command_cfg.get("motion_metadata_read_backend", "thread")
+        ),
+        "motion_metadata_read_chunksize": int(
+          command_cfg.get("motion_metadata_read_chunksize", 64)
+        ),
         "motion_manifest_wait_timeout_s": float(
           command_cfg.get("motion_manifest_wait_timeout_s", 600.0)
         ),

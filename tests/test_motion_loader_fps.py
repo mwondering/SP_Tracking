@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -175,6 +176,81 @@ def test_large_dataset_store_can_read_metadata_in_parallel(
   assert store.fps_list[0] == pytest.approx(50.0)
   assert store.fps_list[1] == pytest.approx(60.0)
   assert store.empty_fps_count == 1
+
+
+def test_large_dataset_store_can_read_metadata_with_process_backend(
+  tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+  motion_a = tmp_path / "a.npz"
+  motion_b = tmp_path / "b.npz"
+  _write_motion(motion_a, include_fps=False)
+  _write_motion(motion_b, include_fps=True)
+
+  store = LargeDatasetMotionStore(
+    [str(motion_a), str(motion_b)],
+    torch.tensor([0, 2], dtype=torch.long),
+    motion_type="mujoco",
+    device="cpu",
+    metadata_read_workers=2,
+    metadata_read_backend="process",
+    metadata_read_chunksize=1,
+  )
+
+  stdout = capsys.readouterr().out
+  assert "metadata read start count=2 backend=process workers=2 chunksize=1" in stdout
+  assert "metadata progress 2/2" in stdout
+  assert store.file_lengths.tolist() == [4, 4]
+  assert store.fps_list[0] == pytest.approx(50.0)
+  assert store.fps_list[1] == pytest.approx(60.0)
+  assert store.empty_fps_count == 1
+
+
+def test_large_dataset_store_writes_and_reuses_json_metadata_cache(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  motion_a = tmp_path / "a.npz"
+  motion_b = tmp_path / "b.npz"
+  _write_motion(motion_a, include_fps=True)
+  _write_motion(motion_b, include_fps=False)
+  cache_file = tmp_path / "metadata.json"
+
+  first_store = LargeDatasetMotionStore(
+    [str(motion_a), str(motion_b)],
+    torch.tensor([0, 2], dtype=torch.long),
+    motion_type="mujoco",
+    device="cpu",
+    metadata_cache_file=str(cache_file),
+  )
+
+  assert first_store.file_lengths.tolist() == [4, 4]
+  with cache_file.open(encoding="utf-8") as f:
+    payload = json.load(f)
+  assert payload["version"] == 1
+  assert payload["num_files"] == 2
+  assert payload["file_lengths"] == [4, 4]
+  assert payload["fps_values"] == pytest.approx([60.0, 50.0])
+  assert payload["empty_fps_count"] == 1
+
+  def fail_metadata_read(self):
+    raise AssertionError("metadata cache should be reused")
+
+  monkeypatch.setattr(
+    LargeDatasetMotionStore,
+    "_read_motion_metadata_from_files",
+    fail_metadata_read,
+  )
+
+  second_store = LargeDatasetMotionStore(
+    [str(motion_a), str(motion_b)],
+    torch.tensor([0, 2], dtype=torch.long),
+    motion_type="mujoco",
+    device="cpu",
+    metadata_cache_file=str(cache_file),
+  )
+
+  assert second_store.file_lengths.tolist() == [4, 4]
+  assert second_store.fps_list[0] == pytest.approx(60.0)
+  assert second_store.fps_list[1] == pytest.approx(50.0)
 
 
 def test_multi_motion_loader_can_fk_legacy_30_body_motion_for_sp_asset(

@@ -54,6 +54,8 @@ command:
   motion_metadata_cache_wait_timeout_s: 7200.0
   motion_metadata_cache_poll_interval_s: 0.25
   motion_metadata_read_workers: 0
+  motion_metadata_read_backend: thread
+  motion_metadata_read_chunksize: 64
   motion_manifest_wait_timeout_s: 600.0
   motion_manifest_poll_interval_s: 0.25
   motion_scan_backend: auto

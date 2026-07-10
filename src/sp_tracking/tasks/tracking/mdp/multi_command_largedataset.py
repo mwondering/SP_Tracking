@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import json
 import math
+import multiprocessing as mp
 import os
 import shutil
 import subprocess
@@ -73,6 +75,27 @@ def _bootstrap_debug(message: str, *, stdout: bool = False) -> None:
       f.flush()
   except Exception:
     pass
+
+
+def _read_large_dataset_motion_metadata_file(
+  motion_file: str,
+) -> tuple[int, float, bool, bool]:
+  if not os.path.isfile(motion_file):
+    raise FileNotFoundError(f"Invalid motion file path: {motion_file}")
+  with np.load(motion_file) as data:
+    file_length = int(data["joint_pos"].shape[0])
+    fps_value, is_non_scalar_fps, is_empty_fps = extract_motion_fps(data)
+  return file_length, fps_value, is_non_scalar_fps, is_empty_fps
+
+
+def _read_large_dataset_motion_metadata_job(
+  job: tuple[int, str],
+) -> tuple[int, int, float, bool, bool]:
+  index, motion_file = job
+  file_length, fps_value, is_non_scalar_fps, is_empty_fps = (
+    _read_large_dataset_motion_metadata_file(motion_file)
+  )
+  return index, file_length, fps_value, is_non_scalar_fps, is_empty_fps
 
 
 @dataclass(frozen=True)
@@ -547,6 +570,8 @@ class LargeDatasetMotionStore:
     metadata_cache_wait_timeout_s: float = 7200.0,
     metadata_cache_poll_interval_s: float = 0.25,
     metadata_read_workers: int = 0,
+    metadata_read_backend: Literal["thread", "process", "serial"] = "thread",
+    metadata_read_chunksize: int = 64,
     fk_from_joint_pos: bool = False,
     fk_helper: MotionFKHelper | None = None,
   ) -> None:
@@ -565,6 +590,12 @@ class LargeDatasetMotionStore:
     self.fk_from_joint_pos = bool(fk_from_joint_pos)
     self.fk_helper = fk_helper
     self.metadata_read_workers = max(int(metadata_read_workers), 0)
+    self.metadata_read_backend = str(metadata_read_backend).lower()
+    if self.metadata_read_backend not in {"thread", "process", "serial"}:
+      raise ValueError(
+        "metadata_read_backend must be one of: thread, process, serial"
+      )
+    self.metadata_read_chunksize = max(int(metadata_read_chunksize), 1)
     self._joint_reindex: list[int] | None = None
     self._body_reindex: list[int] | None = None
     if motion_type == "isaaclab":
@@ -613,9 +644,15 @@ class LargeDatasetMotionStore:
 
   def _read_motion_metadata_from_files(self) -> tuple[list[int], list[float], int, int]:
     worker_count = self.metadata_read_workers
-    if worker_count > 1:
+    if self.metadata_read_backend == "serial" or worker_count <= 1:
+      return self._read_motion_metadata_from_files_serial()
+    if self.metadata_read_backend == "process":
+      return self._read_motion_metadata_from_files_process(worker_count)
+    if self.metadata_read_backend == "thread":
       return self._read_motion_metadata_from_files_parallel(worker_count)
-    return self._read_motion_metadata_from_files_serial()
+    raise ValueError(
+      f"Unsupported metadata_read_backend: {self.metadata_read_backend}"
+    )
 
   def _read_motion_metadata_from_files_serial(
     self,
@@ -700,14 +737,54 @@ class LargeDatasetMotionStore:
         submit_until_full()
     return file_lengths, fps_values, non_scalar_fps_count, empty_fps_count
 
+  def _read_motion_metadata_from_files_process(
+    self, worker_count: int
+  ) -> tuple[list[int], list[float], int, int]:
+    start = time.perf_counter()
+    total_files = len(self.motion_files)
+    worker_count = min(max(int(worker_count), 1), total_files)
+    chunksize = self.metadata_read_chunksize
+    file_lengths = [0] * total_files
+    fps_values = [0.0] * total_files
+    non_scalar_fps_count = 0
+    empty_fps_count = 0
+    completed_count = 0
+    _bootstrap_debug(
+      "metadata read start "
+      f"count={total_files} backend=process workers={worker_count} chunksize={chunksize}",
+      stdout=True,
+    )
+    with mp.Pool(processes=worker_count) as pool:
+      for (
+        index,
+        file_length,
+        fps_value,
+        is_non_scalar_fps,
+        is_empty_fps,
+      ) in pool.imap_unordered(
+        _read_large_dataset_motion_metadata_job,
+        enumerate(self.motion_files),
+        chunksize=chunksize,
+      ):
+        file_lengths[index] = file_length
+        fps_values[index] = fps_value
+        if is_non_scalar_fps:
+          non_scalar_fps_count += 1
+        if is_empty_fps:
+          empty_fps_count += 1
+        completed_count += 1
+        if completed_count % 5000 == 0 or completed_count == total_files:
+          _bootstrap_debug(
+            f"metadata progress {completed_count}/{total_files} "
+            f"elapsed={time.perf_counter() - start:.3f}s "
+            f"file={self.motion_files[index]}",
+            stdout=True,
+          )
+    return file_lengths, fps_values, non_scalar_fps_count, empty_fps_count
+
   @staticmethod
   def _read_one_motion_metadata(motion_file: str) -> tuple[int, float, bool, bool]:
-    if not os.path.isfile(motion_file):
-      raise FileNotFoundError(f"Invalid motion file path: {motion_file}")
-    with np.load(motion_file) as data:
-      file_length = int(data["joint_pos"].shape[0])
-      fps_value, is_non_scalar_fps, is_empty_fps = extract_motion_fps(data)
-    return file_length, fps_value, is_non_scalar_fps, is_empty_fps
+    return _read_large_dataset_motion_metadata_file(motion_file)
 
   def _try_load_metadata_cache(
     self, metadata_cache_file: str
@@ -715,18 +792,21 @@ class LargeDatasetMotionStore:
     if not metadata_cache_file or not os.path.exists(metadata_cache_file):
       return None
     try:
-      with np.load(metadata_cache_file) as data:
-        if int(data["version"].item()) != 1:
-          return None
-        if int(data["num_files"].item()) != self.num_files:
-          return None
-        cached_hash = str(data["motion_files_hash"].item())
-        if cached_hash != self._motion_files_hash():
-          return None
-        file_lengths = np.asarray(data["file_lengths"], dtype=np.int64).tolist()
-        fps_values = np.asarray(data["fps_values"], dtype=np.float32).tolist()
-        non_scalar_fps_count = int(data["non_scalar_fps_count"].item())
-        empty_fps_count = int(data["empty_fps_count"].item())
+      with open(metadata_cache_file, encoding="utf-8") as f:
+        data = json.load(f)
+      if int(data["version"]) != 1:
+        return None
+      if int(data["num_files"]) != self.num_files:
+        return None
+      cached_hash = str(data["motion_files_hash"])
+      if cached_hash != self._motion_files_hash():
+        return None
+      file_lengths = [int(value) for value in data["file_lengths"]]
+      fps_values = [float(value) for value in data["fps_values"]]
+      if len(file_lengths) != self.num_files or len(fps_values) != self.num_files:
+        return None
+      non_scalar_fps_count = int(data["non_scalar_fps_count"])
+      empty_fps_count = int(data["empty_fps_count"])
       _bootstrap_debug(
         f"LargeDatasetMotionStore metadata cache hit file={metadata_cache_file}",
         stdout=True,
@@ -778,17 +858,21 @@ class LargeDatasetMotionStore:
     try:
       cache_dir = os.path.dirname(os.path.abspath(metadata_cache_file))
       os.makedirs(cache_dir, exist_ok=True)
-      tmp_file = f"{metadata_cache_file}.tmp.{os.getpid()}.npz"
-      np.savez(
-        tmp_file,
-        version=np.array(1, dtype=np.int64),
-        num_files=np.array(self.num_files, dtype=np.int64),
-        motion_files_hash=np.array(self._motion_files_hash()),
-        file_lengths=np.asarray(file_lengths, dtype=np.int64),
-        fps_values=np.asarray(fps_values, dtype=np.float32),
-        non_scalar_fps_count=np.array(non_scalar_fps_count, dtype=np.int64),
-        empty_fps_count=np.array(empty_fps_count, dtype=np.int64),
-      )
+      tmp_file = f"{metadata_cache_file}.tmp.{os.getpid()}.json"
+      payload = {
+        "version": 1,
+        "num_files": self.num_files,
+        "motion_files_hash": self._motion_files_hash(),
+        "file_lengths": [int(value) for value in file_lengths],
+        "fps_values": [float(value) for value in fps_values],
+        "non_scalar_fps_count": int(non_scalar_fps_count),
+        "empty_fps_count": int(empty_fps_count),
+      }
+      with open(tmp_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f, separators=(",", ":"))
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
       os.replace(tmp_file, metadata_cache_file)
       _bootstrap_debug(
         f"LargeDatasetMotionStore metadata cache wrote file={metadata_cache_file}",
@@ -1880,6 +1964,8 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       metadata_cache_wait_timeout_s=self.cfg.motion_metadata_cache_wait_timeout_s,
       metadata_cache_poll_interval_s=self.cfg.motion_metadata_cache_poll_interval_s,
       metadata_read_workers=self.cfg.motion_metadata_read_workers,
+      metadata_read_backend=self.cfg.motion_metadata_read_backend,
+      metadata_read_chunksize=self.cfg.motion_metadata_read_chunksize,
       fk_from_joint_pos=self.cfg.fk_from_joint_pos,
       fk_helper=fk_helper,
     )
@@ -2078,7 +2164,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       return configured_cache
     configured_manifest = os.fspath(getattr(self.cfg, "motion_manifest_file", ""))
     if configured_manifest:
-      return f"{configured_manifest}.metadata.npz"
+      return f"{configured_manifest}.metadata.json"
     return ""
 
   def _resolve_motion_files_with_manifest(
@@ -2907,6 +2993,8 @@ class LargeDatasetMultiMotionCommandCfg(MultiMotionCommandCfg):
   motion_metadata_cache_wait_timeout_s: float = 7200.0
   motion_metadata_cache_poll_interval_s: float = 0.25
   motion_metadata_read_workers: int = 0
+  motion_metadata_read_backend: Literal["thread", "process", "serial"] = "thread"
+  motion_metadata_read_chunksize: int = 64
   motion_manifest_wait_timeout_s: float = 600.0
   motion_manifest_poll_interval_s: float = 0.25
   motion_scan_backend: Literal["auto", "fd", "python"] = "auto"
