@@ -338,6 +338,11 @@ def _build_command(cfg: DictConfig):
         "motion_manifest_poll_interval_s": float(
           command_cfg.get("motion_manifest_poll_interval_s", 0.25)
         ),
+        "motion_scan_backend": str(command_cfg.get("motion_scan_backend", "auto")),
+        "motion_scan_workers": int(command_cfg.get("motion_scan_workers", 0)),
+        "motion_scan_fd_executable": str(
+          command_cfg.get("motion_scan_fd_executable", "fd")
+        ),
         "motion_scan_log_interval_s": float(
           command_cfg.get("motion_scan_log_interval_s", 10.0)
         ),

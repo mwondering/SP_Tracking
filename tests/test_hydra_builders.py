@@ -162,6 +162,22 @@ def test_tracking_bfm_largedataset_matches_old_tracking_task() -> None:
   assert robot.spec_fn.__module__.startswith("sp_tracking.assets.robots.g1_tracking_bfm")
 
 
+def test_tracking_bfm_largedataset_scan_config_is_hydra_configurable() -> None:
+  cfg = _compose(
+    "task=tracking_bfm_largedataset",
+    "++task.command.command.motion_scan_backend=python",
+    "++task.command.command.motion_scan_workers=32",
+    "++task.command.command.motion_scan_fd_executable=fdfind",
+  )
+
+  env_cfg = build_env_cfg(cfg.task)
+  motion_cmd = env_cfg.commands["motion"]
+
+  assert motion_cmd.motion_scan_backend == "python"
+  assert motion_cmd.motion_scan_workers == 32
+  assert motion_cmd.motion_scan_fd_executable == "fdfind"
+
+
 def test_tracking_bfm_command_adaptive_window_is_hydra_configurable() -> None:
   cfg = _compose("++task.command.command.adaptive_pre_failure_sample_window_steps=123")
 
