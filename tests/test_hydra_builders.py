@@ -59,6 +59,14 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert env_cfg.commands["motion"].motion_type == "mujoco"
   assert env_cfg.commands["motion"].fk_from_joint_pos is True
   assert type(env_cfg.actions["joint_pos"]).__name__ == "MotionTrackingJointPositionActionCfg"
+  assert [sensor.name for sensor in env_cfg.scene.sensors] == ["contact_forces"]
+  assert env_cfg.sim.nconmax == 200
+  assert env_cfg.sim.njmax == 2048
+  assert env_cfg.sim.contact_sensor_maxmatch == 128
+  assert env_cfg.commands["motion"].reset_root_lift_height == 0.04
+  assert env_cfg.commands["motion"].reset_min_body_z == 0.0
+  assert env_cfg.actions["joint_pos"].raw_action_clip == 10.0
+  assert env_cfg.actions["joint_pos"].boot_delay_steps == 2
   assert set(env_cfg.events) == {
     "perturb_body_com",
     "perturb_body_materials",
@@ -116,7 +124,13 @@ def test_tracking_bfm_keeps_original_events_and_action() -> None:
   env_cfg = build_env_cfg(cfg.task)
 
   assert type(env_cfg.actions["joint_pos"]).__name__ == "JointPositionActionCfg"
+  assert [sensor.name for sensor in env_cfg.scene.sensors] == ["self_collision"]
+  assert env_cfg.sim.nconmax == 128
+  assert env_cfg.sim.njmax == 512
+  assert env_cfg.sim.contact_sensor_maxmatch == 64
   assert env_cfg.commands["motion"].fk_from_joint_pos is False
+  assert env_cfg.commands["motion"].reset_root_lift_height == 0.0
+  assert env_cfg.commands["motion"].reset_min_body_z is None
   assert "base_mass" in env_cfg.events
   assert "motor_params_implicit" not in env_cfg.events
   assert env_cfg.curriculum == {}
@@ -138,6 +152,8 @@ def test_tracking_bfm_largedataset_matches_old_tracking_task() -> None:
   assert motion_cmd.future_steps == 1
   assert motion_cmd.motion_type == "isaaclab"
   assert motion_cmd.fk_from_joint_pos is False
+  assert motion_cmd.reset_root_lift_height == 0.0
+  assert motion_cmd.reset_min_body_z is None
   assert motion_cmd.motion_manifest_file == "/tmp/manifest.txt"
   assert motion_cmd.motion_scan_backend == "auto"
   assert motion_cmd.motion_scan_workers == 0

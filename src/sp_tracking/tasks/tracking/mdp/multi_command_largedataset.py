@@ -30,6 +30,7 @@ from .multi_commands import (
   MotionLoader,
   MultiMotionCommand,
   MultiMotionCommandCfg,
+  apply_reset_ground_clearance,
   extract_motion_fps,
   _select_or_fk_body_fields,
 )
@@ -2846,7 +2847,8 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       assert self.cfg.sampling_mode == "adaptive"
       self._adaptive_sampling(env_ids)
 
-    root_pos = self.body_pos_w[:, 0].clone()
+    body_pos_w = self.body_pos_w
+    root_pos = body_pos_w[:, 0].clone()
     root_ori = self.body_quat_w[:, 0].clone()
     root_lin_vel = self.body_lin_vel_w[:, 0].clone()
     root_ang_vel = self.body_ang_vel_w[:, 0].clone()
@@ -2858,9 +2860,17 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     rand_samples = sample_uniform(
       ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device
     )
-    root_pos[env_ids] += rand_samples[:, 0:3]
     orientations_delta = quat_from_euler_xyz(
       rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5]
+    )
+    root_pos[env_ids] = apply_reset_ground_clearance(
+      root_pos[env_ids],
+      body_pos_w[env_ids],
+      self._env.scene.env_origins[env_ids],
+      rand_samples[:, 0:3],
+      orientations_delta,
+      root_lift_height=self.cfg.reset_root_lift_height,
+      min_body_z=self.cfg.reset_min_body_z,
     )
     root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
     range_list = [
@@ -2910,6 +2920,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     # this, the zeroed policy action targets the nominal pose on the first
     # physics step and can inject a destabilizing torque impulse.
     self.robot.set_joint_position_target(joint_pos[env_ids], env_ids=env_ids)
+    self._set_action_boot_target(env_ids, joint_pos[env_ids])
 
   def _refresh_active_subset(self, iteration: int) -> None:
     refresh_count = int(self.cfg.subset_refresh_count)

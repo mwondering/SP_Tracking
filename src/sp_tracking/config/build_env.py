@@ -160,6 +160,12 @@ def _optional_int(value: Any) -> int | None:
   return int(value)
 
 
+def _optional_float(value: Any) -> float | None:
+  if value is None:
+    return None
+  return float(value)
+
+
 def _optional_auto_float(value: Any) -> float | str | None:
   value = _to_container(value)
   if value is None or value == "auto":
@@ -260,6 +266,10 @@ def _build_command(cfg: DictConfig):
     "pose_range": _params(command_cfg.get("pose_range")),
     "velocity_range": _params(command_cfg.get("velocity_range")),
     "joint_position_range": tuple(command_cfg.joint_position_range),
+    "reset_root_lift_height": float(
+      command_cfg.get("reset_root_lift_height", 0.0)
+    ),
+    "reset_min_body_z": _optional_float(command_cfg.get("reset_min_body_z")),
     "future_steps": int(command_cfg.get("future_steps", 5)),
     "history_steps": int(command_cfg.get("history_steps", 5)),
     "adaptive_uniform_ratio": float(command_cfg.get("adaptive_uniform_ratio", 0.1)),
@@ -457,6 +467,8 @@ def _build_action(cfg: DictConfig):
       "torque_limit_progress_range": tuple(
         cfg.action.get("torque_limit_progress_range", (0.0, 0.8))
       ),
+      "raw_action_clip": _optional_float(cfg.action.get("raw_action_clip")),
+      "boot_delay_steps": int(cfg.action.get("boot_delay_steps", 0)),
     }
   return {
     "joint_pos": cfg_cls(
@@ -482,27 +494,8 @@ def _build_curriculum(cfg: DictConfig) -> dict[str, CurriculumTermCfg]:
 
 
 def _build_sensors(cfg: DictConfig):
-  sensors = [
-    ContactSensorCfg(
-      name="self_collision",
-      primary=ContactMatch(
-        mode="subtree",
-        pattern=str(cfg.robot.self_collision_primary_pattern),
-        entity="robot",
-      ),
-      secondary=ContactMatch(
-        mode="subtree",
-        pattern=str(cfg.robot.self_collision_primary_pattern),
-        entity="robot",
-      ),
-      fields=("found", "force"),
-      reduce="none",
-      num_slots=1,
-      history_length=4,
-    )
-  ]
   if cfg.name.endswith("_sp"):
-    sensors.append(
+    sensors = [
       ContactSensorCfg(
         name="contact_forces",
         primary=ContactMatch(
@@ -518,7 +511,27 @@ def _build_sensors(cfg: DictConfig):
         track_air_time=True,
         history_length=3,
       )
-    )
+    ]
+  else:
+    sensors = [
+      ContactSensorCfg(
+        name="self_collision",
+        primary=ContactMatch(
+          mode="subtree",
+          pattern=str(cfg.robot.self_collision_primary_pattern),
+          entity="robot",
+        ),
+        secondary=ContactMatch(
+          mode="subtree",
+          pattern=str(cfg.robot.self_collision_primary_pattern),
+          entity="robot",
+        ),
+        fields=("found", "force"),
+        reduce="none",
+        num_slots=1,
+        history_length=4,
+      )
+    ]
   return tuple(sensors)
 
 
@@ -554,6 +567,7 @@ def build_env_cfg(cfg: DictConfig | dict[str, Any]) -> ManagerBasedRlEnvCfg:
   sim = SimulationCfg(
     nconmax=int(cfg.sim.nconmax),
     njmax=int(cfg.sim.njmax),
+    contact_sensor_maxmatch=int(cfg.sim.get("contact_sensor_maxmatch", 64)),
     mujoco=MujocoCfg(
       timestep=float(cfg.sim.timestep),
       iterations=int(cfg.sim.iterations),

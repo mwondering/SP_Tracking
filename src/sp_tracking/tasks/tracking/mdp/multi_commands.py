@@ -32,6 +32,33 @@ if TYPE_CHECKING:
 _DESIRED_FRAME_COLORS = ((1.0, 0.5, 0.5), (0.5, 1.0, 0.5), (0.5, 0.5, 1.0))
 _EXTRA_REFERENCE_GHOST_COLOR = (1.0, 0.45, 0.1, 0.45)
 
+
+def apply_reset_ground_clearance(
+  root_pos: torch.Tensor,
+  body_pos_w: torch.Tensor,
+  env_origins: torch.Tensor,
+  position_noise: torch.Tensor,
+  orientation_delta: torch.Tensor,
+  *,
+  root_lift_height: float,
+  min_body_z: float | None,
+) -> torch.Tensor:
+  """Apply reset noise and lift the root enough to keep all bodies above ground."""
+  adjusted = root_pos + position_noise
+  adjusted[:, 2] += float(root_lift_height)
+  if min_body_z is None:
+    return adjusted
+
+  body_pos_relative = body_pos_w - root_pos.unsqueeze(1)
+  rotated_body_pos_relative = quat_apply(
+    orientation_delta.unsqueeze(1), body_pos_relative
+  )
+  predicted_body_z = adjusted[:, None, 2] + rotated_body_pos_relative[..., 2]
+  ground_z = env_origins[:, 2] + float(min_body_z)
+  correction = (ground_z - predicted_body_z.amin(dim=1)).clamp_min(0.0)
+  adjusted[:, 2] += correction
+  return adjusted
+
 _ISAACLAB_JOINT_NAMES = [
   "left_hip_pitch_joint",
   "right_hip_pitch_joint",
@@ -1419,7 +1446,8 @@ class MultiMotionCommand(CommandTerm):
       assert self.cfg.sampling_mode == "adaptive"
       self._adaptive_sampling(env_ids)
 
-    root_pos = self.body_pos_w[:, 0].clone()
+    body_pos_w = self.body_pos_w
+    root_pos = body_pos_w[:, 0].clone()
     root_ori = self.body_quat_w[:, 0].clone()
     root_lin_vel = self.body_lin_vel_w[:, 0].clone()
     root_ang_vel = self.body_ang_vel_w[:, 0].clone()
@@ -1431,9 +1459,17 @@ class MultiMotionCommand(CommandTerm):
     rand_samples = sample_uniform(
       ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device
     )
-    root_pos[env_ids] += rand_samples[:, 0:3]
     orientations_delta = quat_from_euler_xyz(
       rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5]
+    )
+    root_pos[env_ids] = apply_reset_ground_clearance(
+      root_pos[env_ids],
+      body_pos_w[env_ids],
+      self._env.scene.env_origins[env_ids],
+      rand_samples[:, 0:3],
+      orientations_delta,
+      root_lift_height=self.cfg.reset_root_lift_height,
+      min_body_z=self.cfg.reset_min_body_z,
     )
     root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
     range_list = [
@@ -1484,6 +1520,22 @@ class MultiMotionCommand(CommandTerm):
     # this, the zeroed policy action targets the nominal pose on the first
     # physics step and can inject a destabilizing torque impulse.
     self.robot.set_joint_position_target(joint_pos[env_ids], env_ids=env_ids)
+    self._set_action_boot_target(env_ids, joint_pos[env_ids])
+
+  def _set_action_boot_target(
+    self, env_ids: torch.Tensor, joint_pos: torch.Tensor
+  ) -> None:
+    action_manager = getattr(self._env, "action_manager", None)
+    get_term = getattr(action_manager, "get_term", None)
+    if not callable(get_term):
+      return
+    try:
+      action_term = get_term("joint_pos")
+    except KeyError:
+      return
+    set_boot_target = getattr(action_term, "set_boot_target", None)
+    if callable(set_boot_target):
+      set_boot_target(env_ids, joint_pos)
 
   def _update_command(self):
     if self.cfg.sampling_mode == "adaptive":
@@ -1641,6 +1693,8 @@ class MultiMotionCommandCfg(CommandTermCfg):
   pose_range: dict[str, tuple[float, float]] = field(default_factory=dict)
   velocity_range: dict[str, tuple[float, float]] = field(default_factory=dict)
   joint_position_range: tuple[float, float] = (-0.52, 0.52)
+  reset_root_lift_height: float = 0.0
+  reset_min_body_z: float | None = None
 
   # Ref Motion: Future/History steps configuration for N-step lookahead
   future_steps: int = 5  # 1

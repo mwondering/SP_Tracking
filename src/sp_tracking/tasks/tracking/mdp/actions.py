@@ -17,6 +17,8 @@ class MotionTrackingJointPositionActionCfg(JointPositionActionCfg):
   alpha: tuple[float, float] = (0.8, 1.0)
   torque_limit_scale_range: tuple[float, float] = (1.0, 1.0)
   torque_limit_progress_range: tuple[float, float] = (0.0, 0.8)
+  raw_action_clip: float | None = None
+  boot_delay_steps: int = 0
 
   def build(self, env: "ManagerBasedRlEnv") -> "MotionTrackingJointPositionAction":
     return MotionTrackingJointPositionAction(self, env)
@@ -47,6 +49,10 @@ class MotionTrackingJointPositionAction(JointPositionAction):
     )
     self.delay = torch.zeros((self.num_envs, 1), dtype=torch.long, device=self.device)
     self.delay_probs = torch.zeros(max_delay_steps + 1, dtype=torch.float32, device=self.device)
+    self.boot_delay = torch.zeros(
+      (self.num_envs, 1), dtype=torch.long, device=self.device
+    )
+    self.boot_target = self._default_offset.clone()
     self._substep = 0
 
     if "actuator_forcerange" not in env.sim.expanded_fields:
@@ -64,6 +70,7 @@ class MotionTrackingJointPositionAction(JointPositionAction):
     super().reset(env_ids)
     self._action_history[env_ids] = 0.0
     self.applied_action[env_ids] = 0.0
+    self.boot_delay[env_ids] = 0
     self._substep = 0
     if isinstance(env_ids, slice):
       count = self.num_envs
@@ -78,6 +85,11 @@ class MotionTrackingJointPositionAction(JointPositionAction):
 
   def set_joint_offset(self, env_ids: torch.Tensor, offset: torch.Tensor) -> None:
     self.joint_offset[env_ids] = offset
+
+  def set_boot_target(self, env_ids: torch.Tensor, target: torch.Tensor) -> None:
+    """Hold the sampled reset pose for the configured physics substeps."""
+    self.boot_target[env_ids] = target
+    self.boot_delay[env_ids] = max(int(self.cfg.boot_delay_steps), 0)
 
   def get_recent_actions(self, steps: int) -> torch.Tensor:
     if steps <= self._history_len:
@@ -142,6 +154,10 @@ class MotionTrackingJointPositionAction(JointPositionAction):
     return safe_scale
 
   def process_actions(self, actions: torch.Tensor) -> None:
+    if self.cfg.raw_action_clip is not None:
+      actions = actions.clamp(
+        min=-float(self.cfg.raw_action_clip), max=float(self.cfg.raw_action_clip)
+      )
     self._raw_actions[:] = actions
     self._action_history = torch.roll(self._action_history, shifts=1, dims=1)
     self._action_history[:, 0] = self._raw_actions
@@ -165,6 +181,11 @@ class MotionTrackingJointPositionAction(JointPositionAction):
         min=self._clip[:, :, 0],
         max=self._clip[:, :, 1],
       )
+    booting = self.boot_delay > 0
+    self._processed_actions = torch.where(
+      booting, self.boot_target, self._processed_actions
+    )
+    self.boot_delay.sub_(1).clamp_min_(0)
 
   def apply_actions(self) -> None:
     self._update_processed_actions(self._substep)
