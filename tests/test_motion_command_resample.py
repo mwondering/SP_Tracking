@@ -72,11 +72,18 @@ def test_update_command_forwards_sim_after_mid_episode_resample() -> None:
 
 
 def test_reset_ground_clearance_accounts_for_lift_noise_and_rotation() -> None:
-  root_pos = torch.tensor([[0.0, 0.0, 0.05]])
-  body_pos_w = torch.tensor([[[0.0, 0.0, 0.05], [0.0, 0.0, -0.05]]])
-  env_origins = torch.zeros((1, 3))
-  position_noise = torch.tensor([[0.1, -0.2, 0.0]])
-  identity_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+  root_pos = torch.tensor([[0.0, 0.0, 0.05], [1.0, 2.0, 1.05]])
+  body_pos_w = torch.tensor(
+    [
+      [[0.0, 0.0, 0.05], [0.0, 0.0, -0.05]],
+      [[1.0, 2.0, 1.05], [1.0, 2.0, 0.95]],
+    ]
+  )
+  env_origins = torch.tensor([[0.0, 0.0, 0.0], [1.0, 2.0, 1.0]])
+  position_noise = torch.tensor([[0.1, -0.2, 0.0], [-0.1, 0.2, 0.0]])
+  identity_quat = torch.tensor(
+    [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
+  )
 
   adjusted = apply_reset_ground_clearance(
     root_pos,
@@ -90,8 +97,12 @@ def test_reset_ground_clearance_accounts_for_lift_noise_and_rotation() -> None:
 
   relative_body_z = body_pos_w[..., 2] - root_pos[:, None, 2]
   predicted_min_z = adjusted[:, None, 2] + relative_body_z
-  assert torch.allclose(adjusted, torch.tensor([[0.1, -0.2, 0.1]]))
-  assert predicted_min_z.amin().item() == 0.0
+  assert torch.allclose(
+    adjusted, torch.tensor([[0.1, -0.2, 0.1], [0.9, 2.2, 1.1]])
+  )
+  assert torch.allclose(
+    predicted_min_z.amin(dim=1), env_origins[:, 2]
+  )
 
 
 def test_reset_ground_clearance_is_disabled_by_default() -> None:

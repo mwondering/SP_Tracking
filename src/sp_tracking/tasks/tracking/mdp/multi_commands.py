@@ -50,8 +50,11 @@ def apply_reset_ground_clearance(
     return adjusted
 
   body_pos_relative = body_pos_w - root_pos.unsqueeze(1)
+  body_orientation_delta = orientation_delta.unsqueeze(1).expand(
+    -1, body_pos_relative.shape[1], -1
+  )
   rotated_body_pos_relative = quat_apply(
-    orientation_delta.unsqueeze(1), body_pos_relative
+    body_orientation_delta, body_pos_relative
   )
   predicted_body_z = adjusted[:, None, 2] + rotated_body_pos_relative[..., 2]
   ground_z = env_origins[:, 2] + float(min_body_z)
