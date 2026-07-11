@@ -5,7 +5,7 @@ import torch
 from sp_tracking.tasks.tracking.mdp.actions import MotionTrackingJointPositionAction
 
 
-def test_motion_tracking_action_torque_schedule_never_exceeds_default_force_range() -> None:
+def test_motion_tracking_action_torque_schedule_applies_configured_scale() -> None:
   action = object.__new__(MotionTrackingJointPositionAction)
   action.cfg = type(
     "Cfg",
@@ -27,8 +27,10 @@ def test_motion_tracking_action_torque_schedule_never_exceeds_default_force_rang
 
   applied_scale = action._schedule_torque_limit(0.0)
 
-  assert applied_scale == 1.0
-  assert torch.equal(model.actuator_forcerange[0], action._default_forcerange)
+  assert applied_scale == 4.0
+  assert torch.equal(
+    model.actuator_forcerange[0], action._default_forcerange * 4.0
+  )
 
 
 def test_motion_tracking_action_clamps_raw_policy_action() -> None:

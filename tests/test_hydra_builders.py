@@ -2,6 +2,7 @@ from pathlib import Path
 
 import yaml
 from hydra import compose, initialize_config_module
+from mjlab.asset_zoo.robots import G1_ACTION_SCALE
 
 from sp_tracking.config.build_agent import build_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
@@ -66,6 +67,17 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert env_cfg.commands["motion"].reset_root_lift_height == 0.04
   assert env_cfg.commands["motion"].reset_min_body_z == 0.0
   assert env_cfg.commands["motion"].reset_joint_vel_limit == 10.0
+  assert env_cfg.commands["motion"].velocity_range == {
+    "x": (-0.1, 0.1),
+    "y": (-0.1, 0.1),
+    "z": (-0.1, 0.1),
+    "roll": (-0.1, 0.1),
+    "pitch": (-0.1, 0.1),
+    "yaw": (-0.1, 0.1),
+  }
+  assert env_cfg.actions["joint_pos"].scale[".*_hip_pitch_joint"] == 0.5
+  assert env_cfg.actions["joint_pos"].scale[".*_wrist_pitch_joint"] == 1.0
+  assert env_cfg.actions["joint_pos"].torque_limit_scale_range == (4.0, 1.0)
   assert env_cfg.actions["joint_pos"].raw_action_clip == 10.0
   assert env_cfg.actions["joint_pos"].boot_delay_steps == 2
   assert set(env_cfg.events) == {
@@ -133,6 +145,7 @@ def test_tracking_bfm_keeps_original_events_and_action() -> None:
   assert env_cfg.commands["motion"].reset_root_lift_height == 0.0
   assert env_cfg.commands["motion"].reset_min_body_z is None
   assert env_cfg.commands["motion"].reset_joint_vel_limit is None
+  assert env_cfg.actions["joint_pos"].scale == G1_ACTION_SCALE
   assert "base_mass" in env_cfg.events
   assert "motor_params_implicit" not in env_cfg.events
   assert env_cfg.curriculum == {}

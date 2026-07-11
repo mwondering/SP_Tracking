@@ -59,19 +59,42 @@ viewer:
 command:
   command:
     fk_from_joint_pos: true
+    velocity_range:
+      x: [-0.1, 0.1]
+      y: [-0.1, 0.1]
+      z: [-0.1, 0.1]
+      roll: [-0.1, 0.1]
+      pitch: [-0.1, 0.1]
+      yaw: [-0.1, 0.1]
     reset_root_lift_height: 0.04
     reset_min_body_z: 0.0
     reset_joint_vel_limit: 10.0
 
 action:
   type: motion_tracking
-  scale: g1_action_scale
+  scale:
+    ".*_elbow_joint": 1.0
+    ".*_shoulder_pitch_joint": 1.0
+    ".*_shoulder_roll_joint": 1.0
+    ".*_shoulder_yaw_joint": 1.0
+    ".*_wrist_roll_joint": 1.0
+    ".*_wrist_pitch_joint": 1.0
+    ".*_wrist_yaw_joint": 1.0
+    ".*_hip_pitch_joint": 0.5
+    ".*_hip_roll_joint": 0.5
+    ".*_hip_yaw_joint": 0.5
+    ".*_knee_joint": 0.5
+    "waist_yaw_joint": 0.5
+    "waist_roll_joint": 0.5
+    "waist_pitch_joint": 0.5
+    ".*_ankle_pitch_joint": 0.5
+    ".*_ankle_roll_joint": 0.5
   use_default_offset: true
   actuator_names: [".*"]
   max_delay: 2
   delay_full_progress: 0.8
   alpha: [0.8, 1.0]
-  torque_limit_scale_range: [1.0, 1.0]
+  torque_limit_scale_range: [4.0, 1.0]
   torque_limit_progress_range: [0.0, 0.8]
   raw_action_clip: 10.0
   boot_delay_steps: 2

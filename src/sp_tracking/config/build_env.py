@@ -451,7 +451,11 @@ def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
 
 
 def _build_action(cfg: DictConfig):
-  scale = G1_ACTION_SCALE if cfg.action.scale == "g1_action_scale" else cfg.action.scale
+  scale = (
+    G1_ACTION_SCALE
+    if cfg.action.scale == "g1_action_scale"
+    else _to_container(cfg.action.scale)
+  )
   action_type = str(cfg.action.get("type", "joint_position"))
   cfg_cls = (
     MotionTrackingJointPositionActionCfg

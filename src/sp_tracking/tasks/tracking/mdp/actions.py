@@ -147,11 +147,11 @@ class MotionTrackingJointPositionAction(JointPositionAction):
       scale = float(start_scale) + ratio * (float(end_scale) - float(start_scale))
     if self._torque_limit_scale is not None and abs(scale - self._torque_limit_scale) < 1.0e-6:
       return scale
-    safe_scale = min(float(scale), 1.0)
-    force_range = self._default_forcerange.unsqueeze(0) * safe_scale
+    applied_scale = max(float(scale), 0.0)
+    force_range = self._default_forcerange.unsqueeze(0) * applied_scale
     self._env.sim.model.actuator_forcerange[:, self._ctrl_ids] = force_range
-    self._torque_limit_scale = safe_scale
-    return safe_scale
+    self._torque_limit_scale = applied_scale
+    return applied_scale
 
   def process_actions(self, actions: torch.Tensor) -> None:
     if self.cfg.raw_action_clip is not None:

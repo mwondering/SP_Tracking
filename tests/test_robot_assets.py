@@ -47,8 +47,8 @@ def test_tracking_bfm_body_names_exist_in_selected_robot_asset() -> None:
   assert set(env_cfg.commands["motion"].body_names) <= body_names
 
 
-def test_all_tasks_use_lowest_sim2real_torque_limits() -> None:
-  for task in ("tracking_bfm", "tracking_bfm_largedataset", "tracking_bfm_sp"):
+def test_non_sp_tasks_keep_lowest_sim2real_torque_limits() -> None:
+  for task in ("tracking_bfm", "tracking_bfm_largedataset"):
     cfg = _compose(f"task={task}")
     env_cfg = build_env_cfg(cfg.task)
     limits = _compiled_actuator_limits(env_cfg)
