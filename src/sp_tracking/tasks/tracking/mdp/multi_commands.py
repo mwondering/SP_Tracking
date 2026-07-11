@@ -62,6 +62,18 @@ def apply_reset_ground_clearance(
   adjusted[:, 2] += correction
   return adjusted
 
+
+def clamp_reset_joint_velocity(
+  joint_vel: torch.Tensor, limit: float | None
+) -> torch.Tensor:
+  """Clamp reset joint velocity when a task opts into a finite safety bound."""
+  if limit is None:
+    return joint_vel
+  limit = float(limit)
+  if limit <= 0.0:
+    raise ValueError("reset_joint_vel_limit must be positive when configured")
+  return joint_vel.clamp(min=-limit, max=limit)
+
 _ISAACLAB_JOINT_NAMES = [
   "left_hip_pitch_joint",
   "right_hip_pitch_joint",
@@ -1501,6 +1513,9 @@ class MultiMotionCommand(CommandTerm):
       soft_joint_pos_limits[:, :, 0],
       soft_joint_pos_limits[:, :, 1],
     )
+    joint_vel[env_ids] = clamp_reset_joint_velocity(
+      joint_vel[env_ids], self.cfg.reset_joint_vel_limit
+    )
 
     self.robot.write_joint_state_to_sim(
       joint_pos[env_ids], joint_vel[env_ids], env_ids=env_ids
@@ -1698,6 +1713,7 @@ class MultiMotionCommandCfg(CommandTermCfg):
   joint_position_range: tuple[float, float] = (-0.52, 0.52)
   reset_root_lift_height: float = 0.0
   reset_min_body_z: float | None = None
+  reset_joint_vel_limit: float | None = None
 
   # Ref Motion: Future/History steps configuration for N-step lookahead
   future_steps: int = 5  # 1

@@ -5,6 +5,7 @@ import torch
 from sp_tracking.tasks.tracking.mdp.multi_commands import (
   MultiMotionCommand,
   apply_reset_ground_clearance,
+  clamp_reset_joint_velocity,
 )
 
 
@@ -120,3 +121,13 @@ def test_reset_ground_clearance_is_disabled_by_default() -> None:
   )
 
   assert torch.equal(adjusted, root_pos + position_noise)
+
+
+def test_reset_joint_velocity_clamp_is_opt_in() -> None:
+  joint_vel = torch.tensor([[-15.0, -5.0, 8.0, 20.0]])
+
+  assert torch.equal(clamp_reset_joint_velocity(joint_vel, None), joint_vel)
+  assert torch.equal(
+    clamp_reset_joint_velocity(joint_vel, 10.0),
+    torch.tensor([[-10.0, -5.0, 8.0, 10.0]]),
+  )

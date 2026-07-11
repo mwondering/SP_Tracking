@@ -65,6 +65,7 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert env_cfg.sim.contact_sensor_maxmatch == 128
   assert env_cfg.commands["motion"].reset_root_lift_height == 0.04
   assert env_cfg.commands["motion"].reset_min_body_z == 0.0
+  assert env_cfg.commands["motion"].reset_joint_vel_limit == 10.0
   assert env_cfg.actions["joint_pos"].raw_action_clip == 10.0
   assert env_cfg.actions["joint_pos"].boot_delay_steps == 2
   assert set(env_cfg.events) == {
@@ -131,6 +132,7 @@ def test_tracking_bfm_keeps_original_events_and_action() -> None:
   assert env_cfg.commands["motion"].fk_from_joint_pos is False
   assert env_cfg.commands["motion"].reset_root_lift_height == 0.0
   assert env_cfg.commands["motion"].reset_min_body_z is None
+  assert env_cfg.commands["motion"].reset_joint_vel_limit is None
   assert "base_mass" in env_cfg.events
   assert "motor_params_implicit" not in env_cfg.events
   assert env_cfg.curriculum == {}
@@ -154,6 +156,7 @@ def test_tracking_bfm_largedataset_matches_old_tracking_task() -> None:
   assert motion_cmd.fk_from_joint_pos is False
   assert motion_cmd.reset_root_lift_height == 0.0
   assert motion_cmd.reset_min_body_z is None
+  assert motion_cmd.reset_joint_vel_limit is None
   assert motion_cmd.motion_manifest_file == "/tmp/manifest.txt"
   assert motion_cmd.motion_scan_backend == "auto"
   assert motion_cmd.motion_scan_workers == 0

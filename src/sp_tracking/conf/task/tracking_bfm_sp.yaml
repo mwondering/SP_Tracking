@@ -5,6 +5,7 @@ defaults:
   - _self_
 
 name: tracking_bfm_sp
+debug_nonfinite_state: true
 num_envs: 1
 episode_length_s: 10.0
 decimation: 4
@@ -60,6 +61,7 @@ command:
     fk_from_joint_pos: true
     reset_root_lift_height: 0.04
     reset_min_body_z: 0.0
+    reset_joint_vel_limit: 10.0
 
 action:
   type: motion_tracking

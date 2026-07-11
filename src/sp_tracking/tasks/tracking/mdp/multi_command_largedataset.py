@@ -31,6 +31,7 @@ from .multi_commands import (
   MultiMotionCommand,
   MultiMotionCommandCfg,
   apply_reset_ground_clearance,
+  clamp_reset_joint_velocity,
   extract_motion_fps,
   _select_or_fk_body_fields,
 )
@@ -2898,6 +2899,9 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       joint_pos[env_ids],
       soft_joint_pos_limits[:, :, 0],
       soft_joint_pos_limits[:, :, 1],
+    )
+    joint_vel[env_ids] = clamp_reset_joint_velocity(
+      joint_vel[env_ids], self.cfg.reset_joint_vel_limit
     )
 
     self.robot.write_joint_state_to_sim(

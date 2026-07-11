@@ -270,6 +270,9 @@ def _build_command(cfg: DictConfig):
       command_cfg.get("reset_root_lift_height", 0.0)
     ),
     "reset_min_body_z": _optional_float(command_cfg.get("reset_min_body_z")),
+    "reset_joint_vel_limit": _optional_float(
+      command_cfg.get("reset_joint_vel_limit")
+    ),
     "future_steps": int(command_cfg.get("future_steps", 5)),
     "history_steps": int(command_cfg.get("history_steps", 5)),
     "adaptive_uniform_ratio": float(command_cfg.get("adaptive_uniform_ratio", 0.1)),

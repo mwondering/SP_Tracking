@@ -48,6 +48,14 @@ def test_packaged_hydra_config_composes() -> None:
   assert prepared.env.scene.num_envs == 8
 
 
+def test_nonfinite_physics_tracer_is_enabled_only_for_sp_task() -> None:
+  sp_cfg = _compose("task=tracking_bfm_sp")
+  baseline_cfg = _compose("task=tracking_bfm")
+
+  assert sp_cfg.task.debug_nonfinite_state is True
+  assert baseline_cfg.task.get("debug_nonfinite_state", False) is False
+
+
 def test_root_conf_directory_is_not_a_second_config_source() -> None:
   root_conf = Path(__file__).resolve().parents[1] / "conf"
 

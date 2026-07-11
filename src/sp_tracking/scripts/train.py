@@ -159,6 +159,7 @@ def run_train(cfg: DictConfig) -> None:
   launch_script_artifact_path = _copy_launch_script_to_log_dir(
     log_dir, cfg.get("launch_script_path")
   )
+  task_cfg = cfg.get("task", {})
   runner = MotionTrackingOnPolicyRunner(
     wrapped_env,
     _asdict_dataclass(prepared.agent),
@@ -168,6 +169,7 @@ def run_train(cfg: DictConfig) -> None:
     launch_script_artifact_path=(
       str(launch_script_artifact_path) if launch_script_artifact_path else None
     ),
+    debug_nonfinite_state=bool(task_cfg.get("debug_nonfinite_state", False)),
   )
   resume_path = _resolve_resume_path(cfg, prepared.agent)
   if resume_path is not None:

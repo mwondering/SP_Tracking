@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Iterable, cast
 
+import mujoco
 import torch
 import wandb
 from rsl_rl.env.vec_env import VecEnv
@@ -68,6 +69,434 @@ def _nonfinite_env_ids(tensor: torch.Tensor) -> list[int]:
     return [0] if bool(mask.item()) else []
   per_env = mask.reshape(mask.shape[0], -1).any(dim=1)
   return torch.where(per_env)[0].detach().cpu().tolist()
+
+
+def _as_torch_tensor(value: object) -> torch.Tensor | None:
+  """Return the tensor behind mjlab's TorchArray bridge, when available."""
+  if isinstance(value, torch.Tensor):
+    return value
+  tensor = getattr(value, "_tensor", None)
+  return tensor if isinstance(tensor, torch.Tensor) else None
+
+
+_SIM_STATE_FIELDS = (
+  "qpos",
+  "qvel",
+  "qacc",
+  "qacc_warmstart",
+  "ctrl",
+  "act",
+  "act_dot",
+  "qfrc_applied",
+  "xfrc_applied",
+  "actuator_force",
+  "qfrc_actuator",
+  "qfrc_constraint",
+  "qacc_smooth",
+  "cvel",
+  "cacc",
+  "cfrc_ext",
+  "sensordata",
+)
+
+_SIM_FAST_CHECK_FIELDS = (
+  "qpos",
+  "qvel",
+  "qacc",
+  "qacc_warmstart",
+  "ctrl",
+  "sensordata",
+)
+
+_SIM_INPUT_CHECK_FIELDS = (
+  "ctrl",
+  "qfrc_applied",
+  "xfrc_applied",
+)
+
+
+def _get_tensor_attr(container: object, name: str) -> torch.Tensor | None:
+  try:
+    return _as_torch_tensor(getattr(container, name))
+  except Exception:
+    # Diagnostics must never replace the original simulation failure just because
+    # an optional manager property is unavailable in a particular environment.
+    return None
+
+
+def _nonfinite_sim_env_ids(
+  env: object, field_names: Iterable[str] = _SIM_FAST_CHECK_FIELDS
+) -> list[int]:
+  unwrapped = getattr(env, "unwrapped", env)
+  sim = getattr(unwrapped, "sim", None)
+  data = getattr(sim, "data", None)
+  if data is None:
+    return []
+
+  per_env: torch.Tensor | None = None
+  for field_name in field_names:
+    tensor = _get_tensor_attr(data, field_name)
+    if tensor is None or tensor.numel() == 0 or tensor.ndim == 0:
+      continue
+    field_mask = (~_finite_mask(tensor)).reshape(tensor.shape[0], -1).any(dim=1)
+    per_env = field_mask if per_env is None else per_env | field_mask
+  if per_env is None:
+    return []
+  return torch.where(per_env)[0].detach().cpu().tolist()
+
+
+def _mj_name(model: object, object_type: mujoco.mjtObj, index: int) -> str:
+  try:
+    name = mujoco.mj_id2name(model, object_type, index)
+  except (TypeError, ValueError):
+    return ""
+  return str(name) if name else ""
+
+
+def _joint_name_for_address(model: object, address: int, *, qpos: bool) -> str:
+  adr_name = "jnt_qposadr" if qpos else "jnt_dofadr"
+  count_name = "nq" if qpos else "nv"
+  try:
+    addresses = getattr(model, adr_name)
+    njnt = int(getattr(model, "njnt"))
+    total = int(getattr(model, count_name))
+  except (AttributeError, TypeError, ValueError):
+    return ""
+  for joint_id in range(njnt):
+    start = int(addresses[joint_id])
+    end = int(addresses[joint_id + 1]) if joint_id + 1 < njnt else total
+    if start <= address < end:
+      name = _mj_name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+      component = address - start
+      return f"joint={name or joint_id} component={component}"
+  return ""
+
+
+def _describe_sim_index(model: object, field_name: str, index: tuple[int, ...]) -> str:
+  if not index:
+    return ""
+  address = index[0]
+  if field_name == "qpos":
+    return _joint_name_for_address(model, address, qpos=True)
+  if field_name in {
+    "qvel",
+    "qacc",
+    "qacc_warmstart",
+    "qfrc_applied",
+    "qfrc_actuator",
+    "qfrc_constraint",
+    "qacc_smooth",
+  }:
+    return _joint_name_for_address(model, address, qpos=False)
+  if field_name in {"ctrl", "act", "act_dot", "actuator_force"}:
+    name = _mj_name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, address)
+    return f"actuator={name or address}"
+  if field_name in {"xfrc_applied", "cvel", "cacc", "cfrc_ext"}:
+    name = _mj_name(model, mujoco.mjtObj.mjOBJ_BODY, address)
+    component = index[1] if len(index) > 1 else None
+    suffix = f" component={component}" if component is not None else ""
+    return f"body={name or address}{suffix}"
+  if field_name == "sensordata":
+    try:
+      sensor_adr = getattr(model, "sensor_adr")
+      sensor_dim = getattr(model, "sensor_dim")
+      nsensor = int(getattr(model, "nsensor"))
+      for sensor_id in range(nsensor):
+        start = int(sensor_adr[sensor_id])
+        if start <= address < start + int(sensor_dim[sensor_id]):
+          name = _mj_name(model, mujoco.mjtObj.mjOBJ_SENSOR, sensor_id)
+          return f"sensor={name or sensor_id} component={address - start}"
+    except (AttributeError, TypeError, ValueError):
+      pass
+  return ""
+
+
+def _format_tensor_nonfinite_entries(
+  label: str,
+  tensor: torch.Tensor,
+  *,
+  model: object | None = None,
+  field_name: str = "",
+  max_entries: int = 8,
+) -> list[str]:
+  bad = torch.nonzero(~_finite_mask(tensor), as_tuple=False)
+  if bad.numel() == 0:
+    return []
+  entries: list[str] = []
+  for raw_index in bad[:max_entries].detach().cpu().tolist():
+    env_id = int(raw_index[0]) if tensor.ndim > 0 else 0
+    item_index = tuple(int(value) for value in raw_index[1:])
+    value = tensor[tuple(raw_index)].detach().cpu().item()
+    detail = (
+      _describe_sim_index(model, field_name, item_index)
+      if model is not None
+      else ""
+    )
+    detail_suffix = f" {detail}" if detail else ""
+    entries.append(
+      f"env={env_id} index={item_index} value={value}{detail_suffix}"
+    )
+  omitted = int(bad.shape[0]) - len(entries)
+  omitted_suffix = f" (+{omitted} more)" if omitted > 0 else ""
+  return [f"- {label}: " + "; ".join(entries) + omitted_suffix]
+
+
+def _format_simulation_counts(env: object, env_ids: list[int]) -> list[str]:
+  unwrapped = getattr(env, "unwrapped", env)
+  sim = getattr(unwrapped, "sim", None)
+  data = getattr(sim, "data", None)
+  if data is None:
+    return []
+  parts: list[str] = []
+  for name in ("nefc", "nacon", "ncollision", "solver_niter"):
+    tensor = _get_tensor_attr(data, name)
+    if tensor is None or tensor.numel() == 0:
+      continue
+    flat = tensor.reshape(tensor.shape[0], -1)
+    valid_ids = [env_id for env_id in env_ids if env_id < flat.shape[0]]
+    values = {
+      env_id: flat[env_id].detach().cpu().tolist() for env_id in valid_ids[:10]
+    }
+    maximum = flat.max().detach().cpu().item()
+    parts.append(f"{name}(bad_envs)={values} {name}_global_max={maximum}")
+  return ["- solver/contact counters: " + " | ".join(parts)] if parts else []
+
+
+def _format_constraint_type_counts(env: object, env_ids: list[int]) -> list[str]:
+  unwrapped = getattr(env, "unwrapped", env)
+  sim = getattr(unwrapped, "sim", None)
+  data = getattr(sim, "data", None)
+  efc = getattr(data, "efc", None)
+  constraint_types = _get_tensor_attr(efc, "type")
+  nefc = _get_tensor_attr(data, "nefc")
+  if constraint_types is None or nefc is None:
+    return []
+
+  parts: list[str] = []
+  for env_id in env_ids[:5]:
+    if env_id >= constraint_types.shape[0] or env_id >= nefc.shape[0]:
+      continue
+    count = min(int(nefc[env_id].detach().cpu().item()), constraint_types.shape[1])
+    if count <= 0:
+      continue
+    values, counts = torch.unique(
+      constraint_types[env_id, :count], return_counts=True
+    )
+    type_counts: dict[str, int] = {}
+    for raw_type, raw_count in zip(
+      values.detach().cpu().tolist(), counts.detach().cpu().tolist(), strict=True
+    ):
+      try:
+        type_name = mujoco.mjtConstraint(int(raw_type)).name
+      except ValueError:
+        type_name = str(int(raw_type))
+      type_counts[type_name] = int(raw_count)
+    parts.append(f"env={env_id} nefc={int(nefc[env_id].item())} types={type_counts}")
+  return ["- active constraint composition: " + " | ".join(parts)] if parts else []
+
+
+def _format_contact_geom_pairs(env: object, env_ids: list[int]) -> list[str]:
+  unwrapped = getattr(env, "unwrapped", env)
+  sim = getattr(unwrapped, "sim", None)
+  data = getattr(sim, "data", None)
+  model = getattr(sim, "mj_model", None)
+  contact = getattr(data, "contact", None)
+  world_ids = _get_tensor_attr(contact, "worldid")
+  geom_pairs = _get_tensor_attr(contact, "geom")
+  if world_ids is None or geom_pairs is None:
+    return []
+
+  flat_world_ids = world_ids.reshape(-1)
+  flat_geom_pairs = geom_pairs.reshape(-1, 2)
+  parts: list[str] = []
+  for env_id in env_ids[:5]:
+    pairs = flat_geom_pairs[flat_world_ids == env_id]
+    pairs = pairs[(pairs >= 0).all(dim=1)]
+    if pairs.numel() == 0:
+      continue
+    unique_pairs, counts = torch.unique(pairs, dim=0, return_counts=True)
+    order = torch.argsort(counts, descending=True)[:12]
+    descriptions: list[str] = []
+    for pair, count in zip(
+      unique_pairs[order].detach().cpu().tolist(),
+      counts[order].detach().cpu().tolist(),
+      strict=True,
+    ):
+      geom_a, geom_b = int(pair[0]), int(pair[1])
+      name_a = _mj_name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_a)
+      name_b = _mj_name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_b)
+      descriptions.append(
+        f"({name_a or geom_a}, {name_b or geom_b})x{int(count)}"
+      )
+    parts.append(f"env={env_id} " + ", ".join(descriptions))
+  return ["- active contact geom pairs: " + " | ".join(parts)] if parts else []
+
+
+def _format_nonfinite_internal_state_diagnostics(
+  env: object, preferred_env_ids: Iterable[int] = ()
+) -> str:
+  """Describe exact non-finite indices in simulator, action, and motion state."""
+  lines: list[str] = ["Internal non-finite source diagnostics:"]
+  unwrapped = getattr(env, "unwrapped", env)
+  sim = getattr(unwrapped, "sim", None)
+  data = getattr(sim, "data", None)
+  model = getattr(sim, "mj_model", None)
+  all_bad_env_ids: set[int] = set(int(value) for value in preferred_env_ids)
+
+  if data is not None:
+    for field_name in _SIM_STATE_FIELDS:
+      tensor = _get_tensor_attr(data, field_name)
+      if tensor is None:
+        continue
+      field_env_ids = _nonfinite_env_ids(tensor)
+      all_bad_env_ids.update(field_env_ids)
+      if field_env_ids:
+        lines.extend(
+          _format_tensor_nonfinite_entries(
+            f"sim.data.{field_name}",
+            tensor,
+            model=model,
+            field_name=field_name,
+          )
+        )
+
+  action_manager = getattr(unwrapped, "action_manager", None)
+  for attr_name in ("action", "prev_action"):
+    tensor = _get_tensor_attr(action_manager, attr_name)
+    if tensor is not None:
+      lines.extend(_format_tensor_nonfinite_entries(f"action_manager.{attr_name}", tensor))
+  get_action_term = getattr(action_manager, "get_term", None)
+  if callable(get_action_term):
+    for term_name in getattr(action_manager, "active_terms", ()):
+      try:
+        term = get_action_term(term_name)
+      except Exception:
+        continue
+      for attr_name in (
+        "_raw_actions",
+        "_processed_actions",
+        "applied_action",
+        "joint_offset",
+        "alpha",
+        "boot_target",
+      ):
+        tensor = _get_tensor_attr(term, attr_name)
+        if tensor is not None:
+          lines.extend(
+            _format_tensor_nonfinite_entries(
+              f"action[{term_name}].{attr_name}", tensor
+            )
+          )
+
+  command_manager = getattr(unwrapped, "command_manager", None)
+  get_command_term = getattr(command_manager, "get_term", None)
+  if callable(get_command_term):
+    try:
+      command = get_command_term("motion")
+    except Exception:
+      command = None
+    if command is not None:
+      for attr_name in (
+        "joint_pos",
+        "joint_vel",
+        "body_pos_w",
+        "body_quat_w",
+        "body_lin_vel_w",
+        "body_ang_vel_w",
+      ):
+        tensor = _get_tensor_attr(command, attr_name)
+        if tensor is not None:
+          lines.extend(
+            _format_tensor_nonfinite_entries(
+              f"motion_reference.{attr_name}", tensor
+            )
+          )
+
+  bad_env_ids = sorted(all_bad_env_ids)
+  if bad_env_ids:
+    context = _motion_context(env, bad_env_ids)
+    if context:
+      lines.append(f"- failing motion context: envs={bad_env_ids[:10]} {context}")
+    lines.extend(_format_simulation_counts(env, bad_env_ids))
+    lines.extend(_format_constraint_type_counts(env, bad_env_ids))
+    lines.extend(_format_contact_geom_pairs(env, bad_env_ids))
+  return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _safe_internal_state_diagnostics(
+  env: object, preferred_env_ids: Iterable[int] = ()
+) -> str:
+  try:
+    return _format_nonfinite_internal_state_diagnostics(env, preferred_env_ids)
+  except Exception as exc:
+    return f"Internal diagnostics failed without replacing the original error: {exc!r}"
+
+
+class _FirstNonfiniteSimulationTracer:
+  """Stop at the first physics substep whose MuJoCo state becomes non-finite."""
+
+  def __init__(self, env: object):
+    self.env = env
+    unwrapped = getattr(env, "unwrapped", env)
+    self.sim = getattr(unwrapped, "sim")
+    self._original_step = self.sim.step
+    self.iteration = -1
+    self.rollout_step = -1
+    self.physics_substep = 0
+    self.global_physics_step = 0
+    self.sim.step = self.step
+
+    rank = os.environ.get("RANK", "0")
+    local_rank = os.environ.get("LOCAL_RANK", "0")
+    print(
+      "[NONFINITE_TRACE] enabled for physics substeps "
+      f"rank={rank} local_rank={local_rank}; "
+      "set task.debug_nonfinite_state=false to disable",
+      flush=True,
+    )
+
+    initial_bad_env_ids = _nonfinite_sim_env_ids(env)
+    if initial_bad_env_ids:
+      raise FloatingPointError(
+        self._message("runner initialization", initial_bad_env_ids)
+      )
+
+  def begin_env_step(self, iteration: int, rollout_step: int) -> None:
+    self.iteration = int(iteration)
+    self.rollout_step = int(rollout_step)
+    self.physics_substep = 0
+
+  def _message(self, phase: str, env_ids: list[int]) -> str:
+    rank = os.environ.get("RANK", "0")
+    local_rank = os.environ.get("LOCAL_RANK", "0")
+    header = (
+      "[FIRST_NONFINITE_STATE] "
+      f"rank={rank} local_rank={local_rank} phase={phase} "
+      f"iteration={self.iteration} rollout_step={self.rollout_step} "
+      f"physics_substep={self.physics_substep} "
+      f"global_physics_step={self.global_physics_step} envs={env_ids[:10]}"
+    )
+    details = _safe_internal_state_diagnostics(self.env, env_ids)
+    return f"{header}\n{details}" if details else header
+
+  def step(self) -> None:
+    self.physics_substep += 1
+    self.global_physics_step += 1
+    bad_input_env_ids = _nonfinite_sim_env_ids(
+      self.env, _SIM_INPUT_CHECK_FIELDS
+    )
+    if bad_input_env_ids:
+      message = self._message("before sim.step", bad_input_env_ids)
+      print(message, flush=True)
+      raise FloatingPointError(message)
+
+    self._original_step()
+    bad_env_ids = _nonfinite_sim_env_ids(self.env)
+    if not bad_env_ids:
+      return
+    message = self._message("after sim.step", bad_env_ids)
+    print(message, flush=True)
+    raise FloatingPointError(message)
 
 
 def _motion_context(env: object, env_ids: Iterable[int]) -> str:
@@ -203,11 +632,15 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     device: str = "cpu",
     registry_name: str | None = None,
     launch_script_artifact_path: str | None = None,
+    debug_nonfinite_state: bool = False,
   ):
     super().__init__(env, train_cfg, log_dir, device)
     self.registry_name = registry_name
     self.launch_script_artifact_path = launch_script_artifact_path
     self._launch_script_artifact_uploaded = False
+    self._nonfinite_tracer = (
+      _FirstNonfiniteSimulationTracer(self.env) if debug_nonfinite_state else None
+    )
 
   def _upload_launch_script_artifact_once(self) -> None:
     if self._launch_script_artifact_uploaded:
@@ -453,6 +886,8 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
               raise ValueError(action_diagnostics)
           if step_idx == 0 or step_idx == num_steps_per_env - 1:
             _bootstrap_debug(f"iteration {it}: before env.step step={step_idx}")
+          if self._nonfinite_tracer is not None:
+            self._nonfinite_tracer.begin_env_step(it, step_idx)
           obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
           if step_idx == 0 or step_idx == num_steps_per_env - 1:
             _bootstrap_debug(f"iteration {it}: after env.step step={step_idx}")
@@ -463,8 +898,21 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
               diagnostics = _format_nonfinite_env_output_diagnostics(
                 self.env, obs, rewards, dones
               )
-              if diagnostics:
-                raise ValueError(f"{exc}\n{diagnostics}") from exc
+              failing_env_ids: set[int] = set()
+              obs_items = getattr(obs, "items", None)
+              if callable(obs_items):
+                for _, tensor in obs_items():
+                  if isinstance(tensor, torch.Tensor):
+                    failing_env_ids.update(_nonfinite_env_ids(tensor))
+              failing_env_ids.update(_nonfinite_env_ids(rewards))
+              internal_diagnostics = _safe_internal_state_diagnostics(
+                self.env, sorted(failing_env_ids)
+              )
+              combined = "\n".join(
+                value for value in (diagnostics, internal_diagnostics) if value
+              )
+              if combined:
+                raise ValueError(f"{exc}\n{combined}") from exc
               raise
           obs, rewards, dones = (
             obs.to(self.device),
