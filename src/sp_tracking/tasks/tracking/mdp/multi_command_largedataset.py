@@ -2906,6 +2906,10 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       env_ids=env_ids,
     )
     self.robot.clear_state(env_ids=env_ids)
+    # Keep the first PD command aligned with the sampled reset pose. Without
+    # this, the zeroed policy action targets the nominal pose on the first
+    # physics step and can inject a destabilizing torque impulse.
+    self.robot.set_joint_position_target(joint_pos[env_ids], env_ids=env_ids)
 
   def _refresh_active_subset(self, iteration: int) -> None:
     refresh_count = int(self.cfg.subset_refresh_count)

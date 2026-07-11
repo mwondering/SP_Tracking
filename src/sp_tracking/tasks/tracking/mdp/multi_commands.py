@@ -1480,6 +1480,10 @@ class MultiMotionCommand(CommandTerm):
     )
 
     self.robot.clear_state(env_ids=env_ids)
+    # Keep the first PD command aligned with the sampled reset pose. Without
+    # this, the zeroed policy action targets the nominal pose on the first
+    # physics step and can inject a destabilizing torque impulse.
+    self.robot.set_joint_position_target(joint_pos[env_ids], env_ids=env_ids)
 
   def _update_command(self):
     if self.cfg.sampling_mode == "adaptive":
