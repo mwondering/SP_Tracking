@@ -275,6 +275,17 @@ def _build_command(cfg: DictConfig):
     ),
     "future_steps": int(command_cfg.get("future_steps", 5)),
     "history_steps": int(command_cfg.get("history_steps", 5)),
+    "reference_cache_enabled": bool(
+      command_cfg.get("reference_cache_enabled", True)
+    ),
+    "reference_cache_steps": (
+      {
+        str(field_name): tuple(int(step) for step in steps)
+        for field_name, steps in command_cfg.reference_cache_steps.items()
+      }
+      if command_cfg.get("reference_cache_steps") is not None
+      else None
+    ),
     "adaptive_uniform_ratio": float(command_cfg.get("adaptive_uniform_ratio", 0.1)),
     "adaptive_bin_width_s": float(command_cfg.get("adaptive_bin_width_s", 1.0)),
     "adaptive_bin_width_steps": _optional_int(

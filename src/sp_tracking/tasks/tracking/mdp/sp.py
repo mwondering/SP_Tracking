@@ -84,12 +84,6 @@ def _steps(horizon: Literal["teacher", "student"]) -> tuple[int, ...]:
   return STUDENT_STEPS if horizon == "student" else TEACHER_STEPS
 
 
-def _step_tensor(
-  env: "ManagerBasedRlEnv", steps: tuple[int, ...], base: torch.Tensor
-) -> torch.Tensor:
-  return base[:, None] + torch.as_tensor(steps, device=env.device, dtype=torch.long)
-
-
 def _gather(
   env: "ManagerBasedRlEnv",
   command_name: str,
@@ -97,7 +91,12 @@ def _gather(
   steps: tuple[int, ...],
 ) -> torch.Tensor:
   cmd = _command(env, command_name)
-  time_steps = _step_tensor(env, steps, cmd.time_steps)
+  gather_reference = getattr(cmd, "gather_reference", None)
+  if callable(gather_reference):
+    return gather_reference(field_name, steps)
+  time_steps = cmd.time_steps[:, None] + torch.as_tensor(
+    steps, device=env.device, dtype=torch.long
+  )
   return cmd._gather_motion_field(field_name, cmd.motion_idx, time_steps)
 
 

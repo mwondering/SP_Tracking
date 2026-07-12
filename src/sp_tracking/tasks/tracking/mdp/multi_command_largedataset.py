@@ -345,29 +345,52 @@ class LargeDatasetMotionSlotBuffer:
     slot_ids: torch.Tensor,
     time_steps: torch.Tensor,
   ) -> torch.Tensor:
+    return self.gather_many((field_name,), slot_ids, time_steps)[field_name]
+
+  def gather_many(
+    self,
+    field_names: tuple[str, ...],
+    slot_ids: torch.Tensor,
+    time_steps: torch.Tensor,
+  ) -> dict[str, torch.Tensor]:
+    """Gather several fields while sharing slot/bucket index preparation."""
     flat_slot_ids, flat_time_steps, output_shape = self._flatten_indices(
       slot_ids, time_steps
     )
-    tail_shape = self._field_tail_shapes[field_name]
-    output = torch.empty(
-      (*flat_time_steps.shape, *tail_shape),
-      dtype=self._field_dtypes[field_name],
-      device=self._field_devices[field_name],
-    )
+    outputs = {
+      field_name: torch.empty(
+        (*flat_time_steps.shape, *self._field_tail_shapes[field_name]),
+        dtype=self._field_dtypes[field_name],
+        device=self._field_devices[field_name],
+      )
+      for field_name in field_names
+    }
     if flat_time_steps.numel() == 0:
-      return output.reshape(*output_shape, *tail_shape)
+      return {
+        field_name: output.reshape(
+          *output_shape, *self._field_tail_shapes[field_name]
+        )
+        for field_name, output in outputs.items()
+      }
 
     bucket_ids = self.slot_bucket_ids[flat_slot_ids]
     bucket_local_ids = self.slot_bucket_local_ids[flat_slot_ids]
-    field_buckets = self._bucket_fields[field_name]
     for bucket_id in range(len(self._bucket_capacities)):
       output_indices = torch.where(bucket_ids == bucket_id)[0]
       if output_indices.numel() == 0:
         continue
-      output[output_indices] = field_buckets[bucket_id][
-        bucket_local_ids[output_indices], flat_time_steps[output_indices]
-      ]
-    return output.reshape(*output_shape, *tail_shape)
+      local_ids = bucket_local_ids[output_indices]
+      selected_time_steps = flat_time_steps[output_indices]
+      for field_name in field_names:
+        outputs[field_name][output_indices] = self._bucket_fields[field_name][
+          bucket_id
+        ][local_ids, selected_time_steps]
+    return {
+      field_name: output.reshape(
+        *output_shape, *self._field_tail_shapes[field_name]
+      )
+      for field_name, output in outputs.items()
+    }
 
   def replace_slots(
     self,
@@ -2134,6 +2157,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     self._motion_gather_call_count = 0
     self._adaptive_bin_snapshot_writer = None
     self._adaptive_bin_snapshot_writer_key = None
+    self._initialize_reference_cache()
     _bootstrap_debug("LargeDatasetMultiMotionCommand init done")
 
   def _resolve_all_motion_files(self) -> list[str]:
@@ -2705,6 +2729,16 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
   def _gather_motion_field(
     self, field_name: str, motion_ids: torch.Tensor, time_steps: torch.Tensor
   ) -> torch.Tensor:
+    return self._gather_motion_fields(
+      (field_name,), motion_ids, time_steps
+    )[field_name]
+
+  def _gather_motion_fields(
+    self,
+    field_names: tuple[str, ...],
+    motion_ids: torch.Tensor,
+    time_steps: torch.Tensor,
+  ) -> dict[str, torch.Tensor]:
     slot_ids = self.active_subset.motion_to_slot[motion_ids]
     if torch.any(slot_ids < 0):
       missing_motion_ids = motion_ids[slot_ids < 0]
@@ -2714,7 +2748,9 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       )
     clamped_time_steps = self._clamp_motion_time_steps(motion_ids, time_steps)
     start = time.perf_counter()
-    gathered = self.motion.gather(field_name, slot_ids, clamped_time_steps)
+    gathered = self.motion.gather_many(
+      field_names, slot_ids, clamped_time_steps
+    )
     self._motion_gather_time_accum += time.perf_counter() - start
     self._motion_gather_call_count += 1
     return gathered
@@ -2829,6 +2865,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
   def _resample_command(self, env_ids: torch.Tensor):
     if len(env_ids) == 0:
       return
+    self._invalidate_reference_cache()
     self._stage_pre_resample_adaptive_stats(env_ids)
 
     if self.cfg.sampling_mode == "start":
@@ -2945,6 +2982,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
         refresh_result.new_motion_ids,
         self.motion_store,
       )
+      self._invalidate_reference_cache()
     self.global_bin_pool.replace_active_motion_ids(
       refresh_result.replaced_slot_ids,
       refresh_result.new_motion_ids,

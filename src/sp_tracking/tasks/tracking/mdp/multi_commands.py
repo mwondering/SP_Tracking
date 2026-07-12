@@ -213,6 +213,15 @@ _ISAACLAB_TO_MUJOCO_BODY_REINDEX = [
 
 DEFAULT_MOTION_FPS = 50.0
 
+REFERENCE_MOTION_FIELDS = (
+  "joint_pos",
+  "joint_vel",
+  "body_pos_w",
+  "body_quat_w",
+  "body_lin_vel_w",
+  "body_ang_vel_w",
+)
+
 
 def extract_motion_fps(data: np.lib.npyio.NpzFile) -> tuple[float, bool, bool]:
   """Return ``(fps, is_non_scalar, used_default)`` for a motion archive."""
@@ -726,6 +735,116 @@ class MultiMotionCommand(CommandTerm):
       if self.cfg.extra_reference_motion_file
       else None
     )
+    self._initialize_reference_cache()
+
+  def _configured_reference_steps(self) -> tuple[int, ...]:
+    offsets = []
+    if self.cfg.history_steps > 0:
+      offsets.extend(range(-self.cfg.history_steps, 0))
+    offsets.append(0)
+    if self.cfg.future_steps > 1:
+      offsets.extend(range(1, self.cfg.future_steps))
+    return tuple(offsets)
+
+  def _reference_cache_step_groups(self) -> dict[str, tuple[int, ...]]:
+    configured = self.cfg.reference_cache_steps
+    if configured is None:
+      steps = self._configured_reference_steps()
+      return {field_name: steps for field_name in REFERENCE_MOTION_FIELDS}
+    fallback = self._configured_reference_steps()
+    return {
+      field_name: tuple(int(step) for step in configured.get(field_name, fallback))
+      for field_name in REFERENCE_MOTION_FIELDS
+    }
+
+  def _initialize_reference_cache(self) -> None:
+    self._reference_cache_field_steps = self._reference_cache_step_groups()
+    self._reference_cache: dict[str, torch.Tensor] = {}
+    self._reference_cache_slices: dict[
+      tuple[str, tuple[int, ...]], torch.Tensor
+    ] = {}
+    self._reference_cache_valid = False
+    self._reference_cache_build_count = 0
+
+  def _invalidate_reference_cache(self) -> None:
+    if not hasattr(self, "_reference_cache"):
+      return
+    self._reference_cache.clear()
+    self._reference_cache_slices.clear()
+    self._reference_cache_valid = False
+
+  def _gather_motion_fields(
+    self,
+    field_names: tuple[str, ...],
+    motion_ids: torch.Tensor,
+    time_steps: torch.Tensor,
+  ) -> dict[str, torch.Tensor]:
+    frame_indices = self._get_frame_indices(motion_ids, time_steps)
+    return {
+      field_name: getattr(self.motion, field_name)[frame_indices]
+      for field_name in field_names
+    }
+
+  def _build_reference_cache(self) -> None:
+    fields_by_steps: dict[tuple[int, ...], list[str]] = {}
+    for field_name, steps in self._reference_cache_field_steps.items():
+      fields_by_steps.setdefault(steps, []).append(field_name)
+
+    cache: dict[str, torch.Tensor] = {}
+    for steps, field_names in fields_by_steps.items():
+      offset_tensor = torch.as_tensor(steps, device=self.device, dtype=torch.long)
+      absolute_steps = self.time_steps.unsqueeze(1) + offset_tensor.unsqueeze(0)
+      cache.update(
+        self._gather_motion_fields(tuple(field_names), self.motion_idx, absolute_steps)
+      )
+    self._reference_cache = cache
+    self._reference_cache_slices.clear()
+    self._reference_cache_valid = True
+    self._reference_cache_build_count += 1
+
+  def gather_reference(
+    self, field_name: str, relative_steps: tuple[int, ...]
+  ) -> torch.Tensor:
+    """Gather reference motion data, reusing one cache per command state."""
+    relative_steps = tuple(int(step) for step in relative_steps)
+    if not self.cfg.reference_cache_enabled:
+      offset_tensor = torch.as_tensor(
+        relative_steps, device=self.device, dtype=torch.long
+      )
+      absolute_steps = self.time_steps.unsqueeze(1) + offset_tensor.unsqueeze(0)
+      return self._gather_motion_field(field_name, self.motion_idx, absolute_steps)
+
+    cached_steps = self._reference_cache_field_steps.get(field_name, ())
+    cached_indices = {step: index for index, step in enumerate(cached_steps)}
+    if any(step not in cached_indices for step in relative_steps):
+      offset_tensor = torch.as_tensor(
+        relative_steps, device=self.device, dtype=torch.long
+      )
+      absolute_steps = self.time_steps.unsqueeze(1) + offset_tensor.unsqueeze(0)
+      return self._gather_motion_field(field_name, self.motion_idx, absolute_steps)
+
+    if not self._reference_cache_valid:
+      self._build_reference_cache()
+    slice_key = (field_name, relative_steps)
+    cached_slice = self._reference_cache_slices.get(slice_key)
+    if cached_slice is not None:
+      return cached_slice
+
+    field = self._reference_cache[field_name]
+    if relative_steps == cached_steps:
+      result = field
+    elif len(relative_steps) == 1:
+      index = cached_indices[relative_steps[0]]
+      result = field[:, index : index + 1]
+    else:
+      indices = torch.as_tensor(
+        [cached_indices[step] for step in relative_steps],
+        device=self.device,
+        dtype=torch.long,
+      )
+      result = field.index_select(1, indices)
+    self._reference_cache_slices[slice_key] = result
+    return result
 
   def _build_fk_helper(self) -> MotionFKHelper | None:
     if not self.cfg.fk_from_joint_pos:
@@ -988,13 +1107,9 @@ class MultiMotionCommand(CommandTerm):
     return getattr(self.motion, field_name)[frame_indices]
 
   def _get_reference_time_steps(self) -> torch.Tensor:
-    offsets = []
-    if self.cfg.history_steps > 0:
-      offsets.extend(range(-self.cfg.history_steps, 0))
-    offsets.append(0)
-    if self.cfg.future_steps > 1:
-      offsets.extend(range(1, self.cfg.future_steps))
-    offset_tensor = torch.tensor(offsets, device=self.device, dtype=torch.long)
+    offset_tensor = torch.as_tensor(
+      self._configured_reference_steps(), device=self.device, dtype=torch.long
+    )
     return self.time_steps.unsqueeze(1) + offset_tensor.unsqueeze(0)
 
   def _apply_max_probability_constraints(
@@ -1099,30 +1214,30 @@ class MultiMotionCommand(CommandTerm):
 
   @property
   def joint_pos(self) -> torch.Tensor:
-    return self._gather_motion_field("joint_pos", self.motion_idx, self.time_steps)
+    return self.gather_reference("joint_pos", (0,))[:, 0]
 
   @property
   def joint_vel(self) -> torch.Tensor:
-    return self._gather_motion_field("joint_vel", self.motion_idx, self.time_steps)
+    return self.gather_reference("joint_vel", (0,))[:, 0]
 
   @property
   def body_pos_w(self) -> torch.Tensor:
     return (
-      self._gather_motion_field("body_pos_w", self.motion_idx, self.time_steps)
+      self.gather_reference("body_pos_w", (0,))[:, 0]
       + self._env.scene.env_origins[:, None, :]
     )
 
   @property
   def body_quat_w(self) -> torch.Tensor:
-    return self._gather_motion_field("body_quat_w", self.motion_idx, self.time_steps)
+    return self.gather_reference("body_quat_w", (0,))[:, 0]
 
   @property
   def body_lin_vel_w(self) -> torch.Tensor:
-    return self._gather_motion_field("body_lin_vel_w", self.motion_idx, self.time_steps)
+    return self.gather_reference("body_lin_vel_w", (0,))[:, 0]
 
   @property
   def body_ang_vel_w(self) -> torch.Tensor:
-    return self._gather_motion_field("body_ang_vel_w", self.motion_idx, self.time_steps)
+    return self.gather_reference("body_ang_vel_w", (0,))[:, 0]
 
   @property
   def anchor_pos_w(self) -> torch.Tensor:
@@ -1139,9 +1254,8 @@ class MultiMotionCommand(CommandTerm):
     Returns concatenated [history_steps, current, future_steps] if both are enabled,
     or just the enabled steps. Order: [past, current, future].
     """
-    reference_time_steps = self._get_reference_time_steps()
-    reference_lin_vel = self._gather_motion_field(
-      "body_lin_vel_w", self.motion_idx, reference_time_steps
+    reference_lin_vel = self.gather_reference(
+      "body_lin_vel_w", self._configured_reference_steps()
     )[:, :, self.motion_anchor_body_index]
     return reference_lin_vel.reshape(self.num_envs, -1)
 
@@ -1152,9 +1266,8 @@ class MultiMotionCommand(CommandTerm):
     Returns concatenated [history_steps, current, future_steps] if both are enabled,
     or just the enabled steps. Order: [past, current, future].
     """
-    reference_time_steps = self._get_reference_time_steps()
-    reference_ang_vel = self._gather_motion_field(
-      "body_ang_vel_w", self.motion_idx, reference_time_steps
+    reference_ang_vel = self.gather_reference(
+      "body_ang_vel_w", self._configured_reference_steps()
     )[:, :, self.motion_anchor_body_index]
     return reference_ang_vel.reshape(self.num_envs, -1)
 
@@ -1171,9 +1284,8 @@ class MultiMotionCommand(CommandTerm):
     or just the enabled steps. Order: [past, current, future].
     Shape: (num_envs, num_steps * 3) where num_steps = history_steps + 1 + (future_steps - 1)
     """
-    reference_time_steps = self._get_reference_time_steps()
-    anchor_quat = self._gather_motion_field(
-      "body_quat_w", self.motion_idx, reference_time_steps
+    anchor_quat = self.gather_reference(
+      "body_quat_w", self._configured_reference_steps()
     )[:, :, self.motion_anchor_body_index]
 
     # Extract quaternion components: (w, x, y, z) format
@@ -1201,9 +1313,8 @@ class MultiMotionCommand(CommandTerm):
     Returns concatenated [history_steps, current, future_steps] if both are enabled,
     or just the enabled steps. Order: [past, current, future].
     """
-    reference_time_steps = self._get_reference_time_steps()
-    reference_joint_pos = self._gather_motion_field(
-      "joint_pos", self.motion_idx, reference_time_steps
+    reference_joint_pos = self.gather_reference(
+      "joint_pos", self._configured_reference_steps()
     )
     return reference_joint_pos.reshape(self.num_envs, -1)
 
@@ -1219,9 +1330,8 @@ class MultiMotionCommand(CommandTerm):
     Returns concatenated [history_steps, current, future_steps] if both are enabled,
     or just the enabled steps. Order: [past, current, future].
     """
-    reference_time_steps = self._get_reference_time_steps()
-    reference_joint_vel = self._gather_motion_field(
-      "joint_vel", self.motion_idx, reference_time_steps
+    reference_joint_vel = self.gather_reference(
+      "joint_vel", self._configured_reference_steps()
     )
     return reference_joint_vel.reshape(self.num_envs, -1)
 
@@ -1232,9 +1342,8 @@ class MultiMotionCommand(CommandTerm):
     Returns concatenated [history_steps, current, future_steps] if both are enabled,
     or just the enabled steps. Order: [past, current, future].
     """
-    reference_time_steps = self._get_reference_time_steps()
-    reference_anchor_pos = self._gather_motion_field(
-      "body_pos_w", self.motion_idx, reference_time_steps
+    reference_anchor_pos = self.gather_reference(
+      "body_pos_w", self._configured_reference_steps()
     )[:, :, self.motion_anchor_body_index]
     reference_anchor_pos = (
       reference_anchor_pos + self._env.scene.env_origins[:, None, :]
@@ -1248,9 +1357,8 @@ class MultiMotionCommand(CommandTerm):
     Returns concatenated [history_steps, current, future_steps] if both are enabled,
     or just the enabled steps. Order: [past, current, future].
     """
-    reference_time_steps = self._get_reference_time_steps()
-    reference_anchor_quat = self._gather_motion_field(
-      "body_quat_w", self.motion_idx, reference_time_steps
+    reference_anchor_quat = self.gather_reference(
+      "body_quat_w", self._configured_reference_steps()
     )[:, :, self.motion_anchor_body_index]
     return reference_anchor_quat.reshape(self.num_envs, -1)
 
@@ -1438,6 +1546,7 @@ class MultiMotionCommand(CommandTerm):
   def _resample_command(self, env_ids: torch.Tensor):
     if len(env_ids) == 0:
       return
+    self._invalidate_reference_cache()
     self._stage_pre_resample_adaptive_stats(env_ids)
     motion_indices = torch.randint(
       0,
@@ -1561,6 +1670,7 @@ class MultiMotionCommand(CommandTerm):
       self._accumulate_current_adaptive_sampling_stats()
 
     self.time_steps += 1
+    self._invalidate_reference_cache()
     env_ids = torch.where(self.time_steps >= self.motion_length)[0]
     if env_ids.numel() > 0:
       self._resample_command(env_ids)
@@ -1718,6 +1828,8 @@ class MultiMotionCommandCfg(CommandTermCfg):
   # Ref Motion: Future/History steps configuration for N-step lookahead
   future_steps: int = 5  # 1
   history_steps: int = 5  # 0
+  reference_cache_enabled: bool = True
+  reference_cache_steps: dict[str, tuple[int, ...]] | None = None
 
   adaptive_uniform_ratio: float = 0.1
   adaptive_bin_width_s: float = 1.0

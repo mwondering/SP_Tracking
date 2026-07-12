@@ -48,12 +48,29 @@ def test_packaged_hydra_config_composes() -> None:
   assert prepared.env.scene.num_envs == 8
 
 
-def test_nonfinite_physics_tracer_is_enabled_only_for_sp_task() -> None:
+def test_nonfinite_physics_tracer_is_opt_in_for_sp_task() -> None:
+  sp_cfg = _compose("task=tracking_bfm_sp")
+  baseline_cfg = _compose("task=tracking_bfm")
+  debug_cfg = _compose(
+    "task=tracking_bfm_sp", "task.debug_nonfinite_state=true"
+  )
+
+  assert sp_cfg.task.debug_nonfinite_state is False
+  assert baseline_cfg.task.get("debug_nonfinite_state", False) is False
+  assert debug_cfg.task.debug_nonfinite_state is True
+
+
+def test_reference_cache_defaults_and_sp_step_groups() -> None:
   sp_cfg = _compose("task=tracking_bfm_sp")
   baseline_cfg = _compose("task=tracking_bfm")
 
-  assert sp_cfg.task.debug_nonfinite_state is True
-  assert baseline_cfg.task.get("debug_nonfinite_state", False) is False
+  assert baseline_cfg.task.command.command.reference_cache_enabled is True
+  assert baseline_cfg.task.command.command.reference_cache_steps is None
+  assert sp_cfg.task.command.command.reference_cache_enabled is True
+  assert tuple(sp_cfg.task.command.command.reference_cache_steps.joint_vel) == (0,)
+  assert tuple(
+    sp_cfg.task.command.command.reference_cache_steps.body_lin_vel_w
+  ) == (-8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 20)
 
 
 def test_root_conf_directory_is_not_a_second_config_source() -> None:

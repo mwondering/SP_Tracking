@@ -27,6 +27,8 @@ command:
   joint_position_range: [-0.1, 0.1]
   future_steps: 1
   history_steps: 0
+  reference_cache_enabled: true
+  reference_cache_steps: null
   adaptive_uniform_ratio: 0.1
   adaptive_bin_width_s: 1.0
   adaptive_bin_width_steps: null
