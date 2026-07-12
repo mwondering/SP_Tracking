@@ -718,6 +718,29 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
       begin_iteration(iteration)
     _bootstrap_debug(f"after begin_adaptive_sampling_iteration iteration={iteration}")
 
+  def _record_policy_action_mean(self) -> None:
+    """Expose the sampled policy's mean to action-history observations.
+
+    RSL-RL keeps the distribution mean on the actor after ``act``.  The SP
+    action term opts into this hook through ``prev_action_obs: mean``; other
+    action terms simply do not implement ``record_policy_mean``.
+    """
+    actor = getattr(self.alg, "actor", None)
+    mean = getattr(actor, "output_mean", None)
+    if not isinstance(mean, torch.Tensor):
+      return
+    action_manager = getattr(self.env.unwrapped, "action_manager", None)
+    get_term = getattr(action_manager, "get_term", None)
+    if not callable(get_term):
+      return
+    try:
+      action_term = get_term("joint_pos")
+    except KeyError:
+      return
+    record_mean = getattr(action_term, "record_policy_mean", None)
+    if callable(record_mean):
+      record_mean(mean)
+
   def _write_large_dataset_snapshot(self, iteration: int) -> None:
     unwrapped_env = getattr(self.env, "unwrapped", None)
     command_manager = getattr(unwrapped_env, "command_manager", None)
@@ -878,6 +901,7 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
           if step_idx == 0 or step_idx == num_steps_per_env - 1:
             _bootstrap_debug(f"iteration {it}: before alg.act step={step_idx}")
           actions = self.alg.act(obs)
+          self._record_policy_action_mean()
           if self.cfg.get("check_for_nan", True):
             action_diagnostics = _format_nonfinite_action_diagnostics(
               self.env, actions

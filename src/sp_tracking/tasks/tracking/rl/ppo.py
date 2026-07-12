@@ -23,6 +23,7 @@ class SparseTrackSplitLrPPO(PPO):
     *args,
     actor_learning_rate: float | None = None,
     critic_learning_rate: float | None = None,
+    clamp_rewards_min: float | None = None,
     learning_rate: float = 0.001,
     optimizer: str = "adam",
     **kwargs,
@@ -37,10 +38,12 @@ class SparseTrackSplitLrPPO(PPO):
       **kwargs,
     )
     if actor_learning_rate is None or critic_learning_rate is None:
+      self.clamp_rewards_min = clamp_rewards_min
       return
 
     self.actor_learning_rate = float(actor_learning_rate)
     self.critic_learning_rate = float(critic_learning_rate)
+    self.clamp_rewards_min = clamp_rewards_min
     self.learning_rate = self.actor_learning_rate
     self.optimizer = resolve_optimizer(optimizer)(
       [
@@ -48,6 +51,12 @@ class SparseTrackSplitLrPPO(PPO):
         {"params": self.critic.parameters(), "lr": self.critic_learning_rate},
       ]
     )
+
+  def process_env_step(self, obs, rewards, dones, extras) -> None:
+    """Optionally reproduce motion_tracking's non-negative reward signal."""
+    if self.clamp_rewards_min is not None:
+      rewards = rewards.clamp_min(float(self.clamp_rewards_min))
+    return super().process_env_step(obs, rewards, dones, extras)
 
   def _set_learning_rate(self, lr: float) -> None:
     if hasattr(self, "actor_learning_rate") and hasattr(self, "critic_learning_rate"):

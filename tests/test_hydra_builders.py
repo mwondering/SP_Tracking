@@ -4,7 +4,7 @@ import yaml
 from hydra import compose, initialize_config_module
 from mjlab.asset_zoo.robots import G1_ACTION_SCALE
 
-from sp_tracking.config.build_agent import build_agent_cfg
+from sp_tracking.config.build_agent import build_agent_cfg, serialize_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
   MotionCommandCfg as LargeDatasetMotionCommandCfg,
@@ -54,11 +54,17 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert isinstance(env_cfg.commands["motion"], LargeDatasetMotionCommandCfg)
   assert env_cfg.commands["motion"].history_steps == 0
   assert env_cfg.commands["motion"].future_steps == 1
-  assert list(env_cfg.observations["actor"].terms.keys())[0] == "boot_indicator_state_obs"
+  assert list(env_cfg.observations) == ["policy", "priv", "priv_critic"]
+  assert list(env_cfg.observations["policy"].terms.keys())[0] == "boot_indicator_state_obs"
+  assert env_cfg.commands["motion"].rewind.enabled is True
+  assert env_cfg.commands["motion"].rewind.failure_probability == 0.4
+  assert env_cfg.commands["motion"].adaptive_sampling.random_probability == 0.4
+  assert env_cfg.commands["motion"].adaptive_sampling.strategy == "branch"
   assert "root_pos_tracking" in env_cfg.rewards
   assert "body_z_termination" in env_cfg.terminations
   assert env_cfg.commands["motion"].motion_type == "mujoco"
   assert env_cfg.commands["motion"].fk_from_joint_pos is True
+  assert env_cfg.commands["motion"].termination_warmup_steps == 5
   assert type(env_cfg.actions["joint_pos"]).__name__ == "MotionTrackingJointPositionActionCfg"
   assert [sensor.name for sensor in env_cfg.scene.sensors] == ["contact_forces"]
   assert env_cfg.sim.nconmax == 200
@@ -80,6 +86,7 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert env_cfg.actions["joint_pos"].torque_limit_scale_range == (4.0, 1.0)
   assert env_cfg.actions["joint_pos"].raw_action_clip == 10.0
   assert env_cfg.actions["joint_pos"].boot_delay_steps == 2
+  assert env_cfg.actions["joint_pos"].curriculum_mode == "full"
   assert set(env_cfg.events) == {
     "perturb_body_com",
     "perturb_body_materials",
@@ -93,6 +100,7 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
     {"push_robot", "base_com", "base_mass", "encoder_bias", "foot_friction"}
   )
   assert "motion_tracking_progress" in env_cfg.curriculum
+  assert env_cfg.metrics["substep_tracking_cache"].per_substep is True
 
 
 def test_sp_variant_does_not_inherit_tracking_bfm_task_yaml() -> None:
@@ -118,17 +126,38 @@ def test_sp_variant_supports_multimotion_command_override() -> None:
   assert env_cfg.commands["motion"].sampling_mode == "adaptive"
 
 
+def test_sp_rewind_is_yaml_switchable() -> None:
+  cfg = _compose("task=tracking_bfm_sp", "task.command.command.rewind.enabled=false")
+
+  env_cfg = build_env_cfg(cfg.task)
+
+  assert env_cfg.commands["motion"].rewind.enabled is False
+
+
+def test_sp_observation_module_adds_its_contact_sensor_in_a_mixed_ablation() -> None:
+  cfg = _compose("task=tracking_bfm", "task/obs=sp_tracking")
+
+  env_cfg = build_env_cfg(cfg.task)
+
+  # The old reward still needs self-collision, while SP observations need feet
+  # contacts.  Sensor selection follows active modules rather than task name.
+  assert [sensor.name for sensor in env_cfg.scene.sensors] == [
+    "contact_forces",
+    "self_collision",
+  ]
+
+
 def test_observation_nan_policy_is_hydra_configurable() -> None:
   cfg = _compose(
     "task=tracking_bfm_sp",
-    "++task.obs.observations.actor.nan_policy=error",
-    "++task.obs.observations.actor.nan_check_per_term=true",
+    "++task.obs.observations.policy.nan_policy=error",
+    "++task.obs.observations.policy.nan_check_per_term=true",
   )
 
   env_cfg = build_env_cfg(cfg.task)
 
-  assert env_cfg.observations["actor"].nan_policy == "error"
-  assert env_cfg.observations["actor"].nan_check_per_term is True
+  assert env_cfg.observations["policy"].nan_policy == "error"
+  assert env_cfg.observations["policy"].nan_check_per_term is True
 
 
 def test_tracking_bfm_keeps_original_events_and_action() -> None:
@@ -233,3 +262,14 @@ def test_agent_cfg_matches_tracking_bfm_defaults() -> None:
   assert agent_cfg.num_steps_per_env == 24
   assert agent_cfg.actor.hidden_dims == (2048, 2048, 1024, 1024, 512, 256, 128)
   assert agent_cfg.algorithm.learning_rate == 1.0e-3
+
+
+def test_agent_serialization_drops_irrelevant_mlp_constructor_fields() -> None:
+  cfg = _compose("task=tracking_bfm_sp")
+
+  agent_cfg = build_agent_cfg(cfg.agent)
+  serialized = serialize_agent_cfg(agent_cfg)
+
+  assert serialized["actor"]["hidden_dims"] == (1024, 1024, 512)
+  assert "cnn_cfg" not in serialized["actor"]
+  assert "rnn_hidden_dim" not in serialized["critic"]

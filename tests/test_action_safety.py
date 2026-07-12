@@ -47,6 +47,19 @@ def test_motion_tracking_action_clamps_raw_policy_action() -> None:
   assert action._substep == 0
 
 
+def test_motion_tracking_full_curriculum_matches_student_finetune_mode() -> None:
+  action = object.__new__(MotionTrackingJointPositionAction)
+  action.cfg = SimpleNamespace(curriculum_mode="full")
+  action.max_delay = 2
+  action.delay_probs = torch.zeros(3)
+  action._schedule_torque_limit = lambda progress: progress
+
+  state = action.step_schedule(progress=0.0)
+
+  assert torch.allclose(action.delay_probs, torch.full((3,), 1.0 / 3.0))
+  assert state["torque_limit_scale"] == 1.0
+
+
 def test_motion_tracking_action_holds_boot_target_for_two_substeps() -> None:
   action = object.__new__(MotionTrackingJointPositionAction)
   action.cfg = SimpleNamespace(boot_delay_steps=2, clip=None)

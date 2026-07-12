@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import torch
 
@@ -19,6 +20,18 @@ class MotionTrackingJointPositionActionCfg(JointPositionActionCfg):
   torque_limit_progress_range: tuple[float, float] = (0.0, 0.8)
   raw_action_clip: float | None = None
   boot_delay_steps: int = 0
+  # ``full`` matches motion_tracking's student/finetune behavior: delay is
+  # sampled uniformly from its full range and torque limits immediately use
+  # their final scale.  ``progressive`` preserves the existing curriculum.
+  curriculum_mode: Literal["progressive", "full"] = "progressive"
+  # The reference task observes distribution means for previous actions while
+  # keeping sampled actions for the action-rate penalty.  Defaults retain the
+  # pre-existing behaviour for non-SP users of this reusable action term.
+  prev_action_obs: Literal["sampled", "mean"] = "sampled"
+  action_rate_source: Literal["sampled", "mean"] = "sampled"
+  # Optional policy-facing order.  Simulator joint storage remains in MuJoCo
+  # XML order; this only changes the action vector interface.
+  joint_name_order: tuple[str, ...] | None = None
 
   def build(self, env: "ManagerBasedRlEnv") -> "MotionTrackingJointPositionAction":
     return MotionTrackingJointPositionAction(self, env)
@@ -29,6 +42,7 @@ class MotionTrackingJointPositionAction(JointPositionAction):
 
   def __init__(self, cfg: MotionTrackingJointPositionActionCfg, env: "ManagerBasedRlEnv"):
     super().__init__(cfg=cfg, env=env)
+    self._apply_joint_name_order()
     if not isinstance(self._offset, torch.Tensor):
       self._offset = torch.full_like(self._processed_actions, float(self._offset))
     self._default_offset = self._offset.clone()
@@ -47,6 +61,7 @@ class MotionTrackingJointPositionAction(JointPositionAction):
       dtype=torch.float32,
       device=self.device,
     )
+    self._action_mean_history = torch.zeros_like(self._action_history)
     self.delay = torch.zeros((self.num_envs, 1), dtype=torch.long, device=self.device)
     self.delay_probs = torch.zeros(max_delay_steps + 1, dtype=torch.float32, device=self.device)
     self.boot_delay = torch.zeros(
@@ -64,11 +79,38 @@ class MotionTrackingJointPositionAction(JointPositionAction):
     self._torque_limit_scale: float | None = None
     self.step_schedule(0.0, None)
 
+  def _apply_joint_name_order(self) -> None:
+    """Permute action tensors into an optional canonical joint order."""
+    ordered_names = self.cfg.joint_name_order
+    if ordered_names is None:
+      return
+    ordered_names = tuple(ordered_names)
+    target_names = tuple(self._target_names)
+    if set(ordered_names) != set(target_names) or len(ordered_names) != len(target_names):
+      raise ValueError(
+        "joint_name_order must contain every actuated joint exactly once; "
+        f"expected={target_names}, got={ordered_names}"
+      )
+    permutation = torch.as_tensor(
+      [target_names.index(name) for name in ordered_names],
+      dtype=torch.long,
+      device=self.device,
+    )
+    self._target_ids = self._target_ids[permutation]
+    self._target_names = list(ordered_names)
+    for name in ("_raw_actions", "_processed_actions", "_offset", "_scale"):
+      value = getattr(self, name)
+      if isinstance(value, torch.Tensor):
+        setattr(self, name, value.index_select(-1, permutation))
+    if hasattr(self, "_clip"):
+      self._clip = self._clip.index_select(1, permutation)
+
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     if env_ids is None:
       env_ids = slice(None)
     super().reset(env_ids)
     self._action_history[env_ids] = 0.0
+    self._action_mean_history[env_ids] = 0.0
     self.applied_action[env_ids] = 0.0
     self.boot_delay[env_ids] = 0
     self._substep = 0
@@ -92,25 +134,61 @@ class MotionTrackingJointPositionAction(JointPositionAction):
     self.boot_delay[env_ids] = max(int(self.cfg.boot_delay_steps), 0)
 
   def get_recent_actions(self, steps: int) -> torch.Tensor:
+    return self._recent_actions_from(self._action_history, steps)
+
+  def _recent_actions_from(self, history: torch.Tensor, steps: int) -> torch.Tensor:
     if steps <= self._history_len:
-      return self._action_history[:, :steps]
+      return history[:, :steps]
     pad = torch.zeros(
       (self.num_envs, steps - self._history_len, self.action_dim),
-      dtype=self._action_history.dtype,
+      dtype=history.dtype,
       device=self.device,
     )
-    return torch.cat((self._action_history, pad), dim=1)
+    return torch.cat((history, pad), dim=1)
+
+  def record_policy_mean(self, mean_actions: torch.Tensor) -> None:
+    """Store the policy distribution mean for mean-based history consumers."""
+    if self.cfg.prev_action_obs != "mean" and self.cfg.action_rate_source != "mean":
+      return
+    if mean_actions.shape != self._raw_actions.shape:
+      raise ValueError(
+        "Policy mean action shape does not match motion-tracking action shape: "
+        f"{tuple(mean_actions.shape)} != {tuple(self._raw_actions.shape)}"
+      )
+    mean_actions = mean_actions.detach()
+    if self.cfg.raw_action_clip is not None:
+      mean_actions = mean_actions.clamp(
+        min=-float(self.cfg.raw_action_clip), max=float(self.cfg.raw_action_clip)
+      )
+    self._action_mean_history = torch.roll(
+      self._action_mean_history, shifts=1, dims=1
+    )
+    self._action_mean_history[:, 0] = mean_actions
 
   def get_recent_action_obs(self, steps: int) -> torch.Tensor:
-    return self.get_recent_actions(steps)
+    history = (
+      self._action_mean_history
+      if self.cfg.prev_action_obs == "mean"
+      else self._action_history
+    )
+    return self._recent_actions_from(history, steps)
 
   def get_recent_action_rate_actions(self, steps: int) -> torch.Tensor:
-    return self.get_recent_actions(steps)
+    history = (
+      self._action_mean_history
+      if self.cfg.action_rate_source == "mean"
+      else self._action_history
+    )
+    return self._recent_actions_from(history, steps)
 
   def step_schedule(self, progress: float, iters: int | None = None) -> dict[str, float]:
     del iters
-    self._schedule_delay(progress)
-    scale = self._schedule_torque_limit(progress)
+    if self.cfg.curriculum_mode == "full":
+      self.delay_probs.fill_(1.0 / float(self.max_delay + 1))
+      scale = self._schedule_torque_limit(1.0)
+    else:
+      self._schedule_delay(progress)
+      scale = self._schedule_torque_limit(progress)
     return {
       "progress": float(progress),
       "torque_limit_scale": float(scale),

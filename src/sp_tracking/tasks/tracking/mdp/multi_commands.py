@@ -33,6 +33,25 @@ _DESIRED_FRAME_COLORS = ((1.0, 0.5, 0.5), (0.5, 1.0, 0.5), (0.5, 0.5, 1.0))
 _EXTRA_REFERENCE_GHOST_COLOR = (1.0, 0.45, 0.1, 0.45)
 
 
+@dataclass(kw_only=True)
+class AdaptiveSamplingCfg:
+  """Optional structured controls layered on legacy adaptive sampling."""
+
+  # ``None`` uses ``adaptive_uniform_ratio`` for backward compatibility.
+  random_probability: float | None = None
+  # ``mixture`` preserves historical probability mixing.  ``branch`` samples
+  # a per-reset random/failure branch, matching motion_tracking-SP's ablation.
+  strategy: Literal["mixture", "branch"] = "mixture"
+
+
+@dataclass(kw_only=True)
+class RewindCfg:
+  """Failure-only reset rewind policy."""
+
+  enabled: bool = False
+  failure_probability: float = 0.4
+
+
 def apply_reset_ground_clearance(
   root_pos: torch.Tensor,
   body_pos_w: torch.Tensor,
@@ -248,6 +267,19 @@ def _select_or_fk_body_fields(
   body_indexes = torch.as_tensor(body_indexes, dtype=torch.long, device=body_pos_w.device)
   if body_indexes.numel() == 0:
     raise ValueError("body_indexes cannot be empty")
+  if fk_from_joint_pos:
+    if fk_helper is None:
+      raise ValueError("fk_helper is required when fk_from_joint_pos is enabled")
+    # SP requests FK explicitly so body fields are derived from the same joint
+    # reference used by the original motion_tracking dataset, even when a
+    # legacy NPZ happens to carry compatible body arrays.
+    fk = fk_helper.expand_motion(
+      root_pos_w=body_pos_w[:, 0, :],
+      root_quat_w=body_quat_w[:, 0, :],
+      joint_pos=joint_pos,
+      fps=fps,
+    )
+    return fk.body_pos_w, fk.body_quat_w, fk.body_lin_vel_w, fk.body_ang_vel_w
   if int(body_indexes.max().item()) < int(body_pos_w.shape[1]):
     return (
       body_pos_w[:, body_indexes, :],
@@ -255,23 +287,12 @@ def _select_or_fk_body_fields(
       body_lin_vel_w[:, body_indexes, :],
       body_ang_vel_w[:, body_indexes, :],
     )
-  if not fk_from_joint_pos:
-    return (
-      body_pos_w[:, body_indexes, :],
-      body_quat_w[:, body_indexes, :],
-      body_lin_vel_w[:, body_indexes, :],
-      body_ang_vel_w[:, body_indexes, :],
-    )
-  if fk_helper is None:
-    raise ValueError("fk_helper is required when fk_from_joint_pos is enabled")
-
-  fk = fk_helper.expand_motion(
-    root_pos_w=body_pos_w[:, 0, :],
-    root_quat_w=body_quat_w[:, 0, :],
-    joint_pos=joint_pos,
-    fps=fps,
+  return (
+    body_pos_w[:, body_indexes, :],
+    body_quat_w[:, body_indexes, :],
+    body_lin_vel_w[:, body_indexes, :],
+    body_ang_vel_w[:, body_indexes, :],
   )
-  return fk.body_pos_w, fk.body_quat_w, fk.body_lin_vel_w, fk.body_ang_vel_w
 
 
 class MotionLoader:
@@ -616,6 +637,7 @@ class MultiMotionCommand(CommandTerm):
     self.motion_length = torch.zeros(
       self.num_envs, dtype=torch.long, device=self.device
     )
+    self._initialize_motion_tracking_state()
 
     self.body_pos_relative_w = torch.zeros(
       self.num_envs, len(cfg.body_names), 3, device=self.device
@@ -737,6 +759,205 @@ class MultiMotionCommand(CommandTerm):
     )
     self._initialize_reference_cache()
 
+  def _initialize_motion_tracking_state(self) -> None:
+    """Allocate optional reference-frame and one-stage SP state.
+
+    Both the in-memory and large-dataset commands call this helper, which keeps
+    the SP preset decoupled from the data-loader implementation.
+    """
+    self.motion_origin_offset_w = torch.zeros(
+      (self.num_envs, 3), dtype=torch.float32, device=self.device
+    )
+    self.boot_indicator = torch.zeros(
+      (self.num_envs, 1), dtype=torch.float32, device=self.device
+    )
+
+    feet_names = tuple(self.cfg.feet_standing_body_names)
+    if feet_names:
+      missing = [name for name in feet_names if name not in self.cfg.body_names]
+      if missing:
+        raise ValueError(
+          "feet_standing_body_names must be included in command body_names; "
+          f"missing={missing}"
+        )
+      feet_ids = [self.cfg.body_names.index(name) for name in feet_names]
+      self._feet_motion_ids = torch.as_tensor(
+        feet_ids, dtype=torch.long, device=self.device
+      )
+    else:
+      self._feet_motion_ids = torch.empty(0, dtype=torch.long, device=self.device)
+    self.feet_standing = torch.zeros(
+      (self.num_envs, int(self._feet_motion_ids.numel())),
+      dtype=torch.bool,
+      device=self.device,
+    )
+
+    self.reward_root_history_len = max(
+      int(round(1.0 / float(self._env.step_dt))), 1
+    )
+    self.reward_root_ref_xy_history_w = torch.zeros(
+      (self.num_envs, self.reward_root_history_len, 2),
+      dtype=torch.float32,
+      device=self.device,
+    )
+    self.reward_root_actual_xy_history_w = torch.zeros_like(
+      self.reward_root_ref_xy_history_w
+    )
+    self._reward_root_history_slot = torch.zeros(
+      self.num_envs, dtype=torch.long, device=self.device
+    )
+    self.reward_root_pos_w = torch.zeros(
+      (self.num_envs, 3), dtype=torch.float32, device=self.device
+    )
+    self.reward_root_quat_w = torch.zeros(
+      (self.num_envs, 4), dtype=torch.float32, device=self.device
+    )
+    self.reward_root_quat_w[:, 0] = 1.0
+    self._shared_joint_observation_cache: dict[tuple[str, float], torch.Tensor] = {}
+
+  def _clear_shared_joint_observation_cache(self) -> None:
+    cache = getattr(self, "_shared_joint_observation_cache", None)
+    if isinstance(cache, dict):
+      cache.clear()
+
+  def _shared_noisy_joint_observation(
+    self, field_name: Literal["joint_pos", "joint_vel"], noise_std: float
+  ) -> torch.Tensor:
+    source = getattr(self.robot.data, field_name)
+    std = max(float(noise_std), 0.0)
+    if std <= 0.0:
+      return source
+    key = (field_name, std)
+    cached = self._shared_joint_observation_cache.get(key)
+    if cached is None:
+      cached = source + (torch.rand_like(source) * 2.0 - 1.0) * std
+      self._shared_joint_observation_cache[key] = cached
+    return cached
+
+  def get_shared_noisy_joint_pos(self, noise_std: float) -> torch.Tensor:
+    return self._shared_noisy_joint_observation("joint_pos", noise_std)
+
+  def get_shared_noisy_joint_vel(self, noise_std: float) -> torch.Tensor:
+    return self._shared_noisy_joint_observation("joint_vel", noise_std)
+
+  def _set_motion_origin_offset(self, env_ids: torch.Tensor) -> None:
+    if env_ids.numel() == 0:
+      return
+    self.motion_origin_offset_w[env_ids] = 0.0
+    if not self.cfg.motion_origin_recenter:
+      return
+    raw_body_pos = self._gather_motion_field(
+      "body_pos_w", self.motion_idx[env_ids], self.time_steps[env_ids]
+    )
+    self.motion_origin_offset_w[env_ids, :2] = -raw_body_pos[
+      :, self.motion_anchor_body_index, :2
+    ]
+
+  def _apply_motion_origin_offset(
+    self, field_name: str, reference: torch.Tensor
+  ) -> torch.Tensor:
+    if field_name != "body_pos_w" or not getattr(
+      self.cfg, "motion_origin_recenter", False
+    ):
+      return reference
+    return reference + self.motion_origin_offset_w[:, None, None, :].to(
+      dtype=reference.dtype
+    )
+
+  def _reference_root_pos_w(self) -> torch.Tensor:
+    root_pos = self.gather_reference("body_pos_w", (0,))[
+      :, 0, self.motion_anchor_body_index
+    ]
+    return root_pos + self._env.scene.env_origins
+
+  def _reference_root_quat_w(self) -> torch.Tensor:
+    return self.gather_reference("body_quat_w", (0,))[
+      :, 0, self.motion_anchor_body_index
+    ]
+
+  def _reset_motion_tracking_state(
+    self, env_ids: torch.Tensor, actual_root_pos_w: torch.Tensor
+  ) -> None:
+    if env_ids.numel() == 0:
+      return
+    self.boot_indicator[env_ids] = float(max(int(self.cfg.boot_indicator_max), 0))
+    self.feet_standing[env_ids] = False
+    # These buffers implement source-style consecutive-frame termination.
+    # They live on the command because the functional termination terms share
+    # it; clear them on every episode reset just as the source mixin does.
+    for name in (
+      "_body_z_termination_buffer",
+      "_gravity_dir_termination_buffer",
+    ):
+      buffer = getattr(self, name, None)
+      if isinstance(buffer, torch.Tensor):
+        buffer[env_ids] = 0
+    reference_root_pos_w = self._reference_root_pos_w()[env_ids]
+    reference_root_quat_w = self._reference_root_quat_w()[env_ids]
+    self.reward_root_ref_xy_history_w[env_ids] = reference_root_pos_w[:, :2].unsqueeze(1)
+    self.reward_root_actual_xy_history_w[env_ids] = actual_root_pos_w[:, :2].unsqueeze(1)
+    self._reward_root_history_slot[env_ids] = 0
+    self.reward_root_pos_w[env_ids] = reference_root_pos_w
+    self.reward_root_quat_w[env_ids] = reference_root_quat_w
+    if self.cfg.sliding_root_xy_reward:
+      self.reward_root_pos_w[env_ids, :2] = actual_root_pos_w[:, :2]
+
+  def _update_feet_standing(self) -> None:
+    feet_motion_ids = getattr(self, "_feet_motion_ids", None)
+    if not isinstance(feet_motion_ids, torch.Tensor):
+      return
+    feet_cfg = getattr(self.cfg, "feet_standing", {})
+    if feet_motion_ids.numel() == 0 or not feet_cfg:
+      return
+    cfg = feet_cfg
+    required = ("z_enter", "z_exit", "vxy_enter", "vxy_exit", "vz_enter", "vz_exit")
+    missing = [name for name in required if name not in cfg]
+    if missing:
+      raise ValueError(f"feet_standing is missing required values: {missing}")
+    feet_pos = self.gather_reference("body_pos_w", (0,))[:, 0, feet_motion_ids]
+    feet_vel = self.gather_reference("body_lin_vel_w", (0,))[:, 0, feet_motion_ids]
+    root_vel = self.gather_reference("body_lin_vel_w", (0,))[
+      :, 0, self.motion_anchor_body_index
+    ]
+    root_vxy = root_vel[:, :2].norm(dim=-1, keepdim=True).clamp_min(1.0)
+    feet_vxy = feet_vel[..., :2].norm(dim=-1)
+    feet_vz = feet_vel[..., 2].abs()
+    feet_z = feet_pos[..., 2]
+    enter_contact = (
+      (feet_z < float(cfg["z_enter"]))
+      & (feet_vxy < float(cfg["vxy_enter"]) * root_vxy)
+      & (feet_vz < float(cfg["vz_enter"]) * root_vxy)
+    )
+    exit_contact = (
+      (feet_z > float(cfg["z_exit"]))
+      | (feet_vxy > float(cfg["vxy_exit"]) * root_vxy)
+      | (feet_vz > float(cfg["vz_exit"]) * root_vxy)
+    )
+    self.feet_standing[:] = (self.feet_standing & (~exit_contact)) | enter_contact
+
+  def _update_reward_root_target(self) -> None:
+    if not hasattr(self, "reward_root_pos_w"):
+      return
+    reference_root_pos_w = self._reference_root_pos_w()
+    self.reward_root_pos_w[:] = reference_root_pos_w
+    self.reward_root_quat_w[:] = self._reference_root_quat_w()
+    if not getattr(self.cfg, "sliding_root_xy_reward", False):
+      return
+    env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
+    history_slot = self._reward_root_history_slot
+    history_ref_xy_w = self.reward_root_ref_xy_history_w[env_ids, history_slot]
+    history_actual_xy_w = self.reward_root_actual_xy_history_w[env_ids, history_slot]
+    expected_xy_w = history_actual_xy_w + (
+      reference_root_pos_w[:, :2] - history_ref_xy_w
+    )
+    self.reward_root_pos_w[:, :2] = expected_xy_w
+    self.reward_root_ref_xy_history_w[env_ids, history_slot] = reference_root_pos_w[:, :2]
+    self.reward_root_actual_xy_history_w[env_ids, history_slot] = (
+      self.robot.data.root_link_pos_w[:, :2]
+    )
+    self._reward_root_history_slot.add_(1)
+    self._reward_root_history_slot.remainder_(self.reward_root_history_len)
+
   def _configured_reference_steps(self) -> tuple[int, ...]:
     offsets = []
     if self.cfg.history_steps > 0:
@@ -767,6 +988,7 @@ class MultiMotionCommand(CommandTerm):
     self._reference_cache_build_count = 0
 
   def _invalidate_reference_cache(self) -> None:
+    self._clear_shared_joint_observation_cache()
     if not hasattr(self, "_reference_cache"):
       return
     self._reference_cache.clear()
@@ -812,7 +1034,10 @@ class MultiMotionCommand(CommandTerm):
         relative_steps, device=self.device, dtype=torch.long
       )
       absolute_steps = self.time_steps.unsqueeze(1) + offset_tensor.unsqueeze(0)
-      return self._gather_motion_field(field_name, self.motion_idx, absolute_steps)
+      return self._apply_motion_origin_offset(
+        field_name,
+        self._gather_motion_field(field_name, self.motion_idx, absolute_steps),
+      )
 
     cached_steps = self._reference_cache_field_steps.get(field_name, ())
     cached_indices = {step: index for index, step in enumerate(cached_steps)}
@@ -821,14 +1046,17 @@ class MultiMotionCommand(CommandTerm):
         relative_steps, device=self.device, dtype=torch.long
       )
       absolute_steps = self.time_steps.unsqueeze(1) + offset_tensor.unsqueeze(0)
-      return self._gather_motion_field(field_name, self.motion_idx, absolute_steps)
+      return self._apply_motion_origin_offset(
+        field_name,
+        self._gather_motion_field(field_name, self.motion_idx, absolute_steps),
+      )
 
     if not self._reference_cache_valid:
       self._build_reference_cache()
     slice_key = (field_name, relative_steps)
     cached_slice = self._reference_cache_slices.get(slice_key)
     if cached_slice is not None:
-      return cached_slice
+      return self._apply_motion_origin_offset(field_name, cached_slice)
 
     field = self._reference_cache[field_name]
     if relative_steps == cached_steps:
@@ -844,7 +1072,7 @@ class MultiMotionCommand(CommandTerm):
       )
       result = field.index_select(1, indices)
     self._reference_cache_slices[slice_key] = result
-    return result
+    return self._apply_motion_origin_offset(field_name, result)
 
   def _build_fk_helper(self) -> MotionFKHelper | None:
     if not self.cfg.fk_from_joint_pos:
@@ -903,6 +1131,9 @@ class MultiMotionCommand(CommandTerm):
   def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
     extras = super().reset(env_ids)
     if isinstance(env_ids, torch.Tensor):
+      self._clear_shared_joint_observation_cache()
+      self.boot_indicator[env_ids] = float(max(int(self.cfg.boot_indicator_max), 0))
+      self.feet_standing[env_ids] = False
       for name in ("_body_z_termination_buffer", "_gravity_dir_termination_buffer"):
         buffer = getattr(self, name, None)
         if isinstance(buffer, torch.Tensor):
@@ -1149,6 +1380,7 @@ class MultiMotionCommand(CommandTerm):
     valid_motion_ids: torch.Tensor,
     valid_bin_ids: torch.Tensor,
     num_motions: int,
+    random_probability: float | None = None,
   ) -> tuple[torch.Tensor, torch.Tensor]:
     failure_rate = self._compute_failure_rate()
     valid_failure_rate = failure_rate[valid_motion_ids, valid_bin_ids]
@@ -1174,7 +1406,9 @@ class MultiMotionCommand(CommandTerm):
     uniform_probabilities = torch.full_like(
       failure_based_probabilities, 1.0 / float(max(len(valid_motion_ids), 1))
     )
-    uniform_ratio = float(max(0.0, min(1.0, self.cfg.adaptive_uniform_ratio)))
+    uniform_ratio = self._adaptive_random_probability(
+      random_probability=random_probability
+    )
     probabilities = (
       1.0 - uniform_ratio
     ) * failure_based_probabilities + uniform_ratio * uniform_probabilities
@@ -1184,6 +1418,16 @@ class MultiMotionCommand(CommandTerm):
       probabilities, valid_motion_ids, num_motions
     )
     return probabilities, valid_failure_rate
+
+  def _adaptive_random_probability(
+    self, *, random_probability: float | None = None
+  ) -> float:
+    if random_probability is None:
+      configured = self.cfg.adaptive_sampling.random_probability
+      random_probability = (
+        self.cfg.adaptive_uniform_ratio if configured is None else configured
+      )
+    return float(max(0.0, min(1.0, float(random_probability))))
 
   def _uniform_baseline_probabilities(
     self, motion_indices: torch.Tensor
@@ -1462,6 +1706,7 @@ class MultiMotionCommand(CommandTerm):
     )
 
   def _adaptive_sampling(self, env_ids: torch.Tensor):
+    random_probability = self._adaptive_random_probability()
     sampling_probabilities, valid_failure_rate = (
       self._compute_pair_sampling_probabilities(
         self.valid_motion_ids,
@@ -1469,9 +1714,31 @@ class MultiMotionCommand(CommandTerm):
         self.motion.num_files,
       )
     )
-    sampled_pair_indices = torch.multinomial(
-      sampling_probabilities, len(env_ids), replacement=True
-    )
+    if self.cfg.adaptive_sampling.strategy == "branch":
+      failure_probabilities, _ = self._compute_pair_sampling_probabilities(
+        self.valid_motion_ids,
+        self.valid_bin_ids,
+        self.motion.num_files,
+        random_probability=0.0,
+      )
+      use_random = torch.rand(len(env_ids), device=self.device) < random_probability
+      sampled_pair_indices = torch.empty(
+        len(env_ids), dtype=torch.long, device=self.device
+      )
+      random_count = int(use_random.sum().item())
+      if random_count > 0:
+        sampled_pair_indices[use_random] = torch.randint(
+          len(self.valid_motion_ids), (random_count,), device=self.device
+        )
+      failure_count = int((~use_random).sum().item())
+      if failure_count > 0:
+        sampled_pair_indices[~use_random] = torch.multinomial(
+          failure_probabilities, failure_count, replacement=True
+        )
+    else:
+      sampled_pair_indices = torch.multinomial(
+        sampling_probabilities, len(env_ids), replacement=True
+      )
     sampled_motion_indices = self.valid_motion_ids[sampled_pair_indices]
     sampled_bin_indices = self.valid_bin_ids[sampled_pair_indices]
 
@@ -1543,33 +1810,45 @@ class MultiMotionCommand(CommandTerm):
       )
       self.metrics["sampling_num_concentrated_bins"][env_ids] = 0.0
 
-  def _resample_command(self, env_ids: torch.Tensor):
-    if len(env_ids) == 0:
-      return
+  def _failure_rewind_env_ids(self, env_ids: torch.Tensor) -> torch.Tensor:
+    rewind_cfg = self.cfg.rewind
+    if not rewind_cfg.enabled or env_ids.numel() == 0:
+      return torch.empty(0, dtype=torch.long, device=self.device)
+    termination_manager = getattr(self._env, "termination_manager", None)
+    terminated = getattr(termination_manager, "terminated", None)
+    if not isinstance(terminated, torch.Tensor):
+      return torch.empty(0, dtype=torch.long, device=self.device)
+    failure_mask = terminated[env_ids].clone()
+    # ``terminated`` already excludes configured truncations, but retain this
+    # guard for custom managers and future termination presets.
+    time_outs = getattr(termination_manager, "time_outs", None)
+    if isinstance(time_outs, torch.Tensor):
+      failure_mask &= ~time_outs[env_ids]
+    probability = float(max(0.0, min(1.0, rewind_cfg.failure_probability)))
+    if probability <= 0.0:
+      return torch.empty(0, dtype=torch.long, device=self.device)
+    use_rewind = torch.rand(len(env_ids), device=self.device) < probability
+    return env_ids[failure_mask & use_rewind]
+
+  def _prepare_reset_sampling(self, env_ids: torch.Tensor) -> torch.Tensor:
+    """Record adaptive stats, optionally rewind failures, and return resample IDs."""
     self._invalidate_reference_cache()
     self._stage_pre_resample_adaptive_stats(env_ids)
-    motion_indices = torch.randint(
-      0,
-      self.motion.num_files,
-      (len(env_ids),),
-      device=self.device,
+    rewind_env_ids = self._failure_rewind_env_ids(env_ids)
+    if rewind_env_ids.numel() == 0:
+      return env_ids
+    bin_ids = self._compute_motion_bin_indices(
+      self.time_steps[rewind_env_ids], self.motion_idx[rewind_env_ids]
     )
-    if self.cfg.sampling_mode == "start":
-      self.motion_idx[env_ids] = motion_indices
-      self.motion_length[env_ids] = self.motion.file_lengths[self.motion_idx[env_ids]]
-      self.time_steps[env_ids] = 0
-      print(
-        " ************** [FOR DEBUG] WARNING: All envs time steps is set to start initialization ! ************** "
-      )
+    self.time_steps[rewind_env_ids] = bin_ids * self.bin_width_steps
+    if self.cfg.if_log_metrics and "rewind_reset" in self.metrics:
+      self.metrics["rewind_reset"][rewind_env_ids] = 1.0
+    keep_adaptive = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+    keep_adaptive[rewind_env_ids] = False
+    return env_ids[keep_adaptive[env_ids]]
 
-    elif self.cfg.sampling_mode == "uniform":
-      self.motion_idx[env_ids] = motion_indices
-      self.motion_length[env_ids] = self.motion.file_lengths[self.motion_idx[env_ids]]
-      self._uniform_sampling(env_ids)
-    else:
-      assert self.cfg.sampling_mode == "adaptive"
-      self._adaptive_sampling(env_ids)
-
+  def _reset_robot_to_reference(self, env_ids: torch.Tensor) -> None:
+    """Write a sampled/re-wound reference state to the simulator."""
     body_pos_w = self.body_pos_w
     root_pos = body_pos_w[:, 0].clone()
     root_ori = self.body_quat_w[:, 0].clone()
@@ -1609,12 +1888,11 @@ class MultiMotionCommand(CommandTerm):
 
     joint_pos = self.joint_pos.clone()
     joint_vel = self.joint_vel.clone()
-
     joint_pos += sample_uniform(
       lower=self.cfg.joint_position_range[0],
       upper=self.cfg.joint_position_range[1],
       size=joint_pos.shape,
-      device=joint_pos.device,  # type: ignore
+      device=joint_pos.device,
     )
     soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
     joint_pos[env_ids] = torch.clip(
@@ -1641,13 +1919,36 @@ class MultiMotionCommand(CommandTerm):
       ),
       env_ids=env_ids,
     )
-
     self.robot.clear_state(env_ids=env_ids)
-    # Keep the first PD command aligned with the sampled reset pose. Without
-    # this, the zeroed policy action targets the nominal pose on the first
-    # physics step and can inject a destabilizing torque impulse.
     self.robot.set_joint_position_target(joint_pos[env_ids], env_ids=env_ids)
     self._set_action_boot_target(env_ids, joint_pos[env_ids])
+    self._reset_motion_tracking_state(env_ids, root_pos[env_ids])
+
+  def _resample_command(self, env_ids: torch.Tensor):
+    if len(env_ids) == 0:
+      return
+    sample_env_ids = self._prepare_reset_sampling(env_ids)
+    if sample_env_ids.numel() > 0:
+      motion_indices = torch.randint(
+        0,
+        self.motion.num_files,
+        (len(sample_env_ids),),
+        device=self.device,
+      )
+      if self.cfg.sampling_mode == "start":
+        self.motion_idx[sample_env_ids] = motion_indices
+        self.motion_length[sample_env_ids] = self.motion.file_lengths[motion_indices]
+        self.time_steps[sample_env_ids] = 0
+      elif self.cfg.sampling_mode == "uniform":
+        self.motion_idx[sample_env_ids] = motion_indices
+        self.motion_length[sample_env_ids] = self.motion.file_lengths[motion_indices]
+        self._uniform_sampling(sample_env_ids)
+      else:
+        assert self.cfg.sampling_mode == "adaptive"
+        self._adaptive_sampling(sample_env_ids)
+    self._set_motion_origin_offset(env_ids)
+    self._invalidate_reference_cache()
+    self._reset_robot_to_reference(env_ids)
 
   def _set_action_boot_target(
     self, env_ids: torch.Tensor, joint_pos: torch.Tensor
@@ -1662,6 +1963,9 @@ class MultiMotionCommand(CommandTerm):
       return
     set_boot_target = getattr(action_term, "set_boot_target", None)
     if callable(set_boot_target):
+      target_ids = getattr(action_term, "target_ids", None)
+      if isinstance(target_ids, torch.Tensor):
+        joint_pos = joint_pos.index_select(1, target_ids.to(device=joint_pos.device))
       set_boot_target(env_ids, joint_pos)
 
   def _update_command(self):
@@ -1669,13 +1973,23 @@ class MultiMotionCommand(CommandTerm):
       self._adaptive_sampling_phase = "updating"
       self._accumulate_current_adaptive_sampling_stats()
 
+    boot_indicator = getattr(self, "boot_indicator", None)
+    if isinstance(boot_indicator, torch.Tensor):
+      boot_indicator.sub_(1).clamp_min_(0.0)
     self.time_steps += 1
     self._invalidate_reference_cache()
-    env_ids = torch.where(self.time_steps >= self.motion_length)[0]
+    env_ids = (
+      torch.where(self.time_steps >= self.motion_length)[0]
+      if getattr(self.cfg, "resample_on_motion_end", True)
+      else torch.empty(0, dtype=torch.long, device=self.device)
+    )
     if env_ids.numel() > 0:
       self._resample_command(env_ids)
       # Resampling writes qpos/qvel; refresh derived robot poses before re-anchoring.
       self._env.sim.forward()
+
+    self._update_feet_standing()
+    self._update_reward_root_target()
 
     anchor_pos_w_repeat = self.anchor_pos_w[:, None, :].repeat(
       1, len(self.cfg.body_names), 1
@@ -1816,6 +2130,18 @@ class MultiMotionCommandCfg(CommandTermCfg):
   extra_reference_motion_file: str = ""
   motion_type: Literal["isaaclab", "mujoco"] = "isaaclab"
   fk_from_joint_pos: bool = False
+  # Reference-frame and task-state features are opt-in so existing tracking
+  # tasks retain their legacy behavior.
+  motion_origin_recenter: bool = False
+  sliding_root_xy_reward: bool = False
+  boot_indicator_max: int = 0
+  # Source motion_tracking masks failure terminations during the first few
+  # control steps after reset.  Kept configurable so non-SP users retain the
+  # legacy zero-warmup behavior.
+  termination_warmup_steps: int = 0
+  feet_standing_body_names: tuple[str, ...] = ()
+  feet_standing: dict[str, float] = field(default_factory=dict)
+  resample_on_motion_end: bool = True
   anchor_body_name: str
   body_names: tuple[str, ...]
   pose_range: dict[str, tuple[float, float]] = field(default_factory=dict)
@@ -1832,6 +2158,8 @@ class MultiMotionCommandCfg(CommandTermCfg):
   reference_cache_steps: dict[str, tuple[int, ...]] | None = None
 
   adaptive_uniform_ratio: float = 0.1
+  adaptive_sampling: AdaptiveSamplingCfg = field(default_factory=AdaptiveSamplingCfg)
+  rewind: RewindCfg = field(default_factory=RewindCfg)
   adaptive_bin_width_s: float = 1.0
   adaptive_bin_width_steps: int | None = None
   adaptive_init_num_failures: float = 1.0

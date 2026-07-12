@@ -33,7 +33,7 @@ def _register_task(task_id: str, overrides: list[str] | None = None) -> None:
     task_id=task_id,
     env_cfg=build_env_cfg(cfg.task),
     play_env_cfg=build_env_cfg(play_cfg.task),
-    rl_cfg=build_agent_cfg(cfg.agent),
+    rl_cfg=build_agent_cfg(cfg.agent, cfg.task.get("agent_overrides")),
     runner_cls=MotionTrackingOnPolicyRunner,
   )
 

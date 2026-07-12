@@ -15,7 +15,7 @@ from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from mjlab.utils.gpu import select_gpus
 from mjlab.utils.torch import configure_torch_backends
 
-from sp_tracking.config.build_agent import build_agent_cfg
+from sp_tracking.config.build_agent import build_agent_cfg, serialize_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
 from sp_tracking.tasks.tracking.rl.checkpoints import (
@@ -75,7 +75,7 @@ def _apply_motion_path(env_cfg: ManagerBasedRlEnvCfg, motion_path: str | None) -
 
 def prepare_train_cfg(cfg: DictConfig) -> PreparedTrainCfg:
   env_cfg = build_env_cfg(cfg.task)
-  agent_cfg = build_agent_cfg(cfg.agent)
+  agent_cfg = build_agent_cfg(cfg.agent, cfg.task.get("agent_overrides"))
   seed = int(cfg.get("seed", agent_cfg.seed))
   env_cfg.seed = seed
   agent_cfg.seed = seed
@@ -185,6 +185,8 @@ def run_train(cfg: DictConfig) -> None:
 def _asdict_dataclass(obj: Any) -> dict[str, Any]:
   from dataclasses import asdict
 
+  if isinstance(obj, RslRlOnPolicyRunnerCfg):
+    return serialize_agent_cfg(obj)
   return asdict(obj)
 
 

@@ -1,6 +1,6 @@
 defaults:
-  - task: tracking_bfm
   - agent: tracking_bfm_ppo
+  - task: tracking_bfm
   - _self_
 
 seed: 42

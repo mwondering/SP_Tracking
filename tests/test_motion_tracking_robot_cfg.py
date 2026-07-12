@@ -2,6 +2,7 @@ import pytest
 
 from sp_tracking.assets.robots.g1_motion_tracking import (
   G1_MOTION_TRACKING_ARTICULATION,
+  G1_JOINT_ORDER,
   get_g1_motion_tracking_robot_cfg,
 )
 from sp_tracking.assets.robots.g1_tracking_bfm import (
@@ -36,3 +37,17 @@ def test_motion_tracking_articulation_is_isolated_from_tracking_bfm() -> None:
 
   assert sp_robot.articulation is G1_MOTION_TRACKING_ARTICULATION
   assert baseline_robot.articulation is not G1_MOTION_TRACKING_ARTICULATION
+
+
+def test_motion_tracking_wrapper_matches_reference_initial_state_and_collision() -> None:
+  cfg = get_g1_motion_tracking_robot_cfg()
+
+  assert cfg.init_state.pos == (0.0, 0.0, 0.74)
+  assert cfg.init_state.joint_pos[".*_hip_pitch_joint"] == -0.28
+  assert cfg.collisions[0].condim == 3
+  assert cfg.collisions[0].priority == 1
+  assert cfg.joint_name_order == G1_JOINT_ORDER
+  assert cfg.joint_symmetry_mapping["left_hip_roll_joint"] == (
+    -1,
+    "right_hip_roll_joint",
+  )

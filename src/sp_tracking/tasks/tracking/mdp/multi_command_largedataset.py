@@ -17,11 +17,7 @@ import torch
 import torch.distributed as dist
 
 from mjlab.managers import CommandTerm
-from mjlab.utils.lab_api.math import (
-  quat_from_euler_xyz,
-  quat_mul,
-  sample_uniform,
-)
+from mjlab.utils.lab_api.math import sample_uniform
 
 from .multi_commands import (
   DEFAULT_MOTION_FPS,
@@ -30,8 +26,6 @@ from .multi_commands import (
   MotionLoader,
   MultiMotionCommand,
   MultiMotionCommandCfg,
-  apply_reset_ground_clearance,
-  clamp_reset_joint_velocity,
   extract_motion_fps,
   _select_or_fk_body_fields,
 )
@@ -2063,6 +2057,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     self.motion_length = torch.zeros(
       self.num_envs, dtype=torch.long, device=self.device
     )
+    self._initialize_motion_tracking_state()
     self._initialize_env_motion_assignments()
 
     self.body_pos_relative_w = torch.zeros(
@@ -2769,19 +2764,49 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     )
 
   def _adaptive_sampling(self, env_ids: torch.Tensor):
+    random_probability = self._adaptive_random_probability()
     valid_motion_ids, valid_bin_ids, sampling_probabilities, valid_failure_rate = (
       self.global_bin_pool.compute_active_pair_sampling_probabilities(
         self.active_subset.active_motion_ids,
-        adaptive_uniform_ratio=self.cfg.adaptive_uniform_ratio,
+        adaptive_uniform_ratio=random_probability,
         adaptive_failure_rate_max_over_mean=self.cfg.adaptive_failure_rate_max_over_mean,
         adaptive_sequence_length_agnostic=self.cfg.adaptive_sequence_length_agnostic,
         adaptive_max_prob_per_bin=self.cfg.adaptive_max_prob_per_bin,
         adaptive_max_prob_per_motion=self.cfg.adaptive_max_prob_per_motion,
       )
     )
-    sampled_pair_indices = torch.multinomial(
-      sampling_probabilities, len(env_ids), replacement=True
-    )
+    if self.cfg.adaptive_sampling.strategy == "branch":
+      (
+        _failure_motion_ids,
+        _failure_bin_ids,
+        failure_probabilities,
+        _failure_rates,
+      ) = self.global_bin_pool.compute_active_pair_sampling_probabilities(
+        self.active_subset.active_motion_ids,
+        adaptive_uniform_ratio=0.0,
+        adaptive_failure_rate_max_over_mean=self.cfg.adaptive_failure_rate_max_over_mean,
+        adaptive_sequence_length_agnostic=self.cfg.adaptive_sequence_length_agnostic,
+        adaptive_max_prob_per_bin=self.cfg.adaptive_max_prob_per_bin,
+        adaptive_max_prob_per_motion=self.cfg.adaptive_max_prob_per_motion,
+      )
+      use_random = torch.rand(len(env_ids), device=self.device) < random_probability
+      sampled_pair_indices = torch.empty(
+        len(env_ids), dtype=torch.long, device=self.device
+      )
+      random_count = int(use_random.sum().item())
+      if random_count > 0:
+        sampled_pair_indices[use_random] = torch.randint(
+          len(valid_motion_ids), (random_count,), device=self.device
+        )
+      failure_count = int((~use_random).sum().item())
+      if failure_count > 0:
+        sampled_pair_indices[~use_random] = torch.multinomial(
+          failure_probabilities, failure_count, replacement=True
+        )
+    else:
+      sampled_pair_indices = torch.multinomial(
+        sampling_probabilities, len(env_ids), replacement=True
+      )
     sampled_motion_indices = valid_motion_ids[sampled_pair_indices]
     sampled_bin_indices = valid_bin_ids[sampled_pair_indices]
 
@@ -2865,103 +2890,24 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
   def _resample_command(self, env_ids: torch.Tensor):
     if len(env_ids) == 0:
       return
+    sample_env_ids = self._prepare_reset_sampling(env_ids)
+    if sample_env_ids.numel() > 0:
+      if self.cfg.sampling_mode == "start":
+        motion_indices = self._sample_active_motion_ids(len(sample_env_ids))
+        self.motion_idx[sample_env_ids] = motion_indices
+        self.motion_length[sample_env_ids] = self.motion_store.file_lengths[motion_indices]
+        self.time_steps[sample_env_ids] = 0
+      elif self.cfg.sampling_mode == "uniform":
+        motion_indices = self._sample_active_motion_ids(len(sample_env_ids))
+        self.motion_idx[sample_env_ids] = motion_indices
+        self.motion_length[sample_env_ids] = self.motion_store.file_lengths[motion_indices]
+        self._uniform_sampling(sample_env_ids)
+      else:
+        assert self.cfg.sampling_mode == "adaptive"
+        self._adaptive_sampling(sample_env_ids)
+    self._set_motion_origin_offset(env_ids)
     self._invalidate_reference_cache()
-    self._stage_pre_resample_adaptive_stats(env_ids)
-
-    if self.cfg.sampling_mode == "start":
-      motion_indices = self._sample_active_motion_ids(len(env_ids))
-      self.motion_idx[env_ids] = motion_indices
-      self.motion_length[env_ids] = self.motion_store.file_lengths[motion_indices]
-      self.time_steps[env_ids] = 0
-      print(
-        " ************** [FOR DEBUG] WARNING: All envs time steps is set to start initialization ! ************** "
-      )
-    elif self.cfg.sampling_mode == "uniform":
-      motion_indices = self._sample_active_motion_ids(len(env_ids))
-      self.motion_idx[env_ids] = motion_indices
-      self.motion_length[env_ids] = self.motion_store.file_lengths[motion_indices]
-      self._uniform_sampling(env_ids)
-    else:
-      assert self.cfg.sampling_mode == "adaptive"
-      self._adaptive_sampling(env_ids)
-
-    body_pos_w = self.body_pos_w
-    root_pos = body_pos_w[:, 0].clone()
-    root_ori = self.body_quat_w[:, 0].clone()
-    root_lin_vel = self.body_lin_vel_w[:, 0].clone()
-    root_ang_vel = self.body_ang_vel_w[:, 0].clone()
-    range_list = [
-      self.cfg.pose_range.get(key, (0.0, 0.0))
-      for key in ["x", "y", "z", "roll", "pitch", "yaw"]
-    ]
-    ranges = torch.tensor(range_list, device=self.device)
-    rand_samples = sample_uniform(
-      ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device
-    )
-    orientations_delta = quat_from_euler_xyz(
-      rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5]
-    )
-    root_pos[env_ids] = apply_reset_ground_clearance(
-      root_pos[env_ids],
-      body_pos_w[env_ids],
-      self._env.scene.env_origins[env_ids],
-      rand_samples[:, 0:3],
-      orientations_delta,
-      root_lift_height=self.cfg.reset_root_lift_height,
-      min_body_z=self.cfg.reset_min_body_z,
-    )
-    root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
-    range_list = [
-      self.cfg.velocity_range.get(key, (0.0, 0.0))
-      for key in ["x", "y", "z", "roll", "pitch", "yaw"]
-    ]
-    ranges = torch.tensor(range_list, device=self.device)
-    rand_samples = sample_uniform(
-      ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device
-    )
-    root_lin_vel[env_ids] += rand_samples[:, :3]
-    root_ang_vel[env_ids] += rand_samples[:, 3:]
-
-    joint_pos = self.joint_pos.clone()
-    joint_vel = self.joint_vel.clone()
-
-    joint_pos += sample_uniform(
-      lower=self.cfg.joint_position_range[0],
-      upper=self.cfg.joint_position_range[1],
-      size=joint_pos.shape,
-      device=joint_pos.device,
-    )
-    soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
-    joint_pos[env_ids] = torch.clip(
-      joint_pos[env_ids],
-      soft_joint_pos_limits[:, :, 0],
-      soft_joint_pos_limits[:, :, 1],
-    )
-    joint_vel[env_ids] = clamp_reset_joint_velocity(
-      joint_vel[env_ids], self.cfg.reset_joint_vel_limit
-    )
-
-    self.robot.write_joint_state_to_sim(
-      joint_pos[env_ids], joint_vel[env_ids], env_ids=env_ids
-    )
-    self.robot.write_root_state_to_sim(
-      torch.cat(
-        [
-          root_pos[env_ids],
-          root_ori[env_ids],
-          root_lin_vel[env_ids],
-          root_ang_vel[env_ids],
-        ],
-        dim=-1,
-      ),
-      env_ids=env_ids,
-    )
-    self.robot.clear_state(env_ids=env_ids)
-    # Keep the first PD command aligned with the sampled reset pose. Without
-    # this, the zeroed policy action targets the nominal pose on the first
-    # physics step and can inject a destabilizing torque impulse.
-    self.robot.set_joint_position_target(joint_pos[env_ids], env_ids=env_ids)
-    self._set_action_boot_target(env_ids, joint_pos[env_ids])
+    self._reset_robot_to_reference(env_ids)
 
   def _refresh_active_subset(self, iteration: int) -> None:
     refresh_count = int(self.cfg.subset_refresh_count)
@@ -3014,7 +2960,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       candidate_ids, candidate_probabilities = (
         self.global_bin_pool.compute_motion_sampling_probabilities(
           adaptive_candidate_ids,
-          adaptive_uniform_ratio=self.cfg.adaptive_uniform_ratio,
+          adaptive_uniform_ratio=self._adaptive_random_probability(),
           adaptive_failure_rate_max_over_mean=self.cfg.adaptive_failure_rate_max_over_mean,
           adaptive_sequence_length_agnostic=self.cfg.adaptive_sequence_length_agnostic,
         )

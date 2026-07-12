@@ -12,6 +12,7 @@ from mjlab.envs.mdp import dr
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers.curriculum_manager import CurriculumTermCfg
 from mjlab.managers.event_manager import EventTermCfg
+from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
@@ -35,7 +36,9 @@ from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
   MotionCommandCfg as LargeDatasetMotionCommandCfg,
 )
 from sp_tracking.tasks.tracking.mdp.multi_commands import (
+  AdaptiveSamplingCfg,
   MotionCommandCfg as MultiMotionCommandCfg,
+  RewindCfg,
 )
 
 
@@ -119,6 +122,8 @@ TERMINATION_TERMS = {
   "bad_motion_body_pos_z_only": mdp.bad_motion_body_pos_z_only,
   "body_z_termination": sp_mdp.body_z_termination,
   "gravity_dir_termination": sp_mdp.gravity_dir_termination,
+  "motion_timeout": sp_mdp.motion_timeout,
+  "motion_xy_range_termination": sp_mdp.motion_xy_range_termination,
 }
 
 EVENT_TERMS = {
@@ -133,6 +138,12 @@ EVENT_TERMS = {
 
 CURRICULUM_TERMS = {
   "motion_tracking_progress": sp_randomizations.motion_tracking_progress,
+}
+
+METRICS_TERMS = {
+  # A per-substep sampler shared by SP's contact rewards and uncorrupted joint
+  # histories.  It is opt-in in task YAML, so existing tasks remain unchanged.
+  "substep_tracking_cache": sp_mdp.substep_tracking_cache,
 }
 
 
@@ -261,6 +272,23 @@ def _build_command(cfg: DictConfig):
     "extra_reference_motion_file": str(command_cfg.get("extra_reference_motion_file", "")),
     "motion_type": str(command_cfg.motion_type),
     "fk_from_joint_pos": bool(command_cfg.get("fk_from_joint_pos", False)),
+    "motion_origin_recenter": bool(
+      command_cfg.get("motion_origin_recenter", False)
+    ),
+    "sliding_root_xy_reward": bool(
+      command_cfg.get("sliding_root_xy_reward", False)
+    ),
+    "boot_indicator_max": int(command_cfg.get("boot_indicator_max", 0)),
+    "termination_warmup_steps": int(
+      command_cfg.get("termination_warmup_steps", 0)
+    ),
+    "feet_standing_body_names": _to_tuple(
+      command_cfg.get("feet_standing_body_names")
+    ),
+    "feet_standing": _params(command_cfg.get("feet_standing")),
+    "resample_on_motion_end": bool(
+      command_cfg.get("resample_on_motion_end", True)
+    ),
     "anchor_body_name": str(command_cfg.anchor_body_name),
     "body_names": _to_tuple(command_cfg.body_names),
     "pose_range": _params(command_cfg.get("pose_range")),
@@ -287,6 +315,12 @@ def _build_command(cfg: DictConfig):
       else None
     ),
     "adaptive_uniform_ratio": float(command_cfg.get("adaptive_uniform_ratio", 0.1)),
+    "adaptive_sampling": AdaptiveSamplingCfg(
+      **dict(_to_container(command_cfg.get("adaptive_sampling", {})) or {})
+    ),
+    "rewind": RewindCfg(
+      **dict(_to_container(command_cfg.get("rewind", {})) or {})
+    ),
     "adaptive_bin_width_s": float(command_cfg.get("adaptive_bin_width_s", 1.0)),
     "adaptive_bin_width_steps": _optional_int(
       command_cfg.get("adaptive_bin_width_steps")
@@ -487,6 +521,16 @@ def _build_action(cfg: DictConfig):
       ),
       "raw_action_clip": _optional_float(cfg.action.get("raw_action_clip")),
       "boot_delay_steps": int(cfg.action.get("boot_delay_steps", 0)),
+      "curriculum_mode": str(
+        cfg.action.get("curriculum_mode", "progressive")
+      ),
+      "prev_action_obs": str(cfg.action.get("prev_action_obs", "sampled")),
+      "action_rate_source": str(cfg.action.get("action_rate_source", "sampled")),
+      "joint_name_order": (
+        _to_tuple(cfg.action.joint_name_order)
+        if cfg.action.get("joint_name_order") is not None
+        else None
+      ),
     }
   return {
     "joint_pos": cfg_cls(
@@ -511,9 +555,52 @@ def _build_curriculum(cfg: DictConfig) -> dict[str, CurriculumTermCfg]:
   return terms
 
 
+def _build_metrics(cfg: DictConfig) -> dict[str, MetricsTermCfg]:
+  """Build optional reusable per-step/per-substep task instrumentation."""
+  terms = OrderedDict()
+  for name, term_cfg in cfg.get("metrics", {}).items():
+    if not term_cfg.get("enabled", True):
+      continue
+    terms[str(name)] = MetricsTermCfg(
+      func=METRICS_TERMS[str(term_cfg.term)],
+      params=_params(term_cfg.get("params")),
+      per_substep=bool(term_cfg.get("per_substep", False)),
+      reduce=str(term_cfg.get("reduce", "mean")),
+    )
+  return terms
+
+
+def _configured_observation_term_keys(cfg: DictConfig) -> set[str]:
+  obs_cfg = cfg.observations if "observations" in cfg else cfg.obs.observations
+  return {
+    str(item.term)
+    for group_cfg in obs_cfg.values()
+    for item in group_cfg.terms
+  }
+
+
+def _configured_reward_term_keys(cfg: DictConfig) -> set[str]:
+  reward_cfg = cfg.rewards if "rewards" in cfg else cfg.reward.rewards
+  return {str(item.term) for item in reward_cfg}
+
+
 def _build_sensors(cfg: DictConfig):
-  if cfg.name.endswith("_sp"):
-    sensors = [
+  """Select sensors from active modules, rather than from a task name.
+
+  This lets a future ablation put SP observations or rewards on
+  ``tracking_bfm`` without accidentally retaining only the old self-collision
+  sensor.  Mixed presets get both required sensors.
+  """
+  observation_terms = _configured_observation_term_keys(cfg)
+  reward_terms = _configured_reward_term_keys(cfg)
+  needs_contact_forces = bool(
+    {"feet_contact_state"}.intersection(observation_terms)
+    or {"feet_air_time_ref", "feet_air_time_ref_dense"}.intersection(reward_terms)
+  )
+  needs_self_collision = "self_collision_cost" in reward_terms
+  sensors = []
+  if needs_contact_forces:
+    sensors.append(
       ContactSensorCfg(
         name="contact_forces",
         primary=ContactMatch(
@@ -529,9 +616,9 @@ def _build_sensors(cfg: DictConfig):
         track_air_time=True,
         history_length=3,
       )
-    ]
-  else:
-    sensors = [
+    )
+  if needs_self_collision or not sensors:
+    sensors.append(
       ContactSensorCfg(
         name="self_collision",
         primary=ContactMatch(
@@ -549,7 +636,7 @@ def _build_sensors(cfg: DictConfig):
         num_slots=1,
         history_length=4,
       )
-    ]
+    )
   return tuple(sensors)
 
 
@@ -602,6 +689,7 @@ def build_env_cfg(cfg: DictConfig | dict[str, Any]) -> ManagerBasedRlEnvCfg:
     rewards=_build_rewards(cfg),
     terminations=_build_terminations(cfg),
     curriculum=_build_curriculum(cfg),
+    metrics=_build_metrics(cfg),
     viewer=viewer,
     sim=sim,
     episode_length_s=float(cfg.episode_length_s),

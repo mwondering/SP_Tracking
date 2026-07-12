@@ -73,6 +73,33 @@ def test_reference_cache_defaults_and_sp_step_groups() -> None:
   ) == (-8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 20)
 
 
+def test_sp_task_applies_one_stage_motion_tracking_agent_preset() -> None:
+  cfg = _compose("task=tracking_bfm_sp")
+
+  prepared = prepare_train_cfg(cfg)
+
+  assert prepared.agent.num_steps_per_env == 32
+  assert prepared.agent.actor.hidden_dims == (1024, 1024, 512)
+  assert prepared.agent.critic.hidden_dims == (1024, 512, 512)
+  assert prepared.agent.obs_groups == {
+    "actor": ("policy",),
+    "critic": ("policy", "priv", "priv_critic"),
+  }
+  assert prepared.agent.algorithm.num_learning_epochs == 3
+  assert prepared.agent.algorithm.num_mini_batches == 8
+  assert prepared.agent.algorithm.actor_learning_rate == 1.0e-4
+  assert prepared.agent.algorithm.critic_learning_rate == 5.0e-4
+  assert prepared.agent.algorithm.clamp_rewards_min == 0.0
+
+
+def test_sp_agent_preset_allows_standard_cli_agent_overrides() -> None:
+  cfg = _compose("task=tracking_bfm_sp", "agent.num_steps_per_env=7")
+
+  prepared = prepare_train_cfg(cfg)
+
+  assert prepared.agent.num_steps_per_env == 7
+
+
 def test_root_conf_directory_is_not_a_second_config_source() -> None:
   root_conf = Path(__file__).resolve().parents[1] / "conf"
 

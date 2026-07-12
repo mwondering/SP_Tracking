@@ -5,6 +5,7 @@ from typing import Any, Literal, cast
 import torch
 
 from mjlab.managers import RewardTermCfg
+from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.observation_manager import ObservationTermCfg
 from mjlab.sensor import ContactSensor
 from sp_tracking.tasks.tracking.mdp.multi_commands import MultiMotionCommand
@@ -46,18 +47,18 @@ SP_REQUIRED_BODY_NAMES = (
 
 SP_KEYPOINT_BODY_NAMES = (
   "head_mimic",
-  "left_hip_yaw_link",
-  "left_knee_link",
-  "left_ankle_roll_link",
-  "right_hip_yaw_link",
-  "right_knee_link",
-  "right_ankle_roll_link",
   "left_shoulder_yaw_link",
   "left_wrist_roll_link",
   "left_hand_mimic",
   "right_shoulder_yaw_link",
   "right_wrist_roll_link",
   "right_hand_mimic",
+  "left_hip_yaw_link",
+  "left_knee_link",
+  "left_ankle_roll_link",
+  "right_hip_yaw_link",
+  "right_knee_link",
+  "right_ankle_roll_link",
 )
 
 SP_FEET_BODY_NAMES = ("left_ankle_roll_link", "right_ankle_roll_link")
@@ -67,13 +68,127 @@ SP_FEET_TOE_BODY_NAMES = (
 )
 SP_TERMINATION_BODY_NAMES = (
   "pelvis",
+  "left_ankle_roll_link",
+  "right_ankle_roll_link",
   "head_mimic",
   "left_hand_mimic",
   "right_hand_mimic",
-  "left_ankle_roll_link",
-  "right_ankle_roll_link",
 )
 SP_TERMINATION_KILL_FRAMES = 5
+
+
+class substep_tracking_cache:
+  """Source-compatible substep state shared by SP observations and rewards.
+
+  motion_tracking samples joint position/velocity after every physics substep
+  and uses the final two samples for uncorrupted histories and joint-velocity
+  regularization.  It also derives foot contact with a per-control-step vote.
+  MJLab exposes the same hook through a ``per_substep`` metrics term; keeping
+  this as an opt-in term avoids changing non-SP environments.
+  """
+
+  def __init__(self, cfg: MetricsTermCfg, env: "ManagerBasedRlEnv"):
+    self.env = env
+    self.asset = env.scene["robot"]
+    self.sensor = env.scene[str(cfg.params.get("sensor_name", "contact_forces"))]
+    self.decimation = max(int(env.cfg.decimation), 1)
+    self._joint_pos = torch.zeros(
+      (env.num_envs, 2, len(self.asset.joint_names)),
+      dtype=self.asset.data.joint_pos.dtype,
+      device=env.device,
+    )
+    self._joint_vel = torch.zeros_like(self._joint_pos)
+    primary_names = tuple(getattr(self.sensor, "primary_names", ()))
+    self.contact_count = len(primary_names) or len(SP_FEET_BODY_NAMES)
+    self._contact_found = torch.zeros(
+      (env.num_envs, self.contact_count, self.decimation),
+      dtype=torch.bool,
+      device=env.device,
+    )
+    self.current_contact = torch.zeros(
+      (env.num_envs, self.contact_count), dtype=torch.bool, device=env.device
+    )
+    self.first_contact = torch.zeros_like(self.current_contact)
+    self.first_air = torch.zeros_like(self.current_contact)
+    self._metric_value = torch.zeros(
+      env.num_envs, dtype=torch.float32, device=env.device
+    )
+    self._substep_count = 0
+    self._contact_finalized_step: int | None = None
+    # Explicitly attach the cache to the environment rather than relying on
+    # metric-manager internals; this makes it reusable by any SP term.
+    env._sp_substep_tracking_cache = self
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    if env_ids is None:
+      env_ids = slice(None)
+    self._joint_pos[env_ids] = 0.0
+    self._joint_vel[env_ids] = 0.0
+    self._contact_found[env_ids] = False
+    self.current_contact[env_ids] = False
+    self.first_contact[env_ids] = False
+    self.first_air[env_ids] = False
+    self._contact_finalized_step = None
+
+  def _read_contact_found(self) -> torch.Tensor:
+    found = getattr(self.sensor.data, "found", None)
+    if not isinstance(found, torch.Tensor):
+      contact_time = getattr(self.sensor.data, "current_contact_time", None)
+      if not isinstance(contact_time, torch.Tensor):
+        raise RuntimeError("SP substep cache requires contact sensor found data.")
+      return contact_time > self.env.physics_dt
+    found = found > 0
+    if found.ndim != 2:
+      raise ValueError(
+        "Contact sensor found data must have shape [num_envs, contacts], got "
+        f"{tuple(found.shape)}"
+      )
+    if found.shape[1] == self.contact_count:
+      return found
+    if found.shape[1] % self.contact_count == 0:
+      return found.reshape(self.env.num_envs, self.contact_count, -1).any(dim=-1)
+    raise ValueError(
+      "SP contact sensor width does not match its primary bodies: "
+      f"{found.shape[1]} vs {self.contact_count}"
+    )
+
+  def __call__(self, env: "ManagerBasedRlEnv", **_: Any) -> torch.Tensor:
+    del env
+    # The source implementation stores substep % 2, leaving precisely the
+    # final two physical samples after a decimated control step.
+    joint_slot = self._substep_count % 2
+    contact_slot = self._substep_count % self.decimation
+    self._joint_pos[:, joint_slot] = self.asset.data.joint_pos
+    self._joint_vel[:, joint_slot] = self.asset.data.joint_vel
+    self._contact_found[:, :, contact_slot] = self._read_contact_found()
+    self._substep_count += 1
+    return self._metric_value
+
+  def joint_state_average(self, field_name: Literal["joint_pos", "joint_vel"]) -> torch.Tensor:
+    if field_name == "joint_pos":
+      return self._joint_pos.mean(dim=1)
+    if field_name == "joint_vel":
+      return self._joint_vel.mean(dim=1)
+    raise ValueError(f"Unsupported joint state field: {field_name}")
+
+  def contact_state(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return source-style majority contact plus transition indicators."""
+    step = int(self.env.common_step_counter)
+    if self._contact_finalized_step != step:
+      # Match motion_tracking exactly: with even decimation a tied vote counts
+      # as contact (``votes >= decimation // 2``).
+      current = self._contact_found.sum(dim=-1) >= (self.decimation // 2)
+      previous = self.current_contact.clone()
+      self.first_contact[:] = (~previous) & current
+      self.first_air[:] = previous & (~current)
+      self.current_contact[:] = current
+      self._contact_finalized_step = step
+    return self.current_contact, self.first_contact, self.first_air
+
+
+def _substep_cache(env: "ManagerBasedRlEnv") -> substep_tracking_cache | None:
+  cache = getattr(env, "_sp_substep_tracking_cache", None)
+  return cache if isinstance(cache, substep_tracking_cache) else None
 
 
 def _command(env: "ManagerBasedRlEnv", command_name: str) -> MultiMotionCommand:
@@ -179,6 +294,19 @@ def _continuous_termination(
   return buffer >= int(SP_TERMINATION_KILL_FRAMES)
 
 
+def _apply_termination_warmup(
+  env: "ManagerBasedRlEnv", cmd: MultiMotionCommand, value: torch.Tensor
+) -> torch.Tensor:
+  """Mirror motion_tracking's initial failure-termination guard."""
+  warmup_steps = max(int(getattr(cmd.cfg, "termination_warmup_steps", 0)), 0)
+  if warmup_steps == 0:
+    return value
+  episode_length = getattr(env, "episode_length_buf", None)
+  if not isinstance(episode_length, torch.Tensor):
+    return value
+  return value & (episode_length > warmup_steps)
+
+
 def _body_z_values(
   env: "ManagerBasedRlEnv",
   command_name: str,
@@ -213,6 +341,75 @@ def _projected_gravity(quat: torch.Tensor) -> torch.Tensor:
   return projected / projected.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
 
 
+def _uniform_noise(value: torch.Tensor, std: float) -> torch.Tensor:
+  if float(std) <= 0.0:
+    return value
+  return value + (torch.rand_like(value) * 2.0 - 1.0) * float(std)
+
+
+def _spherical_noise(value: torch.Tensor, std: float) -> torch.Tensor:
+  if float(std) <= 0.0:
+    return value
+  direction = torch.randn_like(value)
+  direction = direction / direction.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
+  radius = torch.rand_like(value[..., :1]) * float(std)
+  return value + direction * radius
+
+
+def _perturb_quaternion(quat: torch.Tensor, angle_std: float) -> torch.Tensor:
+  if float(angle_std) <= 0.0:
+    return quat
+  axis = torch.randn_like(quat[..., 1:])
+  axis = axis / axis.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
+  angle = (torch.rand_like(quat[..., :1]) * 2.0 - 1.0) * float(angle_std)
+  half_angle = angle * 0.5
+  delta = torch.cat((torch.cos(half_angle), axis * torch.sin(half_angle)), dim=-1)
+  return quat_mul(delta, quat)
+
+
+def _canonical_joint_ids(env: "ManagerBasedRlEnv") -> torch.Tensor | None:
+  try:
+    asset = env.scene["robot"]
+  except (AttributeError, KeyError):
+    return None
+  configured_order = tuple(
+    getattr(getattr(asset, "cfg", None), "joint_name_order", ())
+  )
+  joint_names = tuple(asset.joint_names)
+  if not configured_order:
+    configured_order = joint_names
+  if set(configured_order) != set(joint_names) or len(configured_order) != len(joint_names):
+    raise ValueError(
+      "Configured canonical joint order must match the robot joint names; "
+      f"order={configured_order}, joints={joint_names}"
+    )
+  return torch.as_tensor(
+    [joint_names.index(name) for name in configured_order],
+    dtype=torch.long,
+    device=env.device,
+  )
+
+
+def _canonical_joint_tensor(env: "ManagerBasedRlEnv", value: torch.Tensor) -> torch.Tensor:
+  ids = _canonical_joint_ids(env)
+  return value if ids is None else value.index_select(-1, ids)
+
+
+def _current_joint_observation(
+  env: "ManagerBasedRlEnv",
+  command_name: str,
+  field_name: Literal["joint_pos", "joint_vel"],
+  noise_std: float,
+) -> torch.Tensor:
+  command_manager = getattr(env, "command_manager", None)
+  get_term = getattr(command_manager, "get_term", None)
+  command = get_term(command_name) if callable(get_term) else None
+  getter = getattr(command, f"get_shared_noisy_{field_name}", None)
+  if callable(getter):
+    return getter(noise_std)
+  return _uniform_noise(getattr(env.scene["robot"].data, field_name), noise_std)
+
+
 def _quat_apply_inverse(quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
   if quat.shape[:-1] != vec.shape[:-1]:
     quat = quat.expand(*vec.shape[:-1], 4)
@@ -220,6 +417,16 @@ def _quat_apply_inverse(quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
 
 
 def _action_offset_like(env: "ManagerBasedRlEnv", reference: torch.Tensor) -> torch.Tensor:
+  term = _joint_action_term(env)
+  joint_offset = getattr(term, "joint_offset", None)
+  target_ids = getattr(term, "target_ids", None)
+  if isinstance(joint_offset, torch.Tensor) and isinstance(target_ids, torch.Tensor):
+    offset = torch.zeros_like(reference)
+    target_ids = target_ids.to(device=reference.device, dtype=torch.long)
+    offset[:, target_ids] = joint_offset.to(
+      device=reference.device, dtype=reference.dtype
+    )
+    return offset
   offset = getattr(getattr(env, "action_manager", None), "offset", None)
   if offset is None:
     return torch.zeros_like(reference)
@@ -241,6 +448,12 @@ def _action_offset_like(env: "ManagerBasedRlEnv", reference: torch.Tensor) -> to
 
 
 def _action_tensor(env: "ManagerBasedRlEnv") -> torch.Tensor:
+  try:
+    target = getattr(env.scene["robot"].data, "joint_pos_target", None)
+  except (AttributeError, KeyError):
+    target = None
+  if isinstance(target, torch.Tensor):
+    return target
   action_manager = env.action_manager
   term = _joint_action_term(env)
   if term is not None and hasattr(term, "applied_action"):
@@ -284,6 +497,13 @@ def _target_feet_standing(
   env: "ManagerBasedRlEnv", command_name: str, steps: tuple[int, ...] = (0,)
 ) -> torch.Tensor:
   cmd = _command(env, command_name)
+  standing_state = getattr(cmd, "feet_standing", None)
+  if (
+    steps == (0,)
+    and isinstance(standing_state, torch.Tensor)
+    and standing_state.shape[0] == env.num_envs
+  ):
+    return standing_state
   feet_motion_ids = _body_indices(tuple(cmd.cfg.body_names), SP_FEET_BODY_NAMES)
   feet_pos = _gather(env, command_name, "body_pos_w", steps)[:, :, feet_motion_ids]
   feet_vel = _gather(env, command_name, "body_lin_vel_w", steps)[:, :, feet_motion_ids]
@@ -304,6 +524,8 @@ class _HistoryObservation:
     self.steps = tuple(int(s) for s in cfg.params.get("history_steps", (0,)))
     self.max_len = max(self.steps) + 1
     self.buffer: torch.Tensor | None = None
+    self.noise_std = float(cfg.params.get("noise_std", 0.0))
+    self.bias_noise_std = float(cfg.params.get("bias_noise_std", 0.0))
 
   def _sample(self, env: "ManagerBasedRlEnv") -> torch.Tensor:
     raise NotImplementedError
@@ -334,41 +556,90 @@ class _HistoryObservation:
 class root_angvel_b_history(_HistoryObservation):
   def _sample(self, env: "ManagerBasedRlEnv") -> torch.Tensor:
     sensor = env.scene["robot/imu_ang_vel"]
-    return sensor.data
+    return _spherical_noise(sensor.data, self.noise_std)
 
 
 class projected_gravity_history(_HistoryObservation):
+  def __init__(self, cfg: ObservationTermCfg, env: "ManagerBasedRlEnv"):
+    super().__init__(cfg, env)
+    self.bias_quat = torch.zeros((env.num_envs, 4), dtype=torch.float32, device=env.device)
+    self.bias_quat[:, 0] = 1.0
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    super().reset(env_ids)
+    if env_ids is None:
+      env_ids = slice(None)
+      count = self.env.num_envs
+    elif isinstance(env_ids, slice):
+      count = self.env.num_envs
+    else:
+      count = len(env_ids)
+    base = torch.zeros((count, 4), dtype=self.bias_quat.dtype, device=self.bias_quat.device)
+    base[:, 0] = 1.0
+    self.bias_quat[env_ids] = _perturb_quaternion(base, self.bias_noise_std)
+
   def _sample(self, env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return _projected_gravity(self.asset.data.root_link_quat_w)
+    root_quat = quat_mul(self.bias_quat, self.asset.data.root_link_quat_w)
+    return _projected_gravity(_perturb_quaternion(root_quat, self.noise_std))
 
 
 class root_linvel_b_history(_HistoryObservation):
   def _sample(self, env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return self.asset.data.root_link_lin_vel_b
+    return _uniform_noise(self.asset.data.root_link_lin_vel_b, self.noise_std)
 
 
 class joint_pos_history(_HistoryObservation):
   def _sample(self, env: "ManagerBasedRlEnv") -> torch.Tensor:
-    joint_pos = self.asset.data.joint_pos
-    return joint_pos - _action_offset_like(env, joint_pos)
+    cache = _substep_cache(env)
+    if self.noise_std <= 0.0 and cache is not None:
+      joint_pos = cache.joint_state_average("joint_pos")
+    else:
+      joint_pos = _current_joint_observation(
+        env,
+        str(self.cfg.params.get("command_name", "motion")),
+        "joint_pos",
+        self.noise_std,
+      )
+    joint_pos = joint_pos - _action_offset_like(env, joint_pos)
+    return _canonical_joint_tensor(env, joint_pos)
 
 
 class joint_vel_history(_HistoryObservation):
   def _sample(self, env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return self.asset.data.joint_vel
+    cache = _substep_cache(env)
+    if self.noise_std <= 0.0 and cache is not None:
+      joint_vel = cache.joint_state_average("joint_vel")
+    else:
+      joint_vel = _current_joint_observation(
+        env,
+        str(self.cfg.params.get("command_name", "motion")),
+        "joint_vel",
+        self.noise_std,
+      )
+    return _canonical_joint_tensor(
+      env,
+      joint_vel,
+    )
 
 
-def boot_indicator_state_obs(env: "ManagerBasedRlEnv") -> torch.Tensor:
-  return torch.zeros((env.num_envs, 1), device=env.device)
+def boot_indicator_state_obs(
+  env: "ManagerBasedRlEnv", command_name: str = "motion"
+) -> torch.Tensor:
+  cmd = _command(env, command_name)
+  maximum = max(float(getattr(cmd.cfg, "boot_indicator_max", 0)), 1.0)
+  return cmd.boot_indicator / maximum
 
 
 def command_obs(
   env: "ManagerBasedRlEnv",
   command_name: str,
   horizon: Literal["teacher", "student"] = "student",
+  noise_std: float = 0.0,
 ) -> torch.Tensor:
   steps = _steps(horizon)
-  root_quat = env.scene["robot"].data.root_link_quat_w.unsqueeze(1)
+  root_quat = _perturb_quaternion(
+    env.scene["robot"].data.root_link_quat_w, noise_std
+  ).unsqueeze(1)
   future_quat = _root_motion(env, command_name, "body_quat_w", steps)
   future_pos = _root_motion(env, command_name, "body_pos_w", steps)
   pos_diff = _quat_apply_inverse(
@@ -385,10 +656,15 @@ def target_joint_pos_obs(
   env: "ManagerBasedRlEnv",
   command_name: str,
   horizon: Literal["teacher", "student"],
+  noise_std: float = 0.0,
 ) -> torch.Tensor:
-  target = _gather(env, command_name, "joint_pos", _steps(horizon))
-  current = env.scene["robot"].data.joint_pos
-  current = current - _action_offset_like(env, current)
+  target = _canonical_joint_tensor(
+    env, _gather(env, command_name, "joint_pos", _steps(horizon))
+  )
+  current = _current_joint_observation(env, command_name, "joint_pos", noise_std)
+  current = _canonical_joint_tensor(
+    env, current - _action_offset_like(env, current)
+  )
   current = current.unsqueeze(1)
   diff = target - current
   return torch.cat(
@@ -558,11 +834,23 @@ class target_keypoints_rot_b_obs(_KeypointObservation):
 
 
 def applied_action(env: "ManagerBasedRlEnv") -> torch.Tensor:
-  return _action_tensor(env)
+  return _canonical_joint_tensor(env, _action_tensor(env))
 
 
 def applied_torque(env: "ManagerBasedRlEnv") -> torch.Tensor:
-  return env.scene["robot"].data.actuator_force
+  asset = env.scene["robot"]
+  ordered_names = tuple(
+    getattr(getattr(asset, "cfg", None), "joint_name_order", asset.joint_names)
+  )
+  actuator_names = tuple(asset.actuator_names)
+  if all(name in actuator_names for name in ordered_names):
+    ids = torch.as_tensor(
+      [actuator_names.index(name) for name in ordered_names],
+      dtype=torch.long,
+      device=env.device,
+    )
+    return asset.data.actuator_force.index_select(-1, ids)
+  return _canonical_joint_tensor(env, asset.data.actuator_force)
 
 
 def body_z_termination_obs(env: "ManagerBasedRlEnv", command_name: str) -> torch.Tensor:
@@ -602,7 +890,9 @@ def body_z_termination(
   target_z_min_thres = target_z_min_thres - lower_relax
   exceed = (current_z < target_z_min_thres) | (current_z > target_z_max_thres)
   buffer = _termination_buffer(env, cmd, "_body_z_termination_buffer")
-  return _continuous_termination(env, exceed, buffer)
+  return _apply_termination_warmup(
+    env, cmd, _continuous_termination(env, exceed, buffer)
+  )
 
 
 def gravity_dir_termination(
@@ -616,7 +906,26 @@ def gravity_dir_termination(
   motion_g = obs[:, 3:6]
   exceed = torch.norm(robot_g - motion_g, dim=-1) > float(gravity_terminate_thres)
   buffer = _termination_buffer(env, cmd, "_gravity_dir_termination_buffer")
-  return _continuous_termination(env, exceed, buffer)
+  return _apply_termination_warmup(
+    env, cmd, _continuous_termination(env, exceed, buffer)
+  )
+
+
+def motion_timeout(
+  env: "ManagerBasedRlEnv", command_name: str
+) -> torch.Tensor:
+  cmd = _command(env, command_name)
+  return cmd.time_steps >= (cmd.motion_length - 1)
+
+
+def motion_xy_range_termination(
+  env: "ManagerBasedRlEnv",
+  command_name: str,
+  motion_xy_max_offset: float | None = None,
+) -> torch.Tensor:
+  maximum = float("inf") if motion_xy_max_offset is None else float(motion_xy_max_offset)
+  target_xy = _root_motion_current(env, command_name, "body_pos_w")[:, :2]
+  return (target_xy.abs() > maximum).any(dim=1)
 
 
 def _robot_mass(env: "ManagerBasedRlEnv") -> float | torch.Tensor | None:
@@ -685,6 +994,10 @@ def feet_contact_state(
 def target_feet_contact_state_obs(
   env: "ManagerBasedRlEnv", command_name: str
 ) -> torch.Tensor:
+  cmd = _command(env, command_name)
+  standing = getattr(cmd, "feet_standing", None)
+  if isinstance(standing, torch.Tensor) and standing.shape[0] == env.num_envs:
+    return standing.float()
   return _target_feet_standing(env, command_name).float()
 
 
@@ -703,7 +1016,9 @@ def domain_random_joint_offset(env: "ManagerBasedRlEnv") -> torch.Tensor:
   fallback = torch.zeros(
     (env.num_envs, len(env.scene["robot"].joint_names)), device=env.device
   )
-  return _event_observation(env, "random_joint_offset", fallback)
+  return _canonical_joint_tensor(
+    env, _event_observation(env, "random_joint_offset", fallback)
+  )
 
 
 def domain_perturb_gravity(env: "ManagerBasedRlEnv") -> torch.Tensor:
@@ -747,7 +1062,13 @@ class root_pos_tracking(_RewardBase):
   def __call__(
     self, env: "ManagerBasedRlEnv", command_name: str, sigma: list[float]
   ) -> torch.Tensor:
-    target = _root_motion_current(env, command_name, "body_pos_w")
+    cmd = _command(env, command_name)
+    target = getattr(cmd, "reward_root_pos_w", None)
+    if not isinstance(target, torch.Tensor):
+      target = _root_motion_current(env, command_name, "body_pos_w")
+      env_origins = getattr(env.scene, "env_origins", None)
+      if isinstance(env_origins, torch.Tensor):
+        target = target + env_origins
     error = (target - self.asset.data.root_link_pos_w).norm(dim=-1, keepdim=True)
     return _exp_sigma(error, sigma).squeeze(-1)
 
@@ -870,7 +1191,13 @@ def survival(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 def joint_vel_l2(env: "ManagerBasedRlEnv") -> torch.Tensor:
-  return -env.scene["robot"].data.joint_vel.square().sum(dim=-1)
+  cache = _substep_cache(env)
+  joint_vel = (
+    cache.joint_state_average("joint_vel")
+    if cache is not None
+    else env.scene["robot"].data.joint_vel
+  )
+  return -joint_vel.square().sum(dim=-1)
 
 
 def action_rate_l2(env: "ManagerBasedRlEnv") -> torch.Tensor:
@@ -904,11 +1231,15 @@ class feet_air_time_ref(_RewardBase):
     thres: float,
   ) -> torch.Tensor:
     sensor: ContactSensor = env.scene[sensor_name]
-    contact_time = sensor.data.current_contact_time
-    assert contact_time is not None
-    current = contact_time > env.physics_dt
-    first_contact = (~self.last_contact) & current
-    self.last_contact[:] = current
+    cache = _substep_cache(env)
+    if cache is not None:
+      current, first_contact, _ = cache.contact_state()
+    else:
+      contact_time = sensor.data.current_contact_time
+      assert contact_time is not None
+      current = contact_time > env.physics_dt
+      first_contact = (~self.last_contact) & current
+      self.last_contact[:] = current
     target = _target_feet_standing(env, command_name)
     mismatch = target ^ current
     self.reward_time += torch.where(mismatch, -env.step_dt, env.step_dt)
@@ -934,9 +1265,13 @@ class feet_air_time_ref_dense(_RewardBase):
     contact_h_high: float,
   ) -> torch.Tensor:
     sensor: ContactSensor = env.scene[sensor_name]
-    contact_time = sensor.data.current_contact_time
-    assert contact_time is not None
-    current = contact_time > env.physics_dt
+    cache = _substep_cache(env)
+    if cache is not None:
+      current, _, _ = cache.contact_state()
+    else:
+      contact_time = sensor.data.current_contact_time
+      assert contact_time is not None
+      current = contact_time > env.physics_dt
     target = _target_feet_standing(env, command_name)
     mismatch = current ^ target
     both_air = (~current) & (~target)

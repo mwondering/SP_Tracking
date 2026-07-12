@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -12,7 +12,7 @@ from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 
-from sp_tracking.config.build_agent import build_agent_cfg
+from sp_tracking.config.build_agent import build_agent_cfg, serialize_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
 from sp_tracking.tasks.tracking.rl.checkpoints import (
@@ -83,7 +83,7 @@ def _apply_play_motion(env_cfg: ManagerBasedRlEnvCfg, cfg: PlayConfig) -> None:
 def prepare_play_cfg(cfg: PlayConfig) -> PreparedPlayCfg:
   train_cfg = _compose_train(TASK_OVERRIDES[cfg.task])
   env_cfg = build_env_cfg(train_cfg.task)
-  agent_cfg = build_agent_cfg(train_cfg.agent)
+  agent_cfg = build_agent_cfg(train_cfg.agent, train_cfg.task.get("agent_overrides"))
   env_cfg.scene.num_envs = int(cfg.num_envs)
   if not cfg.domain_randomization:
     env_cfg.events = {}
@@ -136,7 +136,7 @@ def run_play(cfg: PlayConfig) -> None:
     raise ValueError("checkpoint_file is required for trained play.")
   runner = MotionTrackingOnPolicyRunner(
     wrapped_env,
-    asdict(prepared.agent),
+    serialize_agent_cfg(prepared.agent),
     log_dir=None,
     device=device,
   )

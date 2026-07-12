@@ -66,6 +66,50 @@ def test_prev_actions_and_action_rate_use_action_term_history() -> None:
   assert torch.equal(sp_mdp.action_rate_l2(env), -torch.tensor([1.25]))
 
 
+def test_substep_cache_matches_source_joint_and_contact_aggregation() -> None:
+  asset_data = SimpleNamespace(
+    joint_pos=torch.zeros((1, 2)),
+    joint_vel=torch.zeros((1, 2)),
+  )
+  sensor_data = SimpleNamespace(found=torch.zeros((1, 2)))
+  sensor = SimpleNamespace(primary_names=("left", "right"), data=sensor_data)
+  env = SimpleNamespace(
+    num_envs=1,
+    device="cpu",
+    physics_dt=0.005,
+    common_step_counter=1,
+    cfg=SimpleNamespace(decimation=4),
+    scene={
+      "robot": SimpleNamespace(joint_names=("j0", "j1"), data=asset_data),
+      "contact_forces": sensor,
+    },
+  )
+  cache = sp_mdp.substep_tracking_cache(SimpleNamespace(params={}), env)
+  found_samples = (
+    torch.tensor([[1.0, 0.0]]),
+    torch.tensor([[1.0, 0.0]]),
+    torch.tensor([[0.0, 0.0]]),
+    torch.tensor([[0.0, 1.0]]),
+  )
+  for substep, found in enumerate(found_samples):
+    asset_data.joint_pos[:] = torch.tensor([[float(substep), float(substep + 10)]])
+    asset_data.joint_vel[:] = torch.tensor([[float(substep), float(substep * 2)]])
+    sensor_data.found = found
+    cache(env)
+
+  assert torch.allclose(
+    cache.joint_state_average("joint_pos"), torch.tensor([[2.5, 12.5]])
+  )
+  assert torch.allclose(
+    cache.joint_state_average("joint_vel"), torch.tensor([[2.5, 5.0]])
+  )
+  current, first_contact, first_air = cache.contact_state()
+  assert torch.equal(current, torch.tensor([[True, False]]))
+  assert torch.equal(first_contact, torch.tensor([[True, False]]))
+  assert torch.equal(first_air, torch.tensor([[False, False]]))
+  assert torch.allclose(sp_mdp.joint_vel_l2(env), torch.tensor([-31.25]))
+
+
 def test_domain_observations_read_randomization_terms() -> None:
   values = {
     "motor_params_implicit": torch.full((2, 6), 1.5),
@@ -176,3 +220,16 @@ def test_body_z_termination_requires_continuous_exceed_frames() -> None:
   ]
 
   assert [bool(output.item()) for output in outputs] == [False, False, False, False, True]
+
+
+def test_failure_terminations_respect_source_reset_warmup() -> None:
+  env = SimpleNamespace(episode_length_buf=torch.tensor([5, 6]))
+  command = SimpleNamespace(
+    cfg=SimpleNamespace(termination_warmup_steps=5)
+  )
+
+  gated = sp_mdp._apply_termination_warmup(
+    env, command, torch.tensor([True, True])
+  )
+
+  assert torch.equal(gated, torch.tensor([False, True]))

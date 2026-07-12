@@ -11,7 +11,8 @@ rewards:
   - {name: joint_vel_tracking, term: joint_vel_tracking, weight: 0.5, params: {command_name: motion, sigma: [3.0]}}
   - {name: survival, term: survival, weight: 3.0}
   - {name: joint_vel_l2, term: joint_vel_l2, weight: 0.0005}
-  - {name: action_rate_l2, term: action_rate_l2_sp, weight: 0.02}
+  # finetune-stage value in the reference task (the pre-finetune preset uses 0.02).
+  - {name: action_rate_l2, term: action_rate_l2_sp, weight: 0.1}
   - {name: feet_air_time_ref, term: feet_air_time_ref, weight: 5.0, params: {command_name: motion, sensor_name: contact_forces, thres: 0.5}}
   - {name: feet_air_time_ref_dense, term: feet_air_time_ref_dense, weight: 1.0, params: {command_name: motion, sensor_name: contact_forces, air_h_low: 0.035, air_h_high: 0.155, contact_h_low: 0.035, contact_h_high: 0.125}}
   - {name: joint_pos_limits, term: joint_pos_limits_sp, weight: 1.0, params: {joint_names: ".*", soft_factor: 0.9}}

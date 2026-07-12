@@ -54,17 +54,17 @@ cmd=(
   "--local_ranks_filter=0"
   "--nproc_per_node=${NPROC}"
   -m sp_tracking.scripts.train
-  task=tracking_bfm
+  task=tracking_bfm_sp
   "motion_path=${MOTION_PATH}"
   "launch_script_path=${LAUNCH_SCRIPT_PATH}"
   "task.num_envs=${SP_TRACKING_NUM_ENVS:-16}"
   "task.command.command.history_steps=${SP_TRACKING_HISTORY_STEPS:-0}"
   "task.command.command.future_steps=${SP_TRACKING_FUTURE_STEPS:-1}"
   "agent.max_iterations=${SP_TRACKING_MAX_ITERATIONS:-300000}"
-  "agent.num_steps_per_env=${SP_TRACKING_NUM_STEPS_PER_ENV:-24}"
+  "agent.num_steps_per_env=${SP_TRACKING_NUM_STEPS_PER_ENV:-32}"
   "agent.logger=wandb"
   "agent.upload_model=False"
-  "agent.wandb_project=${SP_TRACKING_WANDB_PROJECT:-tracking_bfm}"
+  "agent.wandb_project=${SP_TRACKING_WANDB_PROJECT:-sp-tracking}"
   "agent.save_interval=${SP_TRACKING_SAVE_INTERVAL:-2000}"
   "log_root=${SP_TRACKING_LOG_ROOT:-logs/rsl_rl}"
 )
