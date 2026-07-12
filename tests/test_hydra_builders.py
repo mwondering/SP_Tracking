@@ -90,7 +90,15 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert env_cfg.actions["joint_pos"].raw_action_clip == 10.0
   assert env_cfg.actions["joint_pos"].boot_delay_steps == 2
   assert env_cfg.actions["joint_pos"].curriculum_mode == "full"
-  assert env_cfg.events == {}
+  assert set(env_cfg.events) == {
+    "perturb_body_com",
+    "perturb_body_materials",
+    "motor_params_implicit",
+    "random_joint_offset",
+    "perturb_root_vel",
+    "perturb_body_wrench",
+    "perturb_gravity",
+  }
   assert "motion_tracking_progress" in env_cfg.curriculum
   assert env_cfg.metrics["substep_tracking_cache"].per_substep is True
 

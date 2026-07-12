@@ -186,7 +186,7 @@ events:
   foot_friction:
     enabled: false
   perturb_body_com:
-    enabled: false
+    enabled: true
     term: perturb_body_com
     mode: startup
     params:
@@ -195,7 +195,7 @@ events:
         - torso_link
       com_range: [-0.03, 0.03]
   perturb_body_materials:
-    enabled: false
+    enabled: true
     term: perturb_body_materials
     mode: startup
     params:
@@ -205,7 +205,7 @@ events:
       solref_dampratio_range: [0.8, 1.2]
       homogeneous: true
   motor_params_implicit:
-    enabled: false
+    enabled: true
     term: motor_params_implicit
     mode: startup
     params:
@@ -219,14 +219,14 @@ events:
       armature_range:
         ".*": [0.8, 1.2]
   random_joint_offset:
-    enabled: false
+    enabled: true
     term: random_joint_offset
     mode: reset
     params:
       ranges:
         ".*": [-0.01, 0.01]
   perturb_root_vel:
-    enabled: false
+    enabled: true
     term: perturb_root_vel
     mode: step
     params:
@@ -239,7 +239,7 @@ events:
       pitch: [-0.52, 0.52]
       yaw: [-0.78, 0.78]
   perturb_body_wrench:
-    enabled: false
+    enabled: true
     term: perturb_body_wrench
     mode: step
     params:
@@ -249,7 +249,7 @@ events:
       force_magnitude_range_n: [0.0, 10.0]
       lever_arm_length_range_m: [0.0, 0.4]
   perturb_gravity:
-    enabled: false
+    enabled: true
     term: perturb_gravity
     mode: startup
     params:
