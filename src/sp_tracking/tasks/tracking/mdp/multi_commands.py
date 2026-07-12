@@ -40,7 +40,7 @@ class AdaptiveSamplingCfg:
   # ``None`` uses ``adaptive_uniform_ratio`` for backward compatibility.
   random_probability: float | None = None
   # ``mixture`` preserves historical probability mixing.  ``branch`` samples
-  # a per-reset random/failure branch, matching motion_tracking-SP's ablation.
+  # a per-reset random/failure branch, matching the reference SP ablation.
   strategy: Literal["mixture", "branch"] = "mixture"
 
 
@@ -271,7 +271,7 @@ def _select_or_fk_body_fields(
     if fk_helper is None:
       raise ValueError("fk_helper is required when fk_from_joint_pos is enabled")
     # SP requests FK explicitly so body fields are derived from the same joint
-    # reference used by the original motion_tracking dataset, even when a
+    # reference used by the source dataset, even when a
     # legacy NPZ happens to carry compatible body arrays.
     fk = fk_helper.expand_motion(
       root_pos_w=body_pos_w[:, 0, :],
@@ -665,7 +665,7 @@ class MultiMotionCommand(CommandTerm):
     self.motion_length = torch.zeros(
       self.num_envs, dtype=torch.long, device=self.device
     )
-    self._initialize_motion_tracking_state()
+    self._initialize_sp_tracking_state()
 
     self.body_pos_relative_w = torch.zeros(
       self.num_envs, len(cfg.body_names), 3, device=self.device
@@ -788,7 +788,7 @@ class MultiMotionCommand(CommandTerm):
     )
     self._initialize_reference_cache()
 
-  def _initialize_motion_tracking_state(self) -> None:
+  def _initialize_sp_tracking_state(self) -> None:
     """Allocate optional reference-frame and one-stage SP state.
 
     Both the in-memory and large-dataset commands call this helper, which keeps
@@ -904,7 +904,7 @@ class MultiMotionCommand(CommandTerm):
       :, 0, self.motion_anchor_body_index
     ]
 
-  def _reset_motion_tracking_state(
+  def _reset_sp_tracking_state(
     self, env_ids: torch.Tensor, actual_root_pos_w: torch.Tensor
   ) -> None:
     if env_ids.numel() == 0:
@@ -1951,7 +1951,7 @@ class MultiMotionCommand(CommandTerm):
     self.robot.clear_state(env_ids=env_ids)
     self.robot.set_joint_position_target(joint_pos[env_ids], env_ids=env_ids)
     self._set_action_boot_target(env_ids, joint_pos[env_ids])
-    self._reset_motion_tracking_state(env_ids, root_pos[env_ids])
+    self._reset_sp_tracking_state(env_ids, root_pos[env_ids])
 
   def _resample_command(self, env_ids: torch.Tensor):
     if len(env_ids) == 0:
@@ -2166,7 +2166,7 @@ class MultiMotionCommandCfg(CommandTermCfg):
   motion_origin_recenter: bool = False
   sliding_root_xy_reward: bool = False
   boot_indicator_max: int = 0
-  # Source motion_tracking masks failure terminations during the first few
+  # The reference task masks failure terminations during the first few
   # control steps after reset.  Kept configurable so non-SP users retain the
   # legacy zero-warmup behavior.
   termination_warmup_steps: int = 0

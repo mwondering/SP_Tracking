@@ -25,11 +25,11 @@ from mjlab.utils.noise import UniformNoiseCfg
 from mjlab.viewer import ViewerConfig
 
 from sp_tracking.assets.robots import (
-  get_g1_motion_tracking_robot_cfg,
+  get_g1_sp_tracking_robot_cfg,
   get_g1_tracking_bfm_robot_cfg,
 )
 from sp_tracking.tasks.tracking import mdp
-from sp_tracking.tasks.tracking.mdp.actions import MotionTrackingJointPositionActionCfg
+from sp_tracking.tasks.tracking.mdp.actions import SpTrackingJointPositionActionCfg
 from sp_tracking.tasks.tracking.mdp import randomizations as sp_randomizations
 from sp_tracking.tasks.tracking.mdp import sp as sp_mdp
 from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
@@ -137,7 +137,7 @@ EVENT_TERMS = {
 }
 
 CURRICULUM_TERMS = {
-  "motion_tracking_progress": sp_randomizations.motion_tracking_progress,
+  "sp_tracking_progress": sp_randomizations.sp_tracking_progress,
 }
 
 METRICS_TERMS = {
@@ -506,12 +506,12 @@ def _build_action(cfg: DictConfig):
   )
   action_type = str(cfg.action.get("type", "joint_position"))
   cfg_cls = (
-    MotionTrackingJointPositionActionCfg
-    if action_type == "motion_tracking"
+    SpTrackingJointPositionActionCfg
+    if action_type == "sp_tracking"
     else JointPositionActionCfg
   )
   extra_kwargs = {}
-  if cfg_cls is MotionTrackingJointPositionActionCfg:
+  if cfg_cls is SpTrackingJointPositionActionCfg:
     extra_kwargs = {
       "max_delay": int(cfg.action.get("max_delay", 2)),
       "delay_full_progress": float(cfg.action.get("delay_full_progress", 0.8)),
@@ -647,8 +647,8 @@ def _build_robot(cfg: DictConfig):
   asset = str(cfg.robot.get("asset", "tracking_bfm_g1"))
   if asset == "tracking_bfm_g1":
     return get_g1_tracking_bfm_robot_cfg()
-  if asset == "motion_tracking_g1":
-    return get_g1_motion_tracking_robot_cfg()
+  if asset == "sp_tracking_g1":
+    return get_g1_sp_tracking_robot_cfg()
   raise ValueError(f"Unsupported robot asset: {asset}")
 
 

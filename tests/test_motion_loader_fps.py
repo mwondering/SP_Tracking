@@ -92,7 +92,7 @@ def _write_legacy_g1_motion(
 
 def _sp_fk_helper() -> MotionFKHelper:
   return MotionFKHelper.from_mjcf_path(
-    xml_path="src/sp_tracking/assets/robots/g1_motion_tracking/g1.xml",
+    xml_path="src/sp_tracking/assets/robots/g1_sp_tracking/g1.xml",
     dataset_joint_names=_MUJOCO_JOINT_NAMES,
     output_body_names=SP_BODY_NAMES,
     device="cpu",
@@ -340,7 +340,7 @@ def test_large_dataset_store_can_fk_legacy_30_body_motion_for_sp_asset(
 
 
 @pytest.mark.parametrize("loader_kind", ("single", "multi", "large"))
-def test_sp_joint_velocity_reconstruction_matches_motion_tracking(
+def test_sp_joint_velocity_reconstruction_matches_reference(
   tmp_path: Path,
   loader_kind: str,
 ) -> None:

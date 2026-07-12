@@ -167,7 +167,7 @@ def test_rewind_sampling_only_rewinds_non_timeout_failures(monkeypatch) -> None:
   assert remaining.tolist() == [1, 2]
 
 
-def test_motion_tracking_reset_clears_consecutive_termination_buffers() -> None:
+def test_sp_tracking_reset_clears_consecutive_termination_buffers() -> None:
   command = MultiMotionCommand.__new__(MultiMotionCommand)
   command.cfg = SimpleNamespace(boot_indicator_max=25, sliding_root_xy_reward=False)
   command.boot_indicator = torch.zeros((2, 1))
@@ -186,7 +186,7 @@ def test_motion_tracking_reset_clears_consecutive_termination_buffers() -> None:
     [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
   )
 
-  command._reset_motion_tracking_state(
+  command._reset_sp_tracking_state(
     torch.tensor([1]), actual_root_pos_w=torch.tensor([[3.0, 4.0, 1.0]])
   )
 

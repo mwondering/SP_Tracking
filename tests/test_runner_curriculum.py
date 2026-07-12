@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from sp_tracking.tasks.tracking.rl.runner import MotionTrackingOnPolicyRunner
+from sp_tracking.tasks.tracking.rl.runner import SpTrackingOnPolicyRunner
 
 
 class _ScheduleTerm:
@@ -35,10 +35,10 @@ class _EventManager:
 
 
 class _CurriculumManager:
-  active_terms = ["motion_tracking_progress"]
+  active_terms = ["sp_tracking_progress"]
 
 
-def test_runner_steps_motion_tracking_curriculum_terms() -> None:
+def test_runner_steps_sp_tracking_curriculum_terms() -> None:
   action_term = _ScheduleTerm()
   event_term = _ScheduleTerm()
   unwrapped = SimpleNamespace(
@@ -46,12 +46,12 @@ def test_runner_steps_motion_tracking_curriculum_terms() -> None:
     event_manager=_EventManager(event_term),
     curriculum_manager=_CurriculumManager(),
   )
-  runner = object.__new__(MotionTrackingOnPolicyRunner)
+  runner = object.__new__(SpTrackingOnPolicyRunner)
   runner.env = SimpleNamespace(unwrapped=unwrapped)
   runner.cfg = {"max_iterations": 100}
 
-  runner._step_motion_tracking_curriculum(iteration=24)
+  runner._step_sp_tracking_curriculum(iteration=24)
 
   assert action_term.calls == [(0.25, 24)]
   assert event_term.calls == [(0.25, 24)]
-  assert unwrapped._motion_tracking_curriculum_state["progress"] == 0.25
+  assert unwrapped._sp_tracking_curriculum_state["progress"] == 0.25

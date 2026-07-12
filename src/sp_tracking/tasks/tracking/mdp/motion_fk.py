@@ -145,7 +145,7 @@ def joint_vel_from_joint_pos_torch(
   *,
   dim: int = 0,
 ) -> torch.Tensor:
-  """Rebuild reference joint velocity with motion_tracking's SP convention.
+  """Rebuild reference joint velocity with the SP convention.
 
   The source repository derives this field from reference joint positions using
   centered finite differences and a replicated-boundary five-frame average,

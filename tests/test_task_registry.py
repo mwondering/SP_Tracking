@@ -6,7 +6,7 @@ from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
 from sp_tracking.tasks.tracking.mdp.multi_commands import (
   MotionCommandCfg as MultiMotionCommandCfg,
 )
-from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
+from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
 
 
 def test_tracking_entrypoint_registers_default_tasks() -> None:
@@ -27,7 +27,7 @@ def test_registered_default_task_loads_hydra_built_configs() -> None:
 
   assert isinstance(env_cfg.commands["motion"], MultiMotionCommandCfg)
   assert rl_cfg.experiment_name == "g1_tracking"
-  assert load_runner_cls(registry.TRACKING_BFM_TASK_ID) is MotionTrackingOnPolicyRunner
+  assert load_runner_cls(registry.TRACKING_BFM_TASK_ID) is SpTrackingOnPolicyRunner
 
 
 def test_registered_sp_task_uses_large_dataset_command() -> None:
@@ -37,7 +37,7 @@ def test_registered_sp_task_uses_large_dataset_command() -> None:
 
   assert isinstance(env_cfg.commands["motion"], LargeDatasetMotionCommandCfg)
   assert "motor_params_implicit" in env_cfg.events
-  assert "motion_tracking_progress" in env_cfg.curriculum
+  assert "sp_tracking_progress" in env_cfg.curriculum
 
 
 def test_registered_largedataset_task_keeps_old_tracking_surface() -> None:

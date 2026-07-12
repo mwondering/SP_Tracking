@@ -1,4 +1,4 @@
-# One-stage motion_tracking observation preset.  The actor consumes ``policy``
+# One-stage SP tracking observation preset.  The actor consumes ``policy``
 # directly; the critic is configured by the task agent preset as
 # ``policy + priv + priv_critic`` so it sees the exact actor tensor plus the
 # two reference privileged partitions.

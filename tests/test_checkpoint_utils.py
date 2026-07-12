@@ -9,7 +9,7 @@ from sp_tracking.tasks.tracking.rl.checkpoints import (
 )
 
 
-def test_checkpoint_iteration_prefers_motion_tracking_names_and_keeps_legacy_support() -> None:
+def test_checkpoint_iteration_prefers_reference_names_and_keeps_legacy_support() -> None:
   assert checkpoint_iteration("checkpoint_42.pt") == 42
   assert checkpoint_iteration(Path("checkpoint_final.pt")) is None
   assert checkpoint_iteration("model_42.pt") == 42

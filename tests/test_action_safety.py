@@ -2,11 +2,11 @@ from types import SimpleNamespace
 
 import torch
 
-from sp_tracking.tasks.tracking.mdp.actions import MotionTrackingJointPositionAction
+from sp_tracking.tasks.tracking.mdp.actions import SpTrackingJointPositionAction
 
 
-def test_motion_tracking_action_torque_schedule_applies_configured_scale() -> None:
-  action = object.__new__(MotionTrackingJointPositionAction)
+def test_sp_tracking_action_torque_schedule_applies_configured_scale() -> None:
+  action = object.__new__(SpTrackingJointPositionAction)
   action.cfg = type(
     "Cfg",
     (),
@@ -33,8 +33,8 @@ def test_motion_tracking_action_torque_schedule_applies_configured_scale() -> No
   )
 
 
-def test_motion_tracking_action_clamps_raw_policy_action() -> None:
-  action = object.__new__(MotionTrackingJointPositionAction)
+def test_sp_tracking_action_clamps_raw_policy_action() -> None:
+  action = object.__new__(SpTrackingJointPositionAction)
   action.cfg = SimpleNamespace(raw_action_clip=10.0)
   action._raw_actions = torch.zeros((1, 2))
   action._action_history = torch.zeros((1, 3, 2))
@@ -47,8 +47,8 @@ def test_motion_tracking_action_clamps_raw_policy_action() -> None:
   assert action._substep == 0
 
 
-def test_motion_tracking_full_curriculum_matches_student_finetune_mode() -> None:
-  action = object.__new__(MotionTrackingJointPositionAction)
+def test_sp_tracking_full_curriculum_matches_student_finetune_mode() -> None:
+  action = object.__new__(SpTrackingJointPositionAction)
   action.cfg = SimpleNamespace(curriculum_mode="full")
   action.max_delay = 2
   action.delay_probs = torch.zeros(3)
@@ -60,8 +60,8 @@ def test_motion_tracking_full_curriculum_matches_student_finetune_mode() -> None
   assert state["torque_limit_scale"] == 1.0
 
 
-def test_motion_tracking_action_holds_boot_target_for_two_substeps() -> None:
-  action = object.__new__(MotionTrackingJointPositionAction)
+def test_sp_tracking_action_holds_boot_target_for_two_substeps() -> None:
+  action = object.__new__(SpTrackingJointPositionAction)
   action.cfg = SimpleNamespace(boot_delay_steps=2, clip=None)
   action._env = SimpleNamespace(num_envs=1, device="cpu")
   action.delay = torch.zeros((1, 1), dtype=torch.long)

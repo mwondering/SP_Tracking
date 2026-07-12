@@ -17,7 +17,7 @@ from mjlab.utils.torch import configure_torch_backends
 
 from sp_tracking.config.build_agent import build_agent_cfg, serialize_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
-from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
+from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
 from sp_tracking.tasks.tracking.rl.checkpoints import resolve_local_checkpoint_path
 
 
@@ -157,7 +157,7 @@ def run_train(cfg: DictConfig) -> None:
     log_dir, cfg.get("launch_script_path")
   )
   task_cfg = cfg.get("task", {})
-  runner = MotionTrackingOnPolicyRunner(
+  runner = SpTrackingOnPolicyRunner(
     wrapped_env,
     _asdict_dataclass(prepared.agent),
     str(log_dir),

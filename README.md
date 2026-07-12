@@ -36,7 +36,7 @@ scripts/train_tracking_bfm.sh /path/to/motions task.num_envs=2048 agent.max_iter
 - `src/sp_tracking/conf`: the single Hydra config source used by `sp-train`,
   tests, and the mjlab task entry point.
 - `src/sp_tracking/assets/robots`: two packaged G1 assets selected by task:
-  `tracking_bfm_g1` for `tracking_bfm` and `motion_tracking_g1` for
+  `tracking_bfm_g1` for `tracking_bfm` and `sp_tracking_g1` for
   `tracking_bfm_sp`.
 - `scripts/train_tracking_bfm.sh`: repo-local launch script for the default
   training run.
@@ -111,14 +111,14 @@ and debugging.
 | --- | --- | --- | --- |
 | `tracking_bfm` | `multi_commands.py` | old BFM tracking defaults | `tracking_bfm_g1` |
 | `tracking_bfm_largedataset` | `multi_command_largedataset.py` | old BFM tracking defaults | `tracking_bfm_g1` |
-| `tracking_bfm_sp` | `multi_command_largedataset.py` | SP tracking defaults | `motion_tracking_g1` |
+| `tracking_bfm_sp` | `multi_command_largedataset.py` | SP tracking defaults | `sp_tracking_g1` |
 
 These tasks are configured under `src/sp_tracking/conf/task`. Shared PPO defaults
 live in `src/sp_tracking/conf/agent/tracking_bfm_ppo.yaml`.
 
 ## Checkpoints, Resume, and Deployment Export
 
-Checkpoints follow the `motion_tracking` naming convention:
+Checkpoints follow the reference-compatible naming convention:
 
 ```text
 checkpoint_<iteration>.pt
@@ -143,7 +143,7 @@ uv run sp-train agent.resume=true agent.load_run='.*' agent.load_checkpoint='che
 
 `policy.onnx` is exported after every save and is intentionally deployment
 oriented: input key `policy`, output key `action`, with `policy.json` sidecar
-metadata matching `motion_tracking_sim2real`'s ONNX runtime loader.
+metadata matching the reference ONNX runtime loader.
 
 ## Logging
 

@@ -12,7 +12,7 @@ if False:
 
 
 @dataclass(kw_only=True)
-class MotionTrackingJointPositionActionCfg(JointPositionActionCfg):
+class SpTrackingJointPositionActionCfg(JointPositionActionCfg):
   max_delay: int = 2
   delay_full_progress: float = 0.8
   alpha: tuple[float, float] = (0.8, 1.0)
@@ -20,7 +20,7 @@ class MotionTrackingJointPositionActionCfg(JointPositionActionCfg):
   torque_limit_progress_range: tuple[float, float] = (0.0, 0.8)
   raw_action_clip: float | None = None
   boot_delay_steps: int = 0
-  # ``full`` matches motion_tracking's student/finetune behavior: delay is
+  # ``full`` matches the reference student/finetune behavior: delay is
   # sampled uniformly from its full range and torque limits immediately use
   # their final scale.  ``progressive`` preserves the existing curriculum.
   curriculum_mode: Literal["progressive", "full"] = "progressive"
@@ -33,14 +33,14 @@ class MotionTrackingJointPositionActionCfg(JointPositionActionCfg):
   # XML order; this only changes the action vector interface.
   joint_name_order: tuple[str, ...] | None = None
 
-  def build(self, env: "ManagerBasedRlEnv") -> "MotionTrackingJointPositionAction":
-    return MotionTrackingJointPositionAction(self, env)
+  def build(self, env: "ManagerBasedRlEnv") -> "SpTrackingJointPositionAction":
+    return SpTrackingJointPositionAction(self, env)
 
 
-class MotionTrackingJointPositionAction(JointPositionAction):
-  cfg: MotionTrackingJointPositionActionCfg
+class SpTrackingJointPositionAction(JointPositionAction):
+  cfg: SpTrackingJointPositionActionCfg
 
-  def __init__(self, cfg: MotionTrackingJointPositionActionCfg, env: "ManagerBasedRlEnv"):
+  def __init__(self, cfg: SpTrackingJointPositionActionCfg, env: "ManagerBasedRlEnv"):
     super().__init__(cfg=cfg, env=env)
     self._apply_joint_name_order()
     if not isinstance(self._offset, torch.Tensor):

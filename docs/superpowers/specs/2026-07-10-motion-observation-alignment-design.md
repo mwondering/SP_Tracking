@@ -2,13 +2,13 @@
 
 ## Background
 
-`SP_Tracking` currently computes motion-tracking observations through `src/sp_tracking/tasks/tracking/mdp/sp.py`, while the reference repository `/home/lenovo/workspace/UNICTL/motion_tracking` uses a different observation chain in `active_adaptation/envs/mdp/commands/motion_tracking/observations.py` and `active_adaptation/envs/mdp/observations/core.py`.
+`SP_Tracking` computes SP observations through `src/sp_tracking/tasks/tracking/mdp/sp.py`, while the reference repository uses a different observation chain in its command and core observation modules.
 
 Recent NaN failures point to observation computation rather than dataset scanning or metadata loading. The goal is to align the observation chain with the reference implementation without replacing the large-dataset loader, active-subset cache, or adaptive sampling framework.
 
 ## Goal
 
-Fully align the motion-observation pipeline in `SP_Tracking` with the semantics used in `motion_tracking`, while keeping the current large-dataset architecture intact.
+Fully align the motion-observation pipeline in `SP_Tracking` with the reference semantics, while keeping the current large-dataset architecture intact.
 
 Success criteria:
 
@@ -33,7 +33,7 @@ Files expected to change:
 1. Rewriting the large-dataset loader or active-subset machinery
 2. Changing reward logic unless required by observation interface parity
 3. Changing PPO, runner, distributed launch, or cache generation logic
-4. Porting the entire `motion_tracking` command system wholesale
+4. Porting the entire reference command system wholesale
 
 ## Alignment Targets
 
@@ -104,7 +104,7 @@ Design rules:
 
 1. Align `command_obs`.
 2. Align `target_joint_pos_obs`, `target_root_z_obs`, and `target_projected_gravity_b_obs`.
-3. Align current-keypoint and target-keypoint observations with the reference frame conventions used in `motion_tracking`.
+3. Align current-keypoint and target-keypoint observations with the reference frame conventions.
 4. Align `feet_contact_state`, `target_feet_contact_state_obs`, and motion-derived termination-hint observations.
 
 ### Phase 4: Diagnostics and validation

@@ -5,7 +5,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 from rsl_rl.modules.normalization import EmpiricalNormalization
 
-from sp_tracking.tasks.tracking.rl.runner import MotionTrackingOnPolicyRunner
+from sp_tracking.tasks.tracking.rl.runner import SpTrackingOnPolicyRunner
 
 
 class _FakePolicy:
@@ -64,8 +64,8 @@ class _FakeLogger:
     self.models.append((Path(path).name, it))
 
 
-def _make_runner(tmp_path: Path) -> MotionTrackingOnPolicyRunner:
-  runner = object.__new__(MotionTrackingOnPolicyRunner)
+def _make_runner(tmp_path: Path) -> SpTrackingOnPolicyRunner:
+  runner = object.__new__(SpTrackingOnPolicyRunner)
   runner.alg = _FakeAlg()
   runner.current_learning_iteration = 7
   runner.cfg = {"upload_model": True}
@@ -84,7 +84,7 @@ def _make_runner(tmp_path: Path) -> MotionTrackingOnPolicyRunner:
   return runner
 
 
-def test_runner_save_writes_motion_tracking_payload(tmp_path: Path, monkeypatch) -> None:
+def test_runner_save_writes_sp_tracking_payload(tmp_path: Path, monkeypatch) -> None:
   runner = _make_runner(tmp_path)
   monkeypatch.setattr(runner, "_export_deploy_artifacts", lambda path: None)
 
@@ -129,7 +129,7 @@ def test_runner_save_exports_fixed_policy_onnx_name(tmp_path: Path, monkeypatch)
   assert exported == [(tmp_path, "policy.onnx")]
 
 
-def test_runner_load_reads_motion_tracking_payload(tmp_path: Path) -> None:
+def test_runner_load_reads_sp_tracking_payload(tmp_path: Path) -> None:
   runner = _make_runner(tmp_path)
   checkpoint = {
     "policy": {"actor": torch.tensor([4.0])},

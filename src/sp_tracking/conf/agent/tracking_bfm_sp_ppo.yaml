@@ -1,4 +1,4 @@
-experiment_name: g1_motion_tracking_sp
+experiment_name: g1_sp_tracking
 save_interval: 1000
 num_steps_per_env: 32
 max_iterations: 300000

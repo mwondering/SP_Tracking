@@ -16,7 +16,7 @@ student_train: true
 robot:
   name: g1
   mass: 33.341142
-  asset: motion_tracking_g1
+  asset: sp_tracking_g1
   entity_name: robot
   anchor_body_name: pelvis
   viewer_body_name: pelvis
@@ -114,7 +114,7 @@ command:
       body_ang_vel_w: [-8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 20]
 
 action:
-  type: motion_tracking
+  type: sp_tracking
   scale:
     ".*_elbow_joint": 1.0
     ".*_shoulder_pitch_joint": 1.0
@@ -258,9 +258,9 @@ events:
       std: 0.1
 
 curriculum:
-  motion_tracking_progress:
+  sp_tracking_progress:
     enabled: true
-    term: motion_tracking_progress
+    term: sp_tracking_progress
 
 # The source task samples contacts and uncorrupted joint state at every
 # physics substep.  This opt-in cache is also reusable by other task presets.

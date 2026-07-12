@@ -16,7 +16,7 @@ from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 
 from sp_tracking.config.build_agent import serialize_agent_cfg
 from sp_tracking.scripts.train import prepare_train_cfg
-from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
+from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
 
 
 TASK_OVERRIDES = {
@@ -119,7 +119,7 @@ def _prepare_checkpoint_train_cfg(
   if "task" not in saved_cfg or "agent" not in saved_cfg:
     raise ValueError(
       "The checkpoint cfg is not an SP_Tracking train configuration. "
-      "Raw motion_tracking checkpoints cannot be loaded by the different RSL policy stack."
+      "Raw source checkpoints cannot be loaded by the different RSL policy stack."
     )
   saved_task = str(saved_cfg.task.get("name", ""))
   if requested_task is not None and requested_task != saved_task:
@@ -141,7 +141,7 @@ def prepare_play_cfg(cfg: PlayConfig) -> PreparedPlayCfg:
   return PreparedPlayCfg(env=env_cfg, agent=agent_cfg, checkpoint_path=checkpoint_path)
 
 
-def _get_trained_policy(runner: MotionTrackingOnPolicyRunner, device: str, stochastic: bool):
+def _get_trained_policy(runner: SpTrackingOnPolicyRunner, device: str, stochastic: bool):
   if not stochastic:
     return runner.get_inference_policy(device=device)
 
@@ -162,7 +162,7 @@ def run_play(cfg: PlayConfig) -> None:
   device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
   env = ManagerBasedRlEnv(cfg=deepcopy(prepared.env), device=device)
   wrapped_env = RslRlVecEnvWrapper(env, clip_actions=prepared.agent.clip_actions)
-  runner = MotionTrackingOnPolicyRunner(
+  runner = SpTrackingOnPolicyRunner(
     wrapped_env,
     serialize_agent_cfg(prepared.agent),
     log_dir=None,

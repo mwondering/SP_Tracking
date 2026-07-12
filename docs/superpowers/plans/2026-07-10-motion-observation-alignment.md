@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Align `SP_Tracking` motion-observation math and lifecycle semantics with the reference `motion_tracking` repository without changing the large-dataset loader or adaptive sampling architecture.
+**Goal:** Align `SP_Tracking` motion-observation math and lifecycle semantics with the reference repository without changing the large-dataset loader or adaptive sampling architecture.
 
 **Architecture:** Keep the current command and loader stack, but replace the observation math in `sp.py` with reference-equivalent frame conventions, buffering semantics, and contact/gravity normalization. Use focused tests to lock down each observation family before changing implementation.
 

@@ -9,8 +9,8 @@ def test_tracking_mdp_modules_import() -> None:
 
 
 def test_tracking_rl_modules_import() -> None:
-  from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
+  from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
   from sp_tracking.tasks.tracking.rl.ppo import SparseTrackSplitLrPPO
 
-  assert MotionTrackingOnPolicyRunner is not None
+  assert SpTrackingOnPolicyRunner is not None
   assert SparseTrackSplitLrPPO is not None

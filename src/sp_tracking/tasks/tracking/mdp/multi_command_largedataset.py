@@ -2070,7 +2070,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     self.motion_length = torch.zeros(
       self.num_envs, dtype=torch.long, device=self.device
     )
-    self._initialize_motion_tracking_state()
+    self._initialize_sp_tracking_state()
     self._initialize_env_motion_assignments()
 
     self.body_pos_relative_w = torch.zeros(

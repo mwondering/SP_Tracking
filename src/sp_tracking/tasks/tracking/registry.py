@@ -8,7 +8,7 @@ from mjlab.tasks.registry import list_tasks, register_mjlab_task
 
 from sp_tracking.config.build_agent import build_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
-from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
+from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
 
 
 TRACKING_BFM_TASK_ID = "SPTracking-G1-BFM"
@@ -34,7 +34,7 @@ def _register_task(task_id: str, overrides: list[str] | None = None) -> None:
     env_cfg=build_env_cfg(cfg.task),
     play_env_cfg=build_env_cfg(play_cfg.task),
     rl_cfg=build_agent_cfg(cfg.agent, cfg.task.get("agent_overrides")),
-    runner_cls=MotionTrackingOnPolicyRunner,
+    runner_cls=SpTrackingOnPolicyRunner,
   )
 
 

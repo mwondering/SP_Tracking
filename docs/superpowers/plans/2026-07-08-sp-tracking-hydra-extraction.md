@@ -77,10 +77,10 @@ def test_tracking_mdp_modules_import() -> None:
 
 
 def test_tracking_rl_modules_import() -> None:
-  from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
+  from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
   from sp_tracking.tasks.tracking.rl.ppo import SparseTrackSplitLrPPO
 
-  assert MotionTrackingOnPolicyRunner is not None
+  assert SpTrackingOnPolicyRunner is not None
   assert SparseTrackSplitLrPPO is not None
 ```
 
@@ -169,7 +169,7 @@ Expected: FAIL because train helpers are missing.
 
 - [ ] **Step 3: Implement the train entry**
 
-Use Hydra `@hydra.main(config_path="../conf", config_name="train")`. The entry composes env/agent configs, applies motion path overrides, creates `ManagerBasedRlEnv`, wraps with `RslRlVecEnvWrapper`, creates `MotionTrackingOnPolicyRunner`, handles resume/debug/log dir, and calls `runner.learn()`.
+Use Hydra `@hydra.main(config_path="../conf", config_name="train")`. The entry composes env/agent configs, applies motion path overrides, creates `ManagerBasedRlEnv`, wraps with `RslRlVecEnvWrapper`, creates `SpTrackingOnPolicyRunner`, handles resume/debug/log dir, and calls `runner.learn()`.
 
 - [ ] **Step 4: Run train-entry tests**
 

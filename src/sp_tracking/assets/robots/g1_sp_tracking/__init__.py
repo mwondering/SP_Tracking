@@ -13,7 +13,7 @@ from mjlab.asset_zoo.robots.unitree_g1.g1_constants import (
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
 
-G1_MOTION_TRACKING_XML = Path(__file__).with_name("g1.xml")
+G1_SP_TRACKING_XML = Path(__file__).with_name("g1.xml")
 
 
 # Keep the wrapper semantics aligned with active_adaptation/assets/g1.py.  The
@@ -44,10 +44,10 @@ G1_INIT_STATE = EntityCfg.InitialStateCfg(
   joint_vel={".*": 0.0},
 )
 
-# This is the canonical policy/data ordering used by motion_tracking.  MuJoCo
+# This is the canonical policy/data ordering used by SP tracking.  MuJoCo
 # stores G1 joints in XML tree order, so downstream SP terms explicitly use
 # this order when building action and observation tensors.
-G1_JOINT_ORDER = (
+G1_SP_JOINT_ORDER = (
   "left_hip_pitch_joint", "right_hip_pitch_joint", "waist_yaw_joint",
   "left_hip_roll_joint", "right_hip_roll_joint", "waist_roll_joint",
   "left_hip_yaw_joint", "right_hip_yaw_joint", "waist_pitch_joint",
@@ -82,14 +82,14 @@ def _joint_symmetry_sign(name: str, axis: tuple[float, float, float]) -> int:
 
 
 def _build_xml_symmetry_maps() -> tuple[dict[str, tuple[int, str]], dict[str, str]]:
-  """Reproduce motion_tracking's deterministic auto-symmetry mapping.
+  """Reproduce the reference task's deterministic auto-symmetry mapping.
 
   The upstream helper additionally validates the generated mapping.  mjlab's
   current EntityCfg does not consume these mappings itself, but retaining them
   on the SP asset keeps config consumers and future symmetry ablations aligned
   with the reference wrapper without importing the legacy project at runtime.
   """
-  root = ET.parse(G1_MOTION_TRACKING_XML).getroot()
+  root = ET.parse(G1_SP_TRACKING_XML).getroot()
   joint_axes: dict[str, tuple[float, float, float]] = {}
   body_names: list[str] = []
   for body in root.findall(".//body"):
@@ -123,13 +123,13 @@ def _build_xml_symmetry_maps() -> tuple[dict[str, tuple[int, str]], dict[str, st
   return joint_map, body_map
 
 
-G1_JOINT_SYMMETRY_MAP, G1_SPATIAL_SYMMETRY_MAP = _build_xml_symmetry_maps()
+G1_SP_JOINT_SYMMETRY_MAP, G1_SP_SPATIAL_SYMMETRY_MAP = _build_xml_symmetry_maps()
 
 
 # Keep this articulation local to the SP asset.  These are the exact actuator
-# parameters used by UNICTL/motion_tracking's G1_ARTICULATION; the regular
+# parameters used by the reference G1 articulation; the regular
 # tracking_bfm asset continues to use mjlab's articulation unchanged.
-G1_MOTION_TRACKING_ARTICULATION = EntityArticulationInfoCfg(
+G1_SP_TRACKING_ARTICULATION = EntityArticulationInfoCfg(
   actuators=(
     BuiltinPositionActuatorCfg(
       target_names_expr=(
@@ -188,21 +188,21 @@ G1_MOTION_TRACKING_ARTICULATION = EntityArticulationInfoCfg(
 )
 
 
-def get_g1_motion_tracking_spec() -> mujoco.MjSpec:
-  return mujoco.MjSpec.from_file(str(G1_MOTION_TRACKING_XML))
+def get_g1_sp_tracking_spec() -> mujoco.MjSpec:
+  return mujoco.MjSpec.from_file(str(G1_SP_TRACKING_XML))
 
 
-def get_g1_motion_tracking_robot_cfg() -> EntityCfg:
+def get_g1_sp_tracking_robot_cfg() -> EntityCfg:
   cfg = EntityCfg(
     init_state=G1_INIT_STATE,
     collisions=(G1_FULL_COLLISION_ALL_PRIORITY,),
-    spec_fn=get_g1_motion_tracking_spec,
-    articulation=G1_MOTION_TRACKING_ARTICULATION,
+    spec_fn=get_g1_sp_tracking_spec,
+    articulation=G1_SP_TRACKING_ARTICULATION,
   )
   # These attributes are intentionally attached for compatibility with the
   # original wrapper.  EntityCfg is not slotted, and mjlab preserves them on
   # the asset configuration for downstream consumers.
-  cfg.joint_symmetry_mapping = G1_JOINT_SYMMETRY_MAP
-  cfg.spatial_symmetry_mapping = G1_SPATIAL_SYMMETRY_MAP
-  cfg.joint_name_order = G1_JOINT_ORDER
+  cfg.joint_symmetry_mapping = G1_SP_JOINT_SYMMETRY_MAP
+  cfg.spatial_symmetry_mapping = G1_SP_SPATIAL_SYMMETRY_MAP
+  cfg.joint_name_order = G1_SP_JOINT_ORDER
   return cfg

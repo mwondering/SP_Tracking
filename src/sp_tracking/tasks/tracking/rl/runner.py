@@ -621,7 +621,7 @@ def _format_nonfinite_action_diagnostics(env: object, actions: torch.Tensor) -> 
   return f"Policy action contains NaN/Inf: envs={env_ids[:10]}{suffix}"
 
 
-class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
+class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
   env: RslRlVecEnvWrapper
 
   def __init__(
@@ -654,11 +654,11 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
       self.logger, self.launch_script_artifact_path
     )
 
-  def _has_motion_tracking_curriculum(self) -> bool:
+  def _has_sp_tracking_curriculum(self) -> bool:
     unwrapped_env = getattr(self.env, "unwrapped", None)
     curriculum_manager = getattr(unwrapped_env, "curriculum_manager", None)
     active_terms = getattr(curriculum_manager, "active_terms", ())
-    return "motion_tracking_progress" in active_terms
+    return "sp_tracking_progress" in active_terms
 
   @staticmethod
   def _record_schedule_state(
@@ -672,8 +672,8 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
       except (TypeError, ValueError):
         continue
 
-  def _step_motion_tracking_curriculum(self, iteration: int) -> None:
-    if not self._has_motion_tracking_curriculum():
+  def _step_sp_tracking_curriculum(self, iteration: int) -> None:
+    if not self._has_sp_tracking_curriculum():
       return
     max_iterations = max(int(self.cfg.get("max_iterations", iteration + 1)), 1)
     progress = min(max(float(iteration + 1) / float(max_iterations), 0.0), 1.0)
@@ -713,7 +713,7 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
         result = step_schedule(progress, iteration)
         self._record_schedule_state(state, "reward", str(name), result)
 
-    unwrapped_env._motion_tracking_curriculum_state = state
+    unwrapped_env._sp_tracking_curriculum_state = state
 
   def _begin_adaptive_sampling_iteration(self, iteration: int) -> None:
     _bootstrap_debug(f"before begin_adaptive_sampling_iteration iteration={iteration}")
@@ -895,7 +895,7 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     total_it = start_it + num_learning_iterations
     for it in range(start_it, total_it):
       _bootstrap_debug(f"iteration {it}: start")
-      self._step_motion_tracking_curriculum(it)
+      self._step_sp_tracking_curriculum(it)
       self._begin_adaptive_sampling_iteration(it)
       self._write_large_dataset_snapshot(it)
       start = time.time()
@@ -1029,13 +1029,13 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     return {"common_step_counter": int(self.env.unwrapped.common_step_counter)}
 
   @staticmethod
-  def _motion_tracking_vecnorm_stats(normalizer: object) -> dict[str, torch.Tensor]:
-    """Convert RSL's empirical normalizer to motion_tracking VecNorm fields.
+  def _sp_tracking_vecnorm_stats(normalizer: object) -> dict[str, torch.Tensor]:
+    """Convert RSL's empirical normalizer to reference-compatible VecNorm fields.
 
     RSL stores mean/variance directly on the actor.  The reference repository
     stores a VecNorm accumulator under ``vecnorm['_extra_state']``.  Emitting
     this adapter keeps the checkpoint surface compatible for tools that inspect
-    motion_tracking checkpoints, while RSL still restores its authoritative
+    reference checkpoints, while RSL still restores its authoritative
     normalizer from ``actor_state_dict``.
     """
     state_dict = getattr(normalizer, "state_dict", lambda: {})()
@@ -1057,9 +1057,9 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
       "count": count,
     }
 
-  def _motion_tracking_vecnorm_state(self) -> dict | None:
+  def _sp_tracking_vecnorm_state(self) -> dict | None:
     actor = self.alg.get_policy()
-    stats = self._motion_tracking_vecnorm_stats(
+    stats = self._sp_tracking_vecnorm_stats(
       getattr(actor, "obs_normalizer", None)
     )
     if not stats:
@@ -1117,7 +1117,7 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     checkpoint_cfg = getattr(self, "checkpoint_cfg", None)
     if checkpoint_cfg is not None:
       payload["cfg"] = checkpoint_cfg
-    vecnorm_state = self._motion_tracking_vecnorm_state()
+    vecnorm_state = self._sp_tracking_vecnorm_state()
     if vecnorm_state is not None:
       payload["vecnorm"] = vecnorm_state
     if self.logger.logger_type in {"wandb", "WandbLogWriter"} and wandb.run:

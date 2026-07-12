@@ -7,6 +7,11 @@ from typing import Any
 import torch
 
 
+# External deployment contract retained for compatibility with the reference
+# framework.  It is intentionally not an internal SP naming choice.
+REFERENCE_SIM2REAL_POLICY_FORMAT = "motion_tracking_sim2real_policy"
+
+
 def _policy_input_size(policy: torch.nn.Module) -> int:
   if hasattr(policy, "input_size"):
     return int(getattr(policy, "input_size"))
@@ -24,7 +29,7 @@ def build_sim2real_policy_metadata(
 ) -> dict[str, Any]:
   input_size = _policy_input_size(policy)
   return {
-    "format": "motion_tracking_sim2real_policy",
+    "format": REFERENCE_SIM2REAL_POLICY_FORMAT,
     "run_name": run_name,
     "iteration": iteration,
     "checkpoint": checkpoint_name,

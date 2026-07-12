@@ -80,7 +80,7 @@ SP_TERMINATION_KILL_FRAMES = 5
 class substep_tracking_cache:
   """Source-compatible substep state shared by SP observations and rewards.
 
-  motion_tracking samples joint position/velocity after every physics substep
+  the reference task samples joint position/velocity after every physics substep
   and uses the final two samples for uncorrupted histories and joint-velocity
   regularization.  It also derives foot contact with a per-control-step vote.
   MJLab exposes the same hook through a ``per_substep`` metrics term; keeping
@@ -175,7 +175,7 @@ class substep_tracking_cache:
     """Return source-style majority contact plus transition indicators."""
     step = int(self.env.common_step_counter)
     if self._contact_finalized_step != step:
-      # Match motion_tracking exactly: with even decimation a tied vote counts
+      # Match the reference exactly: with even decimation a tied vote counts
       # as contact (``votes >= decimation // 2``).
       current = self._contact_found.sum(dim=-1) >= (self.decimation // 2)
       previous = self.current_contact.clone()
@@ -297,7 +297,7 @@ def _continuous_termination(
 def _apply_termination_warmup(
   env: "ManagerBasedRlEnv", cmd: MultiMotionCommand, value: torch.Tensor
 ) -> torch.Tensor:
-  """Mirror motion_tracking's initial failure-termination guard."""
+  """Mirror the reference task's initial failure-termination guard."""
   warmup_steps = max(int(getattr(cmd.cfg, "termination_warmup_steps", 0)), 0)
   if warmup_steps == 0:
     return value

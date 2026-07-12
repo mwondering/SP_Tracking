@@ -43,7 +43,7 @@ def _rand_unit_vectors(shape: tuple[int, ...], device: str) -> torch.Tensor:
 
 
 def _add_spherical_noise(x: torch.Tensor, noise_std: float) -> torch.Tensor:
-  """Match motion_tracking's bounded isotropic 3-D noise distribution."""
+  """Match the reference task's bounded isotropic 3-D noise distribution."""
   if noise_std <= 0.0:
     return x
   if x.shape[-1] != 3:
@@ -521,6 +521,6 @@ class perturb_gravity:
     return self._gravity
 
 
-def motion_tracking_progress(env: "ManagerBasedRlEnv", env_ids, **_: Any) -> dict[str, float]:
+def sp_tracking_progress(env: "ManagerBasedRlEnv", env_ids, **_: Any) -> dict[str, float]:
   del env_ids
-  return dict(getattr(env, "_motion_tracking_curriculum_state", {"progress": 0.0}))
+  return dict(getattr(env, "_sp_tracking_curriculum_state", {"progress": 0.0}))

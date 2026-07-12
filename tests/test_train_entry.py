@@ -74,7 +74,7 @@ def test_reference_cache_defaults_and_sp_step_groups() -> None:
   ) == (-8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 20)
 
 
-def test_sp_task_applies_one_stage_motion_tracking_agent_preset() -> None:
+def test_sp_task_applies_one_stage_sp_tracking_agent_preset() -> None:
   cfg = _compose("task=tracking_bfm_sp")
 
   prepared = prepare_train_cfg(cfg)
@@ -215,7 +215,7 @@ def test_run_train_configures_torch_backends_before_env(monkeypatch, tmp_path: P
 
   monkeypatch.setattr(train_module, "ManagerBasedRlEnv", FakeEnv)
   monkeypatch.setattr(train_module, "RslRlVecEnvWrapper", FakeWrapper)
-  monkeypatch.setattr(train_module, "MotionTrackingOnPolicyRunner", FakeRunner)
+  monkeypatch.setattr(train_module, "SpTrackingOnPolicyRunner", FakeRunner)
 
   train_module.run_train(OmegaConf.create({"gpu_ids": [0]}))
 

@@ -55,7 +55,7 @@ class SparseTrackSplitLrPPO(PPO):
     )
 
   def process_env_step(self, obs, rewards, dones, extras) -> None:
-    """Optionally reproduce motion_tracking's non-negative reward signal."""
+    """Optionally reproduce the reference task's non-negative reward signal."""
     if self.clamp_rewards_min is not None:
       rewards = rewards.clamp_min(float(self.clamp_rewards_min))
     return super().process_env_step(obs, rewards, dones, extras)

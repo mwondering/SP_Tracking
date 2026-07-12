@@ -66,7 +66,7 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert env_cfg.commands["motion"].fk_from_joint_pos is True
   assert env_cfg.commands["motion"].recompute_joint_vel_from_joint_pos is True
   assert env_cfg.commands["motion"].termination_warmup_steps == 5
-  assert type(env_cfg.actions["joint_pos"]).__name__ == "MotionTrackingJointPositionActionCfg"
+  assert type(env_cfg.actions["joint_pos"]).__name__ == "SpTrackingJointPositionActionCfg"
   assert [sensor.name for sensor in env_cfg.scene.sensors] == ["contact_forces"]
   assert env_cfg.sim.nconmax == 200
   assert env_cfg.sim.njmax == 2048
@@ -100,7 +100,7 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
     "perturb_body_wrench",
     "perturb_gravity",
   }
-  assert "motion_tracking_progress" in env_cfg.curriculum
+  assert "sp_tracking_progress" in env_cfg.curriculum
   assert env_cfg.metrics["substep_tracking_cache"].per_substep is True
 
 
