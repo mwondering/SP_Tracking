@@ -276,6 +276,7 @@ curriculum:
 metrics:
   substep_tracking_cache:
     term: substep_tracking_cache
+    params: {sensor_name: contact_forces}
     per_substep: true
     reduce: last
 

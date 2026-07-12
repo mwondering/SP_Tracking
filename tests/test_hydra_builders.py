@@ -148,6 +148,19 @@ def test_sp_observation_module_adds_its_contact_sensor_in_a_mixed_ablation() -> 
   ]
 
 
+def test_sp_substep_metric_adds_contact_sensor_without_sp_obs_or_reward() -> None:
+  cfg = _compose("task=tracking_bfm_sp_old_obs_old_reward_bfm_agent")
+
+  env_cfg = build_env_cfg(cfg.task)
+
+  # This variant retains the SP per-substep cache, which reads foot contact at
+  # every physics substep even though its active obs/reward modules are old.
+  assert [sensor.name for sensor in env_cfg.scene.sensors] == [
+    "contact_forces",
+    "self_collision",
+  ]
+
+
 def test_observation_nan_policy_is_hydra_configurable() -> None:
   cfg = _compose(
     "task=tracking_bfm_sp",

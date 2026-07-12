@@ -573,34 +573,51 @@ def _build_metrics(cfg: DictConfig) -> dict[str, MetricsTermCfg]:
   return terms
 
 
-def _configured_observation_term_keys(cfg: DictConfig) -> set[str]:
+def _configured_contact_sensor_names(cfg: DictConfig) -> set[str]:
+  """Return contact-sensor names explicitly requested by active task terms.
+
+  Observation, reward, and metric modules can all consume a contact sensor.
+  Keeping this dependency in the YAML term parameters means mixed ablations do
+  not need task-name-specific sensor logic.  In particular, the SP substep
+  cache consumes ``contact_forces`` even when both SP observations and rewards
+  are replaced by their legacy counterparts.
+  """
+  sensor_names: set[str] = set()
+
+  def add_sensor_name(term_cfg: Any) -> None:
+    params = term_cfg.get("params")
+    if params is None:
+      return
+    sensor_name = params.get("sensor_name")
+    if sensor_name is not None:
+      sensor_names.add(str(sensor_name))
+
   obs_cfg = cfg.observations if "observations" in cfg else cfg.obs.observations
-  return {
-    str(item.term)
-    for group_cfg in obs_cfg.values()
-    for item in group_cfg.terms
-  }
+  for group_cfg in obs_cfg.values():
+    for term_cfg in group_cfg.terms:
+      add_sensor_name(term_cfg)
 
-
-def _configured_reward_term_keys(cfg: DictConfig) -> set[str]:
   reward_cfg = cfg.rewards if "rewards" in cfg else cfg.reward.rewards
-  return {str(item.term) for item in reward_cfg}
+  for term_cfg in reward_cfg:
+    add_sensor_name(term_cfg)
+
+  for term_cfg in cfg.get("metrics", {}).values():
+    if term_cfg.get("enabled", True):
+      add_sensor_name(term_cfg)
+
+  return sensor_names
 
 
 def _build_sensors(cfg: DictConfig):
   """Select sensors from active modules, rather than from a task name.
 
-  This lets a future ablation put SP observations or rewards on
+  This lets a future ablation put SP observations, rewards, or metrics on
   ``tracking_bfm`` without accidentally retaining only the old self-collision
-  sensor.  Mixed presets get both required sensors.
+  sensor.  Mixed presets get every contact sensor their active terms declare.
   """
-  observation_terms = _configured_observation_term_keys(cfg)
-  reward_terms = _configured_reward_term_keys(cfg)
-  needs_contact_forces = bool(
-    {"feet_contact_state"}.intersection(observation_terms)
-    or {"feet_air_time_ref", "feet_air_time_ref_dense"}.intersection(reward_terms)
-  )
-  needs_self_collision = "self_collision_cost" in reward_terms
+  requested_sensors = _configured_contact_sensor_names(cfg)
+  needs_contact_forces = "contact_forces" in requested_sensors
+  needs_self_collision = "self_collision" in requested_sensors
   sensors = []
   if needs_contact_forces:
     sensors.append(

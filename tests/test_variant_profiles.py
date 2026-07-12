@@ -98,6 +98,7 @@ def test_named_variants_form_a_supported_profile_matrix() -> None:
       assert command.rewind.enabled is True
       assert "sp_tracking_progress" in env_cfg.curriculum
       assert "substep_tracking_cache" in env_cfg.metrics
+      assert "contact_forces" in {sensor.name for sensor in env_cfg.scene.sensors}
       assert {"body_z_termination", "gravity_dir_termination"} <= set(
         env_cfg.terminations
       )
