@@ -8,9 +8,9 @@ wandb_project: mjlab
 run_name: ""
 resume: false
 load_run: .*
-load_checkpoint: model_.*.pt
+load_checkpoint: checkpoint_.*.pt
 clip_actions: null
-upload_model: true
+upload_model: false
 
 actor:
   hidden_dims: [2048, 2048, 1024, 1024, 512, 256, 128]

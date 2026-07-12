@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 LAUNCH_SCRIPT_PATH="${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")"
+export WANDB_API_KEY="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"
 
 usage() {
   cat >&2 <<'USAGE'
@@ -28,7 +29,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-MOTION_PATH="${SP_TRACKING_MOTION_PATH:-/home/lenovo/DATASETS/Data10k_full}"
+MOTION_PATH="${SP_TRACKING_MOTION_PATH:-/data_zcy/zcy/datasets/motion_data_used_g1/AMASS_LAFAN_Qingtong/lafan_qingtong}"
 if [[ $# -gt 0 && "$1" != *=* ]]; then
   MOTION_PATH="$1"
   shift
@@ -39,7 +40,7 @@ if [[ -z "${MOTION_PATH}" ]]; then
   exit 2
 fi
 
-GPUS="${SP_TRACKING_GPUS:-2,3}"
+GPUS="${SP_TRACKING_GPUS:-0,1,2,3}"
 IFS=',' read -r -a GPU_LIST <<< "${GPUS}"
 NPROC="${SP_TRACKING_NPROC:-${#GPU_LIST[@]}}"
 
@@ -51,22 +52,33 @@ mkdir -p "${MPLCONFIGDIR}"
 cmd=(
   uv run torchrun
   --standalone
-  "--local_ranks_filter=0"
+  # "--local_ranks_filter=0"
   "--nproc_per_node=${NPROC}"
   -m sp_tracking.scripts.train
-  task=tracking_bfm_sp
+  # task=tracking_bfm
+  task=tracking_bfm
   "motion_path=${MOTION_PATH}"
   "launch_script_path=${LAUNCH_SCRIPT_PATH}"
-  "task.num_envs=${SP_TRACKING_NUM_ENVS:-16}"
+  "task.num_envs=${SP_TRACKING_NUM_ENVS:-16384}"
   "task.command.command.history_steps=${SP_TRACKING_HISTORY_STEPS:-0}"
   "task.command.command.future_steps=${SP_TRACKING_FUTURE_STEPS:-1}"
   "agent.max_iterations=${SP_TRACKING_MAX_ITERATIONS:-300000}"
   "agent.num_steps_per_env=${SP_TRACKING_NUM_STEPS_PER_ENV:-32}"
   "agent.logger=wandb"
   "agent.upload_model=False"
-  "agent.wandb_project=${SP_TRACKING_WANDB_PROJECT:-sp-tracking}"
+  "agent.wandb_project=${SP_TRACKING_WANDB_PROJECT:-tracking_bfm}"
   "agent.save_interval=${SP_TRACKING_SAVE_INTERVAL:-2000}"
   "log_root=${SP_TRACKING_LOG_ROOT:-logs/rsl_rl}"
+  "++task.command.command.adaptive_pre_failure_sample_window_steps=100"
+  "++task.command.command.adaptive_bin_snapshot_interval_iterations=1"
+  "++task.command.command.adaptive_bin_snapshot_num_buckets=2048"
+  "++task.command.command.motion_scan_backend=fd"
+  "++task.command.command.motion_scan_fd_executable=fdfind"
+  "++task.command.command.motion_scan_workers=32"
+  "++task.command.command.motion_metadata_read_workers=32"
+  "++task.command.command.motion_metadata_read_backend=process"
+  "++task.command.command.motion_metadata_read_workers=32"
+  "++task.command.command.motion_metadata_read_chunksize=128"
 )
 
 RUN_NAME="${SP_TRACKING_RUN_NAME:-trydebug_multigpu}"

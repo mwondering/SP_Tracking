@@ -18,10 +18,7 @@ from mjlab.utils.torch import configure_torch_backends
 from sp_tracking.config.build_agent import build_agent_cfg, serialize_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
-from sp_tracking.tasks.tracking.rl.checkpoints import (
-  get_wandb_checkpoint_path,
-  resolve_local_checkpoint_path,
-)
+from sp_tracking.tasks.tracking.rl.checkpoints import resolve_local_checkpoint_path
 
 
 @dataclass
@@ -115,6 +112,14 @@ def _save_resolved_cfg(log_dir: Path, cfg: DictConfig) -> None:
   OmegaConf.save(cfg, log_dir / "config.yaml", resolve=True)
 
 
+def _serialize_checkpoint_cfg(cfg: DictConfig) -> dict[str, Any]:
+  """Make a portable, fully resolved source-style ``cfg`` checkpoint field."""
+  serialized = OmegaConf.to_container(cfg, resolve=True)
+  if not isinstance(serialized, dict):
+    raise TypeError("Expected the resolved training configuration to be a mapping.")
+  return serialized
+
+
 def _resolve_resume_path(
   cfg: DictConfig,
   agent_cfg: RslRlOnPolicyRunnerCfg,
@@ -124,14 +129,6 @@ def _resolve_resume_path(
     path = Path(str(checkpoint_path)).expanduser()
     if not path.is_file():
       raise FileNotFoundError(f"Checkpoint file not found: {path}")
-    return path
-  if cfg.get("wandb_run_path"):
-    log_root = Path(str(cfg.get("log_root", "logs/rsl_rl"))) / agent_cfg.experiment_name
-    path, _ = get_wandb_checkpoint_path(
-      log_root=log_root,
-      run_path=str(cfg.get("wandb_run_path")),
-      checkpoint_name=cfg.get("wandb_checkpoint_name"),
-    )
     return path
   if not bool(agent_cfg.resume):
     return None
@@ -170,6 +167,7 @@ def run_train(cfg: DictConfig) -> None:
       str(launch_script_artifact_path) if launch_script_artifact_path else None
     ),
     debug_nonfinite_state=bool(task_cfg.get("debug_nonfinite_state", False)),
+    checkpoint_cfg=OmegaConf.create(_serialize_checkpoint_cfg(cfg)),
   )
   resume_path = _resolve_resume_path(cfg, prepared.agent)
   if resume_path is not None:

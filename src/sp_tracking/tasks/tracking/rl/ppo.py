@@ -15,6 +15,8 @@ from rsl_rl.utils import resolve_optimizer
 class SparseTrackSplitLrPPO(PPO):
   """PPO with SparseTrack-style actor and critic optimizer learning rates."""
 
+  _SPLIT_LR_STATE_KEY = "tracking_split_lr_state"
+
   def __init__(
     self,
     actor: MLPModel,
@@ -73,6 +75,67 @@ class SparseTrackSplitLrPPO(PPO):
     self.learning_rate = float(lr)
     for param_group in self.optimizer.param_groups:
       param_group["lr"] = self.learning_rate
+
+  def _split_lr_checkpoint_state(self) -> dict[str, float]:
+    """Return mutable learning-rate state not covered by ``optimizer.state_dict``.
+
+    The optimizer serializes its parameter-group learning rates, but this PPO
+    variant also keeps Python-side actor/critic LR fields.  ``update`` uses
+    those fields to overwrite the optimizer groups during adaptive scheduling,
+    so they must round-trip with a resumed run as well.
+    """
+    if not (
+      hasattr(self, "actor_learning_rate") and hasattr(self, "critic_learning_rate")
+    ):
+      return {}
+    return {
+      "actor_learning_rate": float(self.actor_learning_rate),
+      "critic_learning_rate": float(self.critic_learning_rate),
+      "learning_rate": float(self.learning_rate),
+    }
+
+  def _restore_split_lr_checkpoint_state(
+    self, loaded_dict: dict, load_cfg: dict | None
+  ) -> None:
+    """Restore split LR fields after the base PPO restores its optimizer.
+
+    Old checkpoints did not contain ``tracking_split_lr_state``.  For those,
+    derive the authoritative values from the restored optimizer parameter
+    groups so existing local runs remain resumable.
+    """
+    if not (
+      hasattr(self, "actor_learning_rate") and hasattr(self, "critic_learning_rate")
+    ):
+      return
+    if load_cfg is not None and not bool(load_cfg.get("optimizer", False)):
+      return
+
+    state = loaded_dict.get(self._SPLIT_LR_STATE_KEY, {})
+    if not isinstance(state, dict):
+      state = {}
+    param_groups = self.optimizer.param_groups
+    if len(param_groups) < 2:
+      return
+
+    actor_lr = state.get("actor_learning_rate", param_groups[0]["lr"])
+    critic_lr = state.get("critic_learning_rate", param_groups[1]["lr"])
+    self.actor_learning_rate = float(actor_lr)
+    self.critic_learning_rate = float(critic_lr)
+    self.learning_rate = float(state.get("learning_rate", self.actor_learning_rate))
+    param_groups[0]["lr"] = self.actor_learning_rate
+    param_groups[1]["lr"] = self.critic_learning_rate
+
+  def save(self) -> dict:
+    saved_dict = super().save()
+    split_lr_state = self._split_lr_checkpoint_state()
+    if split_lr_state:
+      saved_dict[self._SPLIT_LR_STATE_KEY] = split_lr_state
+    return saved_dict
+
+  def load(self, loaded_dict: dict, load_cfg: dict | None, strict: bool) -> bool:
+    load_iteration = super().load(loaded_dict, load_cfg, strict)
+    self._restore_split_lr_checkpoint_state(loaded_dict, load_cfg)
+    return load_iteration
 
   def update(self) -> dict[str, float]:
     """Run PPO update while preserving actor/critic split learning rates."""

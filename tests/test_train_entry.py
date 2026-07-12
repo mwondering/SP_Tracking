@@ -10,6 +10,7 @@ from sp_tracking.scripts.train import (
   _copy_launch_script_to_log_dir,
   _resolve_resume_path,
   _resolve_runtime_device,
+  _serialize_checkpoint_cfg,
   _save_resolved_cfg,
   prepare_train_cfg,
 )
@@ -90,6 +91,8 @@ def test_sp_task_applies_one_stage_motion_tracking_agent_preset() -> None:
   assert prepared.agent.algorithm.actor_learning_rate == 1.0e-4
   assert prepared.agent.algorithm.critic_learning_rate == 5.0e-4
   assert prepared.agent.algorithm.clamp_rewards_min == 0.0
+  assert prepared.agent.load_checkpoint == "checkpoint_.*.pt"
+  assert prepared.agent.upload_model is False
 
 
 def test_sp_agent_preset_allows_standard_cli_agent_overrides() -> None:
@@ -127,8 +130,16 @@ def test_save_resolved_cfg_writes_cfg_and_config(tmp_path: Path) -> None:
   assert "num_envs: 4" in (tmp_path / "cfg.yaml").read_text()
 
 
+def test_serialize_checkpoint_cfg_is_a_resolved_mapping() -> None:
+  cfg = OmegaConf.create({"task": {"name": "tracking_bfm"}, "agent": {"n": 4}})
+
+  serialized = _serialize_checkpoint_cfg(cfg)
+
+  assert serialized == {"task": {"name": "tracking_bfm"}, "agent": {"n": 4}}
+
+
 def test_resolve_resume_path_uses_explicit_checkpoint_path(tmp_path: Path) -> None:
-  checkpoint = tmp_path / "model_final.pt"
+  checkpoint = tmp_path / "checkpoint_final.pt"
   checkpoint.write_bytes(b"ckpt")
   cfg = OmegaConf.create({"checkpoint_path": str(checkpoint)})
   agent_cfg = SimpleNamespace(resume=False, experiment_name="exp")

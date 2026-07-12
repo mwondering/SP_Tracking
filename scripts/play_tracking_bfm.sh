@@ -10,10 +10,8 @@ Usage:
   scripts/play_tracking_bfm.sh --checkpoint-file PATH [--motion-file PATH|--motion-path PATH] [options]
 
 Options:
-  --task tracking_bfm|tracking_bfm_largedataset|tracking_bfm_sp
+  --task tracking_bfm|tracking_bfm_largedataset|tracking_bfm_sp  # legacy checkpoint only
   --checkpoint-file PATH
-  --wandb-run-path ENTITY/PROJECT/RUN_ID
-  --wandb-checkpoint-name NAME
   --motion-file PATH
   --motion-path PATH
   --num-envs N
@@ -24,23 +22,19 @@ Options:
 USAGE
 }
 
-TASK="${SP_TRACKING_PLAY_TASK:-tracking_bfm}"
+TASK="${SP_TRACKING_PLAY_TASK:-}"
 CHECKPOINT_FILE="${SP_TRACKING_CHECKPOINT_FILE:-}"
-WANDB_RUN_PATH="${SP_TRACKING_WANDB_RUN_PATH:-}"
-WANDB_CHECKPOINT_NAME="${SP_TRACKING_WANDB_CHECKPOINT_NAME:-}"
 MOTION_FILE="${SP_TRACKING_MOTION_FILE:-}"
 MOTION_PATH="${SP_TRACKING_MOTION_PATH:-}"
 NUM_ENVS="${SP_TRACKING_PLAY_NUM_ENVS:-1}"
 VIEWER="${SP_TRACKING_PLAY_VIEWER:-viser}"
-DOMAIN_RANDOMIZATION="${SP_TRACKING_DOMAIN_RANDOMIZATION:-true}"
+DOMAIN_RANDOMIZATION="${SP_TRACKING_DOMAIN_RANDOMIZATION:-}"
 DRY_RUN="${SP_TRACKING_DRY_RUN:-false}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --task) TASK="$2"; shift 2 ;;
     --checkpoint-file) CHECKPOINT_FILE="$2"; shift 2 ;;
-    --wandb-run-path) WANDB_RUN_PATH="$2"; shift 2 ;;
-    --wandb-checkpoint-name) WANDB_CHECKPOINT_NAME="$2"; shift 2 ;;
     --motion-file) MOTION_FILE="$2"; shift 2 ;;
     --motion-path) MOTION_PATH="$2"; shift 2 ;;
     --num-envs) NUM_ENVS="$2"; shift 2 ;;
@@ -52,10 +46,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "${TASK}" in
-  tracking_bfm|tracking_bfm_largedataset|tracking_bfm_sp) ;;
-  *) echo "Invalid task: ${TASK}" >&2; exit 2 ;;
-esac
+if [[ -n "${TASK}" ]]; then
+  case "${TASK}" in
+    tracking_bfm|tracking_bfm_largedataset|tracking_bfm_sp) ;;
+    *) echo "Invalid task: ${TASK}" >&2; exit 2 ;;
+  esac
+fi
 
 case "${VIEWER}" in
   native|viser) ;;
@@ -64,22 +60,30 @@ esac
 
 cmd=(
   uv run sp-play
-  --task "${TASK}"
+  --checkpoint-file "${CHECKPOINT_FILE}"
   --num-envs "${NUM_ENVS}"
   --viewer "${VIEWER}"
-  --domain-randomization "${DOMAIN_RANDOMIZATION}"
 )
 
-if [[ -n "${CHECKPOINT_FILE}" ]]; then
-  [[ -f "${CHECKPOINT_FILE}" ]] || { echo "Checkpoint file not found: ${CHECKPOINT_FILE}" >&2; exit 2; }
-  cmd+=(--checkpoint-file "${CHECKPOINT_FILE}")
-elif [[ -n "${WANDB_RUN_PATH}" ]]; then
-  cmd+=(--wandb-run-path "${WANDB_RUN_PATH}")
-  if [[ -n "${WANDB_CHECKPOINT_NAME}" ]]; then
-    cmd+=(--wandb-checkpoint-name "${WANDB_CHECKPOINT_NAME}")
-  fi
-else
-  echo "Provide --checkpoint-file or --wandb-run-path." >&2
+if [[ -z "${CHECKPOINT_FILE}" ]]; then
+  echo "Provide --checkpoint-file." >&2
+  exit 2
+fi
+[[ -f "${CHECKPOINT_FILE}" ]] || { echo "Checkpoint file not found: ${CHECKPOINT_FILE}" >&2; exit 2; }
+
+if [[ -n "${TASK}" ]]; then
+  cmd+=(--task "${TASK}")
+fi
+
+case "${DOMAIN_RANDOMIZATION}" in
+  "") ;;
+  true) cmd+=(--domain-randomization True) ;;
+  false) cmd+=(--domain-randomization False) ;;
+  *) echo "Invalid domain randomization value: ${DOMAIN_RANDOMIZATION}" >&2; exit 2 ;;
+esac
+
+if [[ -n "${MOTION_FILE}" && -n "${MOTION_PATH}" ]]; then
+  echo "Provide either --motion-file or --motion-path, not both." >&2
   exit 2
 fi
 

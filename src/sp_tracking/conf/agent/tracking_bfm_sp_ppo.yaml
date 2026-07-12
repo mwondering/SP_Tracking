@@ -8,9 +8,9 @@ wandb_project: mjlab
 run_name: ""
 resume: false
 load_run: .*
-load_checkpoint: model_.*.pt
+load_checkpoint: checkpoint_.*.pt
 clip_actions: null
-upload_model: true
+upload_model: false
 
 obs_groups:
   actor: [policy]

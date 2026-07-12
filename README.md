@@ -118,11 +118,11 @@ live in `src/sp_tracking/conf/agent/tracking_bfm_ppo.yaml`.
 
 ## Checkpoints, Resume, and Deployment Export
 
-Checkpoints keep the `model_*.pt` naming convention:
+Checkpoints follow the `motion_tracking` naming convention:
 
 ```text
-model_<iteration>.pt
-model_final.pt
+checkpoint_<iteration>.pt
+checkpoint_final.pt
 policy.onnx
 policy.json
 deploy_metadata.json
@@ -130,14 +130,15 @@ cfg.yaml
 config.yaml
 ```
 
-`model_*.pt` contains the rsl-rl training state for resume plus
-motion-tracking-style keys such as `policy`, `env`, `iter`, and `infos`.
-Training resume supports:
+`checkpoint_*.pt` contains the RSL-RL training state for resume plus the
+motion-tracking checkpoint fields `policy`, `env`, `cfg`, and `vecnorm`.
+The actor state remains the authoritative normalizer source for RSL-RL; the
+`vecnorm` field is a compatible source-style view for checkpoint tooling.
+Training resume is local-only:
 
 ```bash
-uv run sp-train checkpoint_path=/path/to/model_final.pt
-uv run sp-train agent.resume=true agent.load_run='.*' agent.load_checkpoint='model_.*.pt'
-uv run sp-train wandb_run_path=entity/project/run_id wandb_checkpoint_name=model_final.pt
+uv run sp-train checkpoint_path=/path/to/checkpoint_final.pt
+uv run sp-train agent.resume=true agent.load_run='.*' agent.load_checkpoint='checkpoint_.*.pt'
 ```
 
 `policy.onnx` is exported after every save and is intentionally deployment
@@ -161,12 +162,16 @@ override.
 
 ## Play
 
+Play is local-checkpoint-only. New checkpoints embed the resolved training
+configuration, so `--task` is inferred and observation/reward/network
+ablations are reconstructed from the checkpoint. Pass `--task` only for a
+legacy checkpoint that lacks `cfg`.
+
 Use the play script with a local checkpoint:
 
 ```bash
 scripts/play_tracking_bfm.sh \
-  --task tracking_bfm \
-  --checkpoint-file logs/rsl_rl/g1_tracking/<run>/model_final.pt \
+  --checkpoint-file logs/rsl_rl/g1_tracking/<run>/checkpoint_final.pt \
   --motion-file /path/to/motion.npz
 ```
 
@@ -174,14 +179,13 @@ For large-dataset play/debug:
 
 ```bash
 scripts/play_tracking_bfm.sh \
-  --task tracking_bfm_largedataset \
-  --checkpoint-file logs/rsl_rl/g1_tracking/<run>/model_final.pt \
+  --checkpoint-file logs/rsl_rl/g1_tracking/<run>/checkpoint_final.pt \
   --motion-path /path/to/motions
 ```
 
-The script forwards to `uv run sp-play` and supports `--wandb-run-path`,
-`--wandb-checkpoint-name`, `--num-envs`, `--viewer`, and
-`--domain-randomization`.
+The script forwards to `uv run sp-play` and supports `--num-envs`, `--viewer`,
+and `--domain-randomization`. W&B remains logging-only; model checkpoints are
+not uploaded or downloaded through it.
 
 ## Torque Safety
 

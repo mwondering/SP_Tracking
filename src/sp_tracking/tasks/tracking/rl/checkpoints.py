@@ -55,39 +55,3 @@ def resolve_local_checkpoint_path(
   if not checkpoints:
     raise ValueError(f"No checkpoint found in {run_path} matching {load_checkpoint}")
   return sorted(checkpoints, key=checkpoint_sort_key)[-1]
-
-
-def get_wandb_checkpoint_path(
-  *, log_root: str | Path, run_path: str | Path, checkpoint_name: str | None = None
-) -> tuple[Path, bool]:
-  """Download a model checkpoint from a W&B run, caching it under log_root."""
-  import wandb
-
-  run_path = Path(run_path)
-  run_id = str(run_path).split("/")[-1]
-  download_dir = Path(log_root) / "wandb_checkpoints" / run_id
-
-  api = wandb.Api()
-  wandb_run = api.run(str(run_path))
-  files = [
-    file.name
-    for file in wandb_run.files()
-    if file.name.startswith("model_") and file.name.endswith(".pt")
-  ]
-  if checkpoint_name is None:
-    if not files:
-      raise ValueError(f"No model checkpoints found in W&B run {run_path}")
-    checkpoint_file = sorted(files, key=checkpoint_sort_key)[-1]
-  else:
-    if checkpoint_name not in files:
-      raise ValueError(
-        f"Checkpoint '{checkpoint_name}' not found in run {run_path}. Available: {files}"
-      )
-    checkpoint_file = checkpoint_name
-
-  checkpoint_path = download_dir / checkpoint_file
-  was_cached = checkpoint_path.exists()
-  if not was_cached:
-    download_dir.mkdir(parents=True, exist_ok=True)
-    wandb_run.file(checkpoint_file).download(str(download_dir), replace=True)
-  return checkpoint_path, was_cached

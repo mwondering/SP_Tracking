@@ -633,10 +633,15 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     registry_name: str | None = None,
     launch_script_artifact_path: str | None = None,
     debug_nonfinite_state: bool = False,
+    checkpoint_cfg: object | None = None,
   ):
     super().__init__(env, train_cfg, log_dir, device)
     self.registry_name = registry_name
     self.launch_script_artifact_path = launch_script_artifact_path
+    # Keep the fully resolved Hydra configuration in source-style checkpoints.
+    # ``train_cfg`` only contains the serialized RSL-RL agent configuration,
+    # which is insufficient to rebuild observations/rewards for local play.
+    self.checkpoint_cfg = checkpoint_cfg
     self._launch_script_artifact_uploaded = False
     self._nonfinite_tracer = (
       _FirstNonfiniteSimulationTracer(self.env) if debug_nonfinite_state else None
@@ -986,12 +991,12 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
 
       if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
         _bootstrap_debug(f"iteration {it}: before save")
-        self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))
+        self.save(os.path.join(self.logger.log_dir, f"checkpoint_{it}.pt"))
         _bootstrap_debug(f"iteration {it}: after save")
 
     if self.logger.writer is not None:
       _bootstrap_debug("before final save")
-      self.save(os.path.join(self.logger.log_dir, "model_final.pt"))
+      self.save(os.path.join(self.logger.log_dir, "checkpoint_final.pt"))
       self.logger.stop_logging_writer()
       _bootstrap_debug("after final save")
     _bootstrap_debug("learn done")
@@ -1001,7 +1006,7 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
   ) -> None:
     del verbose
     checkpoint_name = getattr(
-      self, "_export_checkpoint_name", f"model_{self.current_learning_iteration}.pt"
+      self, "_export_checkpoint_name", f"checkpoint_{self.current_learning_iteration}.pt"
     )
     export_sim2real_policy_onnx(
       policy=self.alg.get_policy(),
@@ -1022,6 +1027,60 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
 
   def _env_state(self) -> dict[str, int]:
     return {"common_step_counter": int(self.env.unwrapped.common_step_counter)}
+
+  @staticmethod
+  def _motion_tracking_vecnorm_stats(normalizer: object) -> dict[str, torch.Tensor]:
+    """Convert RSL's empirical normalizer to motion_tracking VecNorm fields.
+
+    RSL stores mean/variance directly on the actor.  The reference repository
+    stores a VecNorm accumulator under ``vecnorm['_extra_state']``.  Emitting
+    this adapter keeps the checkpoint surface compatible for tools that inspect
+    motion_tracking checkpoints, while RSL still restores its authoritative
+    normalizer from ``actor_state_dict``.
+    """
+    state_dict = getattr(normalizer, "state_dict", lambda: {})()
+    mean = state_dict.get("_mean") if isinstance(state_dict, dict) else None
+    var = state_dict.get("_var") if isinstance(state_dict, dict) else None
+    count = state_dict.get("count") if isinstance(state_dict, dict) else None
+    if not all(isinstance(value, torch.Tensor) for value in (mean, var, count)):
+      return {}
+
+    assert isinstance(mean, torch.Tensor)
+    assert isinstance(var, torch.Tensor)
+    assert isinstance(count, torch.Tensor)
+    mean = mean.squeeze(0)
+    var = var.squeeze(0)
+    count = count.to(dtype=mean.dtype).reshape(1)
+    return {
+      "sum": mean * count,
+      "ssq": (var + mean.square()) * count,
+      "count": count,
+    }
+
+  def _motion_tracking_vecnorm_state(self) -> dict | None:
+    actor = self.alg.get_policy()
+    stats = self._motion_tracking_vecnorm_stats(
+      getattr(actor, "obs_normalizer", None)
+    )
+    if not stats:
+      return None
+
+    actor_groups = tuple(str(group) for group in getattr(actor, "obs_groups", ()))
+    # Current tracking_bfm calls this observation group ``actor`` whereas the
+    # source deployment interface calls its actor input ``policy``.  Preserve
+    # both names; SP already uses ``policy`` directly.
+    keys = list(actor_groups) if len(actor_groups) == 1 else []
+    if "policy" not in keys:
+      keys.append("policy")
+    if not keys:
+      return None
+
+    extra_state: dict[str, torch.Tensor] = {}
+    for key in keys:
+      extra_state[f"{key}_sum"] = stats["sum"]
+      extra_state[f"{key}_ssq"] = stats["ssq"]
+      extra_state[f"{key}_count"] = stats["count"]
+    return {"_extra_state": extra_state}
 
   def _deploy_metadata(self) -> dict:
     metadata = {}
@@ -1055,7 +1114,13 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
       "iter": int(self.current_learning_iteration),
       "infos": infos,
     }
-    if self.logger.logger_type == "wandb" and wandb.run:
+    checkpoint_cfg = getattr(self, "checkpoint_cfg", None)
+    if checkpoint_cfg is not None:
+      payload["cfg"] = checkpoint_cfg
+    vecnorm_state = self._motion_tracking_vecnorm_state()
+    if vecnorm_state is not None:
+      payload["vecnorm"] = vecnorm_state
+    if self.logger.logger_type in {"wandb", "WandbLogWriter"} and wandb.run:
       payload["wandb"] = {"name": wandb.run.name, "id": wandb.run.id}
     return payload
 

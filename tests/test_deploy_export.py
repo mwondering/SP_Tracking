@@ -36,14 +36,14 @@ def test_build_sim2real_policy_metadata_uses_policy_and_action_keys() -> None:
     policy=_FakePolicy(),
     run_name="run_a",
     iteration=12,
-    checkpoint_name="model_12.pt",
+    checkpoint_name="checkpoint_12.pt",
   )
 
   assert metadata["in_keys"] == ["policy"]
   assert metadata["out_keys"] == ["action"]
   assert metadata["in_shapes"] == [[[1, 7]]]
   assert metadata["num_actions"] == 3
-  assert metadata["checkpoint"] == "model_12.pt"
+  assert metadata["checkpoint"] == "checkpoint_12.pt"
 
 
 def test_export_sim2real_policy_onnx_writes_policy_json(tmp_path: Path) -> None:
@@ -55,7 +55,7 @@ def test_export_sim2real_policy_onnx_writes_policy_json(tmp_path: Path) -> None:
     path=onnx_path,
     run_name="local",
     iteration=5,
-    checkpoint_name="model_5.pt",
+    checkpoint_name="checkpoint_5.pt",
   )
 
   metadata = json.loads((tmp_path / "policy.json").read_text())

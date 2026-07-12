@@ -1,27 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import torch
+from omegaconf import DictConfig, OmegaConf
 
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 
-from sp_tracking.config.build_agent import build_agent_cfg, serialize_agent_cfg
-from sp_tracking.config.build_env import build_env_cfg
+from sp_tracking.config.build_agent import serialize_agent_cfg
+from sp_tracking.scripts.train import prepare_train_cfg
 from sp_tracking.tasks.tracking.rl import MotionTrackingOnPolicyRunner
-from sp_tracking.tasks.tracking.rl.checkpoints import (
-  get_wandb_checkpoint_path,
-  resolve_local_checkpoint_path,
-)
-
-if False:
-  from omegaconf import DictConfig
 
 
 TASK_OVERRIDES = {
@@ -33,27 +28,24 @@ TASK_OVERRIDES = {
 
 @dataclass(frozen=True)
 class PlayConfig:
-  task: Literal["tracking_bfm", "tracking_bfm_largedataset", "tracking_bfm_sp"] = "tracking_bfm"
+  # New checkpoints are self-describing; task is only needed for legacy local
+  # checkpoints that do not carry the source-style ``cfg`` field.
+  task: Literal["tracking_bfm", "tracking_bfm_largedataset", "tracking_bfm_sp"] | None = None
   checkpoint_file: str | None = None
-  wandb_run_path: str | None = None
-  wandb_checkpoint_name: str | None = None
   motion_path: str | None = None
   motion_file: str | None = None
   num_envs: int = 1
   device: str | None = None
   viewer: Literal["native", "viser"] = "viser"
-  domain_randomization: bool = True
+  domain_randomization: bool | None = None
   stochastic_policy: bool = False
-  log_root: str = "logs/rsl_rl"
-  load_run: str = ".*"
-  load_checkpoint: str = "model_.*.pt"
 
 
 @dataclass
 class PreparedPlayCfg:
   env: ManagerBasedRlEnvCfg
   agent: RslRlOnPolicyRunnerCfg
-  checkpoint_path: Path | None
+  checkpoint_path: Path
 
 
 def _compose_train(overrides: list[str]):
@@ -67,47 +59,85 @@ def _compose_train(overrides: list[str]):
 
 
 def _apply_play_motion(env_cfg: ManagerBasedRlEnvCfg, cfg: PlayConfig) -> None:
+  if cfg.motion_file is not None and cfg.motion_path is not None:
+    raise ValueError("Provide either motion_file or motion_path, not both.")
   motion_cmd = env_cfg.commands["motion"]
   if cfg.motion_file is not None:
     path = Path(cfg.motion_file)
     if not path.is_file():
       raise FileNotFoundError(f"Motion file not found: {path}")
+    motion_cmd.motion_path = ""
     motion_cmd.motion_file = str(path)
   if cfg.motion_path is not None:
     path = Path(cfg.motion_path)
     if not path.is_dir():
       raise FileNotFoundError(f"Motion path not found: {path}")
+    motion_cmd.motion_file = ""
     motion_cmd.motion_path = str(path)
 
 
+def _resolve_checkpoint_path(cfg: PlayConfig) -> Path:
+  if cfg.checkpoint_file is None:
+    raise ValueError(
+      "checkpoint_file is required. Play intentionally uses a local checkpoint; "
+      "W&B is logging-only."
+    )
+  checkpoint_path = Path(cfg.checkpoint_file).expanduser()
+  if not checkpoint_path.is_file():
+    raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+  return checkpoint_path
+
+
+def _load_saved_train_cfg(checkpoint_path: Path) -> DictConfig | None:
+  """Load the source-style resolved ``cfg`` embedded in a local checkpoint."""
+  checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+  raw_cfg = checkpoint.get("cfg")
+  if raw_cfg is None:
+    return None
+  if isinstance(raw_cfg, DictConfig):
+    return OmegaConf.create(OmegaConf.to_container(raw_cfg, resolve=True))
+  if isinstance(raw_cfg, Mapping):
+    return OmegaConf.create(dict(raw_cfg))
+  raise TypeError(
+    f"Checkpoint cfg must be a mapping, got {type(raw_cfg).__name__} in {checkpoint_path}."
+  )
+
+
+def _prepare_checkpoint_train_cfg(
+  checkpoint_path: Path, requested_task: str | None
+):
+  saved_cfg = _load_saved_train_cfg(checkpoint_path)
+  if saved_cfg is None:
+    if requested_task is None:
+      raise ValueError(
+        "This legacy checkpoint has no embedded cfg. Pass --task explicitly "
+        "to select tracking_bfm or tracking_bfm_sp."
+      )
+    fallback_cfg = _compose_train(TASK_OVERRIDES[requested_task])
+    return prepare_train_cfg(fallback_cfg)
+
+  if "task" not in saved_cfg or "agent" not in saved_cfg:
+    raise ValueError(
+      "The checkpoint cfg is not an SP_Tracking train configuration. "
+      "Raw motion_tracking checkpoints cannot be loaded by the different RSL policy stack."
+    )
+  saved_task = str(saved_cfg.task.get("name", ""))
+  if requested_task is not None and requested_task != saved_task:
+    raise ValueError(
+      f"Requested task '{requested_task}' does not match checkpoint task '{saved_task}'."
+    )
+  return prepare_train_cfg(saved_cfg)
+
+
 def prepare_play_cfg(cfg: PlayConfig) -> PreparedPlayCfg:
-  train_cfg = _compose_train(TASK_OVERRIDES[cfg.task])
-  env_cfg = build_env_cfg(train_cfg.task)
-  agent_cfg = build_agent_cfg(train_cfg.agent, train_cfg.task.get("agent_overrides"))
+  checkpoint_path = _resolve_checkpoint_path(cfg)
+  prepared_train = _prepare_checkpoint_train_cfg(checkpoint_path, cfg.task)
+  env_cfg = prepared_train.env
+  agent_cfg = prepared_train.agent
   env_cfg.scene.num_envs = int(cfg.num_envs)
-  if not cfg.domain_randomization:
+  if cfg.domain_randomization is False:
     env_cfg.events = {}
   _apply_play_motion(env_cfg, cfg)
-
-  checkpoint_path = None
-  if cfg.checkpoint_file is not None:
-    checkpoint_path = Path(cfg.checkpoint_file)
-    if not checkpoint_path.is_file():
-      raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
-  elif cfg.wandb_run_path is not None:
-    log_root = Path(cfg.log_root) / agent_cfg.experiment_name
-    checkpoint_path, _ = get_wandb_checkpoint_path(
-      log_root=log_root,
-      run_path=cfg.wandb_run_path,
-      checkpoint_name=cfg.wandb_checkpoint_name,
-    )
-  elif train_cfg.agent.get("resume", False):
-    log_root = Path(cfg.log_root) / agent_cfg.experiment_name
-    checkpoint_path = resolve_local_checkpoint_path(
-      log_root=log_root,
-      load_run=cfg.load_run,
-      load_checkpoint=cfg.load_checkpoint,
-    )
   return PreparedPlayCfg(env=env_cfg, agent=agent_cfg, checkpoint_path=checkpoint_path)
 
 
@@ -132,8 +162,6 @@ def run_play(cfg: PlayConfig) -> None:
   device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
   env = ManagerBasedRlEnv(cfg=deepcopy(prepared.env), device=device)
   wrapped_env = RslRlVecEnvWrapper(env, clip_actions=prepared.agent.clip_actions)
-  if prepared.checkpoint_path is None:
-    raise ValueError("checkpoint_file is required for trained play.")
   runner = MotionTrackingOnPolicyRunner(
     wrapped_env,
     serialize_agent_cfg(prepared.agent),

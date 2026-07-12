@@ -48,7 +48,8 @@ def test_tracking_bfm_play_script_contract() -> None:
   contents = script.read_text()
   assert "uv run sp-play" in contents
   assert "--checkpoint-file" in contents
-  assert "--wandb-run-path" in contents
+  assert "--wandb-run-path" not in contents
+  assert "--wandb-checkpoint-name" not in contents
   assert "--motion-file" in contents
   assert "--motion-path" in contents
   assert "--dry-run" in contents
