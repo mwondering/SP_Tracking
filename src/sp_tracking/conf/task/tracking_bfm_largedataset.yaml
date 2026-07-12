@@ -4,3 +4,5 @@ defaults:
   - _self_
 
 name: tracking_bfm_largedataset
+variant:
+  sampling_profile: bfm_large_dataset

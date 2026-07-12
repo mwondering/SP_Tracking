@@ -1,0 +1,18 @@
+defaults:
+  - tracking_bfm_sp
+  - override obs: old_tracking
+  - override /agent@_global_.agent: tracking_bfm_ppo
+  - _self_
+
+# Complete SP reward on SP XML/reference, paired with legacy observations and
+# the BFM network/PPO.  No BFM XML foot/toe adapter is involved.
+name: tracking_bfm_sp_bfm_agent_old_obs
+variant:
+  environment_profile: sp_tracking
+  reference_profile: sp_tracking
+  observation_profile: old_tracking
+  reward_profile: sp_tracking
+  termination_profile: sp_tracking
+  curriculum_profile: sp_tracking
+  sampling_profile: sp_tracking
+  agent_profile: bfm_ppo

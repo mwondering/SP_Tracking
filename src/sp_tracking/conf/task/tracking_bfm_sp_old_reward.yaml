@@ -1,0 +1,17 @@
+defaults:
+  - tracking_bfm_sp
+  - override reward: old_tracking
+  - _self_
+
+# Isolate the reward change while retaining the complete SP environment,
+# observation interface, curriculum, sampler, and PPO preset.
+name: tracking_bfm_sp_old_reward
+variant:
+  environment_profile: sp_tracking
+  reference_profile: sp_tracking
+  observation_profile: sp_tracking
+  reward_profile: old_tracking
+  termination_profile: sp_tracking
+  curriculum_profile: sp_tracking
+  sampling_profile: sp_tracking
+  agent_profile: sp_ppo

@@ -6,6 +6,15 @@ defaults:
   - _self_
 
 name: tracking_bfm_sp
+variant:
+  environment_profile: sp_tracking
+  reference_profile: sp_tracking
+  observation_profile: sp_tracking
+  reward_profile: sp_tracking
+  termination_profile: sp_tracking
+  curriculum_profile: sp_tracking
+  sampling_profile: sp_tracking
+  agent_profile: sp_ppo
 debug_nonfinite_state: false
 num_envs: 8192
 episode_length_s: 20.0

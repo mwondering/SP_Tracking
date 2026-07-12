@@ -17,6 +17,10 @@ def test_tracking_entrypoint_registers_default_tasks() -> None:
   assert registry.TRACKING_BFM_TASK_ID in tasks
   assert registry.TRACKING_BFM_LARGEDATASET_TASK_ID in tasks
   assert registry.TRACKING_BFM_SP_TASK_ID in tasks
+  assert registry.TRACKING_BFM_SP_OLD_OBS_OLD_REWARD_BFM_AGENT_TASK_ID in tasks
+  assert registry.TRACKING_BFM_SP_OLD_REWARD_TASK_ID in tasks
+  assert registry.TRACKING_BFM_SP_BFM_AGENT_OLD_REWARD_TASK_ID in tasks
+  assert registry.TRACKING_BFM_SP_BFM_AGENT_OLD_OBS_TASK_ID in tasks
 
 
 def test_registered_default_task_loads_hydra_built_configs() -> None:

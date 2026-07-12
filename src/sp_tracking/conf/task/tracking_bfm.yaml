@@ -5,6 +5,15 @@ defaults:
   - _self_
 
 name: tracking_bfm
+variant:
+  environment_profile: bfm
+  reference_profile: bfm
+  observation_profile: old_tracking
+  reward_profile: old_tracking
+  termination_profile: old_tracking
+  curriculum_profile: none
+  sampling_profile: bfm_multimotion
+  agent_profile: bfm_ppo
 num_envs: 1
 episode_length_s: 10.0
 decimation: 4

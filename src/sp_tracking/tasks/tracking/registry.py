@@ -14,6 +14,12 @@ from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
 TRACKING_BFM_TASK_ID = "SPTracking-G1-BFM"
 TRACKING_BFM_LARGEDATASET_TASK_ID = "SPTracking-G1-BFM-LargeDataset"
 TRACKING_BFM_SP_TASK_ID = "SPTracking-G1-BFM-SP"
+TRACKING_BFM_SP_OLD_OBS_OLD_REWARD_BFM_AGENT_TASK_ID = (
+  "SPTracking-G1-SP-OldObsOldReward-BFMAgent"
+)
+TRACKING_BFM_SP_OLD_REWARD_TASK_ID = "SPTracking-G1-SP-OldReward"
+TRACKING_BFM_SP_BFM_AGENT_OLD_REWARD_TASK_ID = "SPTracking-G1-SP-BFMAgent-OldReward"
+TRACKING_BFM_SP_BFM_AGENT_OLD_OBS_TASK_ID = "SPTracking-G1-SP-BFMAgent-OldObs"
 
 
 def _compose_train(overrides: list[str] | None = None) -> DictConfig:
@@ -44,10 +50,30 @@ _register_task(
   ["task=tracking_bfm_largedataset"],
 )
 _register_task(TRACKING_BFM_SP_TASK_ID, ["task=tracking_bfm_sp"])
+_register_task(
+  TRACKING_BFM_SP_OLD_OBS_OLD_REWARD_BFM_AGENT_TASK_ID,
+  ["task=tracking_bfm_sp_old_obs_old_reward_bfm_agent"],
+)
+_register_task(
+  TRACKING_BFM_SP_OLD_REWARD_TASK_ID,
+  ["task=tracking_bfm_sp_old_reward"],
+)
+_register_task(
+  TRACKING_BFM_SP_BFM_AGENT_OLD_REWARD_TASK_ID,
+  ["task=tracking_bfm_sp_bfm_agent_old_reward"],
+)
+_register_task(
+  TRACKING_BFM_SP_BFM_AGENT_OLD_OBS_TASK_ID,
+  ["task=tracking_bfm_sp_bfm_agent_old_obs"],
+)
 
 
 __all__ = [
   "TRACKING_BFM_TASK_ID",
   "TRACKING_BFM_LARGEDATASET_TASK_ID",
   "TRACKING_BFM_SP_TASK_ID",
+  "TRACKING_BFM_SP_OLD_OBS_OLD_REWARD_BFM_AGENT_TASK_ID",
+  "TRACKING_BFM_SP_OLD_REWARD_TASK_ID",
+  "TRACKING_BFM_SP_BFM_AGENT_OLD_REWARD_TASK_ID",
+  "TRACKING_BFM_SP_BFM_AGENT_OLD_OBS_TASK_ID",
 ]

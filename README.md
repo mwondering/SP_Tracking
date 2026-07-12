@@ -102,16 +102,22 @@ The default `tracking_bfm` task keeps the old BFM tracking observation, reward,
 termination, and `multi_commands.py` loader defaults.
 `tracking_bfm_largedataset` keeps the same old BFM surface and only switches the
 loader to `multi_command_largedataset.py`. `tracking_bfm_sp` switches to the
-motion-tracking asset plus SP observation/reward/termination sets for ablations
-and debugging.
+SP asset bundle plus SP observation/reward/termination sets for ablations and
+debugging. Every task whose name starts with `tracking_bfm_sp` uses the SP XML
+and SP reference profile; `bfm_agent` in a variant name only means the BFM PPO
+and network preset, never the BFM XML.
 
 ## Tasks
 
-| Task | Loader | Observation/Reward Set | Robot Asset |
+| Task | Environment / reference | Obs / reward / agent | Termination / curriculum / sampling |
 | --- | --- | --- | --- |
-| `tracking_bfm` | `multi_commands.py` | old BFM tracking defaults | `tracking_bfm_g1` |
-| `tracking_bfm_largedataset` | `multi_command_largedataset.py` | old BFM tracking defaults | `tracking_bfm_g1` |
-| `tracking_bfm_sp` | `multi_command_largedataset.py` | SP tracking defaults | `sp_tracking_g1` |
+| `tracking_bfm` | BFM XML + BFM reference | old / old / BFM PPO | old / none / BFM multi-motion |
+| `tracking_bfm_largedataset` | BFM XML + BFM reference | old / old / BFM PPO | old / none / BFM large-dataset |
+| `tracking_bfm_sp` | SP XML + SP reference | SP / SP / SP PPO | SP / SP / SP large-dataset |
+| `tracking_bfm_sp_old_obs_old_reward_bfm_agent` | SP XML + SP reference | old / old / BFM PPO | SP / SP / SP large-dataset |
+| `tracking_bfm_sp_old_reward` | SP XML + SP reference | SP / old / SP PPO | SP / SP / SP large-dataset |
+| `tracking_bfm_sp_bfm_agent_old_reward` | SP XML + SP reference | SP / old / BFM PPO | SP / SP / SP large-dataset |
+| `tracking_bfm_sp_bfm_agent_old_obs` | SP XML + SP reference | old / SP / BFM PPO | SP / SP / SP large-dataset |
 
 These tasks are configured under `src/sp_tracking/conf/task`. Shared PPO defaults
 live in `src/sp_tracking/conf/agent/tracking_bfm_ppo.yaml`.
@@ -131,7 +137,7 @@ config.yaml
 ```
 
 `checkpoint_*.pt` contains the RSL-RL training state for resume plus the
-motion-tracking checkpoint fields `policy`, `env`, `cfg`, and `vecnorm`.
+reference-compatible checkpoint fields `policy`, `env`, `cfg`, and `vecnorm`.
 The actor state remains the authoritative normalizer source for RSL-RL; the
 `vecnorm` field is a compatible source-style view for checkpoint tooling.
 Training resume is local-only:
