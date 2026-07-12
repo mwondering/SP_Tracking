@@ -42,6 +42,22 @@ def _rand_unit_vectors(shape: tuple[int, ...], device: str) -> torch.Tensor:
   return vec / vec.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
 
 
+def _add_spherical_noise(x: torch.Tensor, noise_std: float) -> torch.Tensor:
+  """Match motion_tracking's bounded isotropic 3-D noise distribution."""
+  if noise_std <= 0.0:
+    return x
+  if x.shape[-1] != 3:
+    raise ValueError(
+      f"_add_spherical_noise expects last dim 3, got shape {tuple(x.shape)}"
+    )
+  direction = torch.randn_like(x)
+  direction = direction / direction.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
+  radius = torch.rand(
+    (*x.shape[:-1], 1), device=x.device, dtype=x.dtype
+  ) * float(noise_std)
+  return x + direction * radius
+
+
 def _expand_model_fields(env: "ManagerBasedRlEnv", *fields: str) -> None:
   missing = tuple(field for field in fields if field not in env.sim.expanded_fields)
   if missing:
@@ -497,7 +513,7 @@ class perturb_gravity:
     self._ensure_per_env_gravity_storage()
     gravity = self.mean.unsqueeze(0).expand(ids.numel(), -1).clone()
     if self.std > 0.0:
-      gravity = gravity + torch.randn_like(gravity) * self.std
+      gravity = _add_spherical_noise(gravity, self.std)
     env.sim.model.opt.gravity[ids] = gravity
     self._gravity[ids] = gravity
 

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import torch
 
+from sp_tracking.tasks.tracking.mdp import randomizations as sp_randomizations
 from sp_tracking.tasks.tracking.mdp import sp as sp_mdp
 
 
@@ -30,6 +31,16 @@ class _ObservedTerm:
 
   def observe(self, **_: object) -> torch.Tensor:
     return self.value
+
+
+def test_spherical_noise_matches_source_bounded_radius_semantics() -> None:
+  base = torch.zeros((4096, 3), dtype=torch.float32)
+  noisy = sp_randomizations._add_spherical_noise(base, noise_std=0.1)
+  radius = torch.linalg.vector_norm(noisy - base, dim=-1)
+
+  assert torch.all(radius >= 0.0)
+  assert torch.all(radius <= 0.1 + 1.0e-6)
+  assert sp_randomizations._add_spherical_noise(base, noise_std=0.0) is base
 
 
 def test_applied_action_reads_joint_position_action_term() -> None:
