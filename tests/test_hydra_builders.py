@@ -64,6 +64,7 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert "body_z_termination" in env_cfg.terminations
   assert env_cfg.commands["motion"].motion_type == "mujoco"
   assert env_cfg.commands["motion"].fk_from_joint_pos is True
+  assert env_cfg.commands["motion"].recompute_joint_vel_from_joint_pos is True
   assert env_cfg.commands["motion"].termination_warmup_steps == 5
   assert type(env_cfg.actions["joint_pos"]).__name__ == "MotionTrackingJointPositionActionCfg"
   assert [sensor.name for sensor in env_cfg.scene.sensors] == ["contact_forces"]
@@ -171,6 +172,7 @@ def test_tracking_bfm_keeps_original_events_and_action() -> None:
   assert env_cfg.sim.njmax == 512
   assert env_cfg.sim.contact_sensor_maxmatch == 64
   assert env_cfg.commands["motion"].fk_from_joint_pos is False
+  assert env_cfg.commands["motion"].recompute_joint_vel_from_joint_pos is False
   assert env_cfg.commands["motion"].reset_root_lift_height == 0.0
   assert env_cfg.commands["motion"].reset_min_body_z is None
   assert env_cfg.commands["motion"].reset_joint_vel_limit is None

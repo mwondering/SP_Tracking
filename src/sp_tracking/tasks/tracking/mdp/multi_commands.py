@@ -23,7 +23,7 @@ from mjlab.utils.lab_api.math import (
 )
 from mjlab.viewer.debug_visualizer import DebugVisualizer
 
-from .motion_fk import MotionFKHelper
+from .motion_fk import MotionFKHelper, joint_vel_from_joint_pos_torch
 
 if TYPE_CHECKING:
   from mjlab.entity import Entity
@@ -295,6 +295,19 @@ def _select_or_fk_body_fields(
   )
 
 
+def _select_or_recompute_joint_vel(
+  *,
+  joint_pos: torch.Tensor,
+  joint_vel: torch.Tensor,
+  fps: float,
+  recompute_joint_vel_from_joint_pos: bool,
+) -> torch.Tensor:
+  """Return raw joint velocity or the source-SP reconstruction, by config."""
+  if not recompute_joint_vel_from_joint_pos:
+    return joint_vel
+  return joint_vel_from_joint_pos_torch(joint_pos, fps, dim=0)
+
+
 class MotionLoader:
   def __init__(
     self,
@@ -303,6 +316,7 @@ class MotionLoader:
     motion_type: Literal["isaaclab", "mujoco"] = "isaaclab",
     device: str = "cpu",
     fk_from_joint_pos: bool = False,
+    recompute_joint_vel_from_joint_pos: bool = False,
     fk_helper: MotionFKHelper | None = None,
   ):
     assert os.path.isfile(motion_file), f"Invalid file path: {motion_file}"
@@ -337,6 +351,12 @@ class MotionLoader:
       self._body_quat_w = self._body_quat_w[:, body_reindex, :]
       self._body_lin_vel_w = self._body_lin_vel_w[:, body_reindex, :]
       self._body_ang_vel_w = self._body_ang_vel_w[:, body_reindex, :]
+    self.joint_vel = _select_or_recompute_joint_vel(
+      joint_pos=self.joint_pos,
+      joint_vel=self.joint_vel,
+      fps=self.fps,
+      recompute_joint_vel_from_joint_pos=recompute_joint_vel_from_joint_pos,
+    )
     (
       self._body_pos_w,
       self._body_quat_w,
@@ -380,6 +400,7 @@ class MultiMotionLoader:
     motion_type: Literal["isaaclab", "mujoco"] = "isaaclab",
     device: str = "cpu",
     fk_from_joint_pos: bool = False,
+    recompute_joint_vel_from_joint_pos: bool = False,
     fk_helper: MotionFKHelper | None = None,
   ):
     assert len(motion_files) > 0, "motion_files cannot be empty"
@@ -428,6 +449,12 @@ class MultiMotionLoader:
         bq = bq[:, body_reindex, :]
         blv = blv[:, body_reindex, :]
         bav = bav[:, body_reindex, :]
+      jv = _select_or_recompute_joint_vel(
+        joint_pos=jp,
+        joint_vel=jv,
+        fps=fps_value,
+        recompute_joint_vel_from_joint_pos=recompute_joint_vel_from_joint_pos,
+      )
 
       bp, bq, blv, bav = _select_or_fk_body_fields(
         joint_pos=jp,
@@ -628,6 +655,7 @@ class MultiMotionCommand(CommandTerm):
       motion_type=self.cfg.motion_type,
       device=self.device,
       fk_from_joint_pos=self.cfg.fk_from_joint_pos,
+      recompute_joint_vel_from_joint_pos=self.cfg.recompute_joint_vel_from_joint_pos,
       fk_helper=fk_helper,
     )
 
@@ -752,6 +780,7 @@ class MultiMotionCommand(CommandTerm):
         motion_type=self.cfg.motion_type,
         device=self.device,
         fk_from_joint_pos=self.cfg.fk_from_joint_pos,
+        recompute_joint_vel_from_joint_pos=self.cfg.recompute_joint_vel_from_joint_pos,
         fk_helper=fk_helper,
       )
       if self.cfg.extra_reference_motion_file
@@ -2130,6 +2159,8 @@ class MultiMotionCommandCfg(CommandTermCfg):
   extra_reference_motion_file: str = ""
   motion_type: Literal["isaaclab", "mujoco"] = "isaaclab"
   fk_from_joint_pos: bool = False
+  # Kept separate from body FK so tasks can ablate either preprocessing path.
+  recompute_joint_vel_from_joint_pos: bool = False
   # Reference-frame and task-state features are opt-in so existing tracking
   # tasks retain their legacy behavior.
   motion_origin_recenter: bool = False

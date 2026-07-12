@@ -28,6 +28,7 @@ from .multi_commands import (
   MultiMotionCommandCfg,
   extract_motion_fps,
   _select_or_fk_body_fields,
+  _select_or_recompute_joint_vel,
 )
 from .motion_fk import MotionFKHelper
 
@@ -592,6 +593,7 @@ class LargeDatasetMotionStore:
     metadata_read_backend: Literal["thread", "process", "serial"] = "thread",
     metadata_read_chunksize: int = 64,
     fk_from_joint_pos: bool = False,
+    recompute_joint_vel_from_joint_pos: bool = False,
     fk_helper: MotionFKHelper | None = None,
   ) -> None:
     if len(motion_files) == 0:
@@ -607,6 +609,9 @@ class LargeDatasetMotionStore:
     self.motion_type = motion_type
     self._body_indexes = torch.as_tensor(body_indexes, dtype=torch.long).cpu()
     self.fk_from_joint_pos = bool(fk_from_joint_pos)
+    self.recompute_joint_vel_from_joint_pos = bool(
+      recompute_joint_vel_from_joint_pos
+    )
     self.fk_helper = fk_helper
     self.metadata_read_workers = max(int(metadata_read_workers), 0)
     self.metadata_read_backend = str(metadata_read_backend).lower()
@@ -1091,6 +1096,13 @@ class LargeDatasetMotionStore:
       body_ang_vel_w = body_ang_vel_w[:, self._body_reindex, :]
 
     joint_pos_t = torch.as_tensor(joint_pos, dtype=torch.float32, device=self.device)
+    joint_vel_t = torch.as_tensor(joint_vel, dtype=torch.float32, device=self.device)
+    joint_vel_t = _select_or_recompute_joint_vel(
+      joint_pos=joint_pos_t,
+      joint_vel=joint_vel_t,
+      fps=self.fps_list[motion_id],
+      recompute_joint_vel_from_joint_pos=self.recompute_joint_vel_from_joint_pos,
+    )
     body_pos_w_t = torch.as_tensor(body_pos_w, dtype=torch.float32, device=self.device)
     body_quat_w_t = torch.as_tensor(body_quat_w, dtype=torch.float32, device=self.device)
     body_lin_vel_w_t = torch.as_tensor(
@@ -1115,7 +1127,7 @@ class LargeDatasetMotionStore:
 
     return {
       "joint_pos": joint_pos_t,
-      "joint_vel": torch.as_tensor(joint_vel, dtype=torch.float32, device=self.device),
+      "joint_vel": joint_vel_t,
       "body_pos_w": body_pos_w_t,
       "body_quat_w": body_quat_w_t,
       "body_lin_vel_w": body_lin_vel_w_t,
@@ -2020,6 +2032,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       metadata_read_backend=self.cfg.motion_metadata_read_backend,
       metadata_read_chunksize=self.cfg.motion_metadata_read_chunksize,
       fk_from_joint_pos=self.cfg.fk_from_joint_pos,
+      recompute_joint_vel_from_joint_pos=self.cfg.recompute_joint_vel_from_joint_pos,
       fk_helper=fk_helper,
     )
     _bootstrap_debug(
@@ -2141,6 +2154,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
         motion_type=self.cfg.motion_type,
         device=self.device,
         fk_from_joint_pos=self.cfg.fk_from_joint_pos,
+        recompute_joint_vel_from_joint_pos=self.cfg.recompute_joint_vel_from_joint_pos,
         fk_helper=fk_helper,
       )
       if self.cfg.extra_reference_motion_file

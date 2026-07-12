@@ -8,7 +8,11 @@ import torch
 from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
   LargeDatasetMotionStore,
 )
-from sp_tracking.tasks.tracking.mdp.motion_fk import MotionFKHelper
+from sp_tracking.tasks.tracking.mdp.motion_fk import (
+  MotionFKHelper,
+  finite_diff_torch,
+  smooth_avg5_torch,
+)
 from sp_tracking.tasks.tracking.mdp.multi_commands import (
   _MUJOCO_JOINT_NAMES,
   MotionLoader,
@@ -57,7 +61,12 @@ def _write_motion(path: Path, *, include_fps: bool) -> None:
   np.savez(path, **motion)
 
 
-def _write_legacy_g1_motion(path: Path) -> None:
+def _write_legacy_g1_motion(
+  path: Path,
+  *,
+  joint_pos: np.ndarray | None = None,
+  joint_vel: np.ndarray | None = None,
+) -> None:
   frames = 6
   joints = 29
   legacy_bodies = 30
@@ -70,6 +79,12 @@ def _write_legacy_g1_motion(path: Path) -> None:
     "body_ang_vel_w": np.zeros((frames, legacy_bodies, 3), dtype=np.float32),
     "fps": np.asarray([50.0], dtype=np.float32),
   }
+  if joint_pos is not None:
+    assert joint_pos.shape == motion["joint_pos"].shape
+    motion["joint_pos"] = joint_pos.astype(np.float32)
+  if joint_vel is not None:
+    assert joint_vel.shape == motion["joint_vel"].shape
+    motion["joint_vel"] = joint_vel.astype(np.float32)
   motion["body_pos_w"][:, 0, 2] = 0.75
   motion["body_quat_w"][..., 0] = 1.0
   np.savez(path, **motion)
@@ -322,3 +337,61 @@ def test_large_dataset_store_can_fk_legacy_30_body_motion_for_sp_asset(
 
   assert loaded.body_pos_w.shape == (6, len(SP_BODY_NAMES), 3)
   assert loaded.body_quat_w.shape == (6, len(SP_BODY_NAMES), 4)
+
+
+@pytest.mark.parametrize("loader_kind", ("single", "multi", "large"))
+def test_sp_joint_velocity_reconstruction_matches_motion_tracking(
+  tmp_path: Path,
+  loader_kind: str,
+) -> None:
+  frames = 6
+  joint_pos = np.zeros((frames, 29), dtype=np.float32)
+  joint_pos[:, 0] = np.asarray((0.0, 0.1, 0.4, 0.9, 1.6, 2.5), dtype=np.float32)
+  raw_joint_vel = np.full((frames, 29), 123.0, dtype=np.float32)
+  motion_file = tmp_path / "legacy_g1_motion.npz"
+  _write_legacy_g1_motion(
+    motion_file,
+    joint_pos=joint_pos,
+    joint_vel=raw_joint_vel,
+  )
+  expected = smooth_avg5_torch(
+    finite_diff_torch(torch.from_numpy(joint_pos), 50.0, dim=0), dim=0
+  )
+  kwargs = {
+    "motion_type": "mujoco",
+    "device": "cpu",
+    "fk_from_joint_pos": True,
+    "recompute_joint_vel_from_joint_pos": True,
+    "fk_helper": _sp_fk_helper(),
+  }
+
+  if loader_kind == "single":
+    joint_vel = MotionLoader(str(motion_file), SP_BODY_INDEXES, **kwargs).joint_vel
+  elif loader_kind == "multi":
+    joint_vel = MultiMotionLoader([str(motion_file)], SP_BODY_INDEXES, **kwargs).joint_vel
+  else:
+    store = LargeDatasetMotionStore([str(motion_file)], SP_BODY_INDEXES, **kwargs)
+    joint_vel = store.load_motion_ids(torch.tensor([0], dtype=torch.long)).joint_vel
+
+  torch.testing.assert_close(joint_vel, expected, rtol=0.0, atol=0.0)
+  assert not torch.equal(joint_vel, torch.from_numpy(raw_joint_vel))
+
+
+def test_joint_velocity_reconstruction_is_opt_in(tmp_path: Path) -> None:
+  joint_pos = np.zeros((6, 29), dtype=np.float32)
+  raw_joint_vel = np.full((6, 29), 123.0, dtype=np.float32)
+  motion_file = tmp_path / "legacy_g1_motion.npz"
+  _write_legacy_g1_motion(
+    motion_file,
+    joint_pos=joint_pos,
+    joint_vel=raw_joint_vel,
+  )
+
+  loader = MotionLoader(
+    str(motion_file),
+    torch.tensor([0], dtype=torch.long),
+    motion_type="mujoco",
+    device="cpu",
+  )
+
+  torch.testing.assert_close(loader.joint_vel, torch.from_numpy(raw_joint_vel))

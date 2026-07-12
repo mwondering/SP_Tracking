@@ -62,6 +62,7 @@ viewer:
 command:
   command:
     fk_from_joint_pos: true
+    recompute_joint_vel_from_joint_pos: true
     motion_origin_recenter: true
     sliding_root_xy_reward: true
     boot_indicator_max: 25

@@ -139,6 +139,21 @@ def smooth_avg5_torch(x: torch.Tensor, dim: int) -> torch.Tensor:
   return smooth.reshape_as(x_t).movedim(0, dim)
 
 
+def joint_vel_from_joint_pos_torch(
+  joint_pos: torch.Tensor,
+  fps: float,
+  *,
+  dim: int = 0,
+) -> torch.Tensor:
+  """Rebuild reference joint velocity with motion_tracking's SP convention.
+
+  The source repository derives this field from reference joint positions using
+  centered finite differences and a replicated-boundary five-frame average,
+  rather than trusting the ``joint_vel`` array stored in an NPZ file.
+  """
+  return smooth_avg5_torch(finite_diff_torch(joint_pos, fps, dim=dim), dim=dim)
+
+
 @dataclass(frozen=True)
 class MotionFKResult:
   body_pos_w: torch.Tensor

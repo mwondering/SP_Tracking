@@ -272,6 +272,9 @@ def _build_command(cfg: DictConfig):
     "extra_reference_motion_file": str(command_cfg.get("extra_reference_motion_file", "")),
     "motion_type": str(command_cfg.motion_type),
     "fk_from_joint_pos": bool(command_cfg.get("fk_from_joint_pos", False)),
+    "recompute_joint_vel_from_joint_pos": bool(
+      command_cfg.get("recompute_joint_vel_from_joint_pos", False)
+    ),
     "motion_origin_recenter": bool(
       command_cfg.get("motion_origin_recenter", False)
     ),
