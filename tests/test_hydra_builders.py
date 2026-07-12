@@ -73,32 +73,24 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert env_cfg.commands["motion"].reset_root_lift_height == 0.04
   assert env_cfg.commands["motion"].reset_min_body_z == 0.0
   assert env_cfg.commands["motion"].reset_joint_vel_limit == 10.0
-  assert env_cfg.commands["motion"].velocity_range == {
-    "x": (-0.1, 0.1),
-    "y": (-0.1, 0.1),
-    "z": (-0.1, 0.1),
-    "roll": (-0.1, 0.1),
-    "pitch": (-0.1, 0.1),
-    "yaw": (-0.1, 0.1),
+  zero_six_dof_range = {
+    "x": (0.0, 0.0),
+    "y": (0.0, 0.0),
+    "z": (0.0, 0.0),
+    "roll": (0.0, 0.0),
+    "pitch": (0.0, 0.0),
+    "yaw": (0.0, 0.0),
   }
+  assert env_cfg.commands["motion"].pose_range == zero_six_dof_range
+  assert env_cfg.commands["motion"].velocity_range == zero_six_dof_range
+  assert env_cfg.commands["motion"].joint_position_range == (0.0, 0.0)
   assert env_cfg.actions["joint_pos"].scale[".*_hip_pitch_joint"] == 0.5
   assert env_cfg.actions["joint_pos"].scale[".*_wrist_pitch_joint"] == 1.0
   assert env_cfg.actions["joint_pos"].torque_limit_scale_range == (4.0, 1.0)
   assert env_cfg.actions["joint_pos"].raw_action_clip == 10.0
   assert env_cfg.actions["joint_pos"].boot_delay_steps == 2
   assert env_cfg.actions["joint_pos"].curriculum_mode == "full"
-  assert set(env_cfg.events) == {
-    "perturb_body_com",
-    "perturb_body_materials",
-    "motor_params_implicit",
-    "random_joint_offset",
-    "perturb_root_vel",
-    "perturb_body_wrench",
-    "perturb_gravity",
-  }
-  assert set(env_cfg.events).isdisjoint(
-    {"push_robot", "base_com", "base_mass", "encoder_bias", "foot_friction"}
-  )
+  assert env_cfg.events == {}
   assert "motion_tracking_progress" in env_cfg.curriculum
   assert env_cfg.metrics["substep_tracking_cache"].per_substep is True
 
