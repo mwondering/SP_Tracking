@@ -182,8 +182,9 @@ class HeftTeacherActor(_HeftModelBase):
 
   @torch.no_grad()
   def clamp_std(self) -> None:
-    upper = self._std_upper.to(self.distribution.std_param.device)
-    self.distribution.std_param.data.minimum_(upper)
+    std = self.distribution.std_param
+    upper = self._std_upper.to(device=std.device, dtype=std.dtype)
+    std.copy_(torch.minimum(std, upper))
 
   def adamw_only_parameters(self):
     return self.mlp[-1].parameters()

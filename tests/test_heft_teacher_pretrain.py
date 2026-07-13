@@ -38,6 +38,11 @@ def test_heft_teacher_models_use_privileged_encoder_and_vector_std() -> None:
   assert actor.as_onnx().input_names == ["policy_priv"]
   torch.testing.assert_close(actor.distribution.std_param, torch.tensor(init_std))
 
+  with torch.no_grad():
+    actor.distribution.std_param.fill_(2.0)
+  actor.clamp_std()
+  torch.testing.assert_close(actor.distribution.std_param, torch.tensor(init_std))
+
 
 def test_heft_teacher_ppo_constructs_muon_group_and_schedules() -> None:
   obs = _observations(2)
