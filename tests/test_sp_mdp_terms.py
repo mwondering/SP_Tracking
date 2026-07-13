@@ -244,3 +244,32 @@ def test_failure_terminations_respect_source_reset_warmup() -> None:
   )
 
   assert torch.equal(gated, torch.tensor([False, True]))
+
+
+def test_loco_reward_group_schedule_matches_source_pretrain_factor() -> None:
+  names = ("survival", "action_rate_l2")
+  base = {"survival": 3.0, "action_rate_l2": 0.02}
+  term_cfgs = {name: SimpleNamespace(weight=weight) for name, weight in base.items()}
+  manager = SimpleNamespace(get_term_cfg=lambda name: term_cfgs[name])
+  env = SimpleNamespace(
+    scene={"robot": SimpleNamespace()},
+    reward_manager=manager,
+    num_envs=2,
+    device="cpu",
+  )
+  cfg = SimpleNamespace(
+    params={
+      "term_names": names,
+      "base_weights": base,
+      "progress_range": (0.0, 1.0),
+      "factor_range": (0.5, 1.0),
+    }
+  )
+  schedule = sp_mdp.loco_reward_group_schedule(cfg, env)
+
+  assert schedule.step_schedule(0.0)["factor"] == 0.5
+  assert term_cfgs["survival"].weight == 1.5
+  assert term_cfgs["action_rate_l2"].weight == 0.01
+  assert schedule.step_schedule(1.0)["factor"] == 1.0
+  assert term_cfgs["survival"].weight == 3.0
+  assert term_cfgs["action_rate_l2"].weight == 0.02

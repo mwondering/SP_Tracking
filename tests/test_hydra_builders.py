@@ -90,7 +90,7 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert env_cfg.actions["joint_pos"].torque_limit_scale_range == (4.0, 1.0)
   assert env_cfg.actions["joint_pos"].raw_action_clip == 10.0
   assert env_cfg.actions["joint_pos"].boot_delay_steps == 2
-  assert env_cfg.actions["joint_pos"].curriculum_mode == "full"
+  assert env_cfg.actions["joint_pos"].curriculum_mode == "progressive"
   assert set(env_cfg.events) == {
     "perturb_body_com",
     "perturb_body_materials",

@@ -113,6 +113,7 @@ REWARD_TERMS = {
   "feet_air_time_ref_dense": sp_mdp.feet_air_time_ref_dense,
   "joint_pos_limits_sp": sp_mdp.joint_pos_limits,
   "joint_torque_limits": sp_mdp.joint_torque_limits,
+  "loco_reward_group_schedule": sp_mdp.loco_reward_group_schedule,
 }
 
 TERMINATION_TERMS = {

@@ -40,7 +40,7 @@ if [[ -z "${MOTION_PATH}" ]]; then
   exit 2
 fi
 
-GPUS="${SP_TRACKING_GPUS:-0,1,2,3}"
+GPUS="${SP_TRACKING_GPUS:-0,1}"
 IFS=',' read -r -a GPU_LIST <<< "${GPUS}"
 NPROC="${SP_TRACKING_NPROC:-${#GPU_LIST[@]}}"
 
@@ -56,7 +56,7 @@ cmd=(
   "--nproc_per_node=${NPROC}"
   -m sp_tracking.scripts.train
   # task=tracking_bfm
-  task=tracking_bfm
+  task=tracking_bfm_sp
   "motion_path=${MOTION_PATH}"
   "launch_script_path=${LAUNCH_SCRIPT_PATH}"
   "task.num_envs=${SP_TRACKING_NUM_ENVS:-16384}"

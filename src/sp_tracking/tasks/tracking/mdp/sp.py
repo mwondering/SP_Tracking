@@ -239,18 +239,36 @@ def _root_motion_current(
 
 
 def _rot6d(quat: torch.Tensor) -> torch.Tensor:
-  return matrix_from_quat(quat)[..., :2].reshape(*quat.shape[:-1], 6)
+  # Match active_adaptation.utils.math.quat_to_rot6d exactly: encode the first
+  # two matrix columns, with each column contiguous in the flattened tensor.
+  # Reshaping the untransposed slice would instead interleave columns by row.
+  return (
+    matrix_from_quat(quat)[..., :, :2]
+    .transpose(-2, -1)
+    .reshape(*quat.shape[:-1], 6)
+  )
 
 
-def _quat_delta(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
-  if q1.shape[:-1] != q2.shape[:-1]:
-    shape = torch.broadcast_shapes(q1.shape[:-1], q2.shape[:-1])
-    q1 = q1.expand(*shape, 4)
-    q2 = q2.expand(*shape, 4)
-  w = q1[..., 0]
-  xyz = -q1[..., 1:]
-  q1_inv = torch.cat((w.unsqueeze(-1), xyz), dim=-1)
-  return quat_mul(q1_inv, q2)
+def _quat_conjugate(quat: torch.Tensor) -> torch.Tensor:
+  return torch.cat((quat[..., :1], -quat[..., 1:]), dim=-1)
+
+
+def _quat_in_frame(frame_quat: torch.Tensor, quat_w: torch.Tensor) -> torch.Tensor:
+  """Express ``quat_w`` in ``frame_quat`` (frame^-1 * world)."""
+  if frame_quat.shape[:-1] != quat_w.shape[:-1]:
+    shape = torch.broadcast_shapes(frame_quat.shape[:-1], quat_w.shape[:-1])
+    frame_quat = frame_quat.expand(*shape, 4)
+    quat_w = quat_w.expand(*shape, 4)
+  return quat_mul(_quat_conjugate(frame_quat), quat_w)
+
+
+def _quat_delta(current_quat: torch.Tensor, target_quat: torch.Tensor) -> torch.Tensor:
+  """Match active_adaptation quat_delta: target * current^-1."""
+  if current_quat.shape[:-1] != target_quat.shape[:-1]:
+    shape = torch.broadcast_shapes(current_quat.shape[:-1], target_quat.shape[:-1])
+    current_quat = current_quat.expand(*shape, 4)
+    target_quat = target_quat.expand(*shape, 4)
+  return quat_mul(target_quat, _quat_conjugate(current_quat))
 
 
 def _exp_sigma(
@@ -645,7 +663,7 @@ def command_obs(
   pos_diff = _quat_apply_inverse(
     future_quat[:, :1], future_pos[:, 1:] - future_pos[:, :1]
   )
-  quat_diff = _quat_delta(root_quat.expand_as(future_quat), future_quat)
+  quat_diff = _quat_in_frame(root_quat.expand_as(future_quat), future_quat)
   return torch.cat(
     (pos_diff.reshape(env.num_envs, -1), _rot6d(quat_diff).reshape(env.num_envs, -1)),
     dim=-1,
@@ -719,7 +737,7 @@ def target_pos_b_obs(env: "ManagerBasedRlEnv", command_name: str) -> torch.Tenso
 def target_rot_b_obs(env: "ManagerBasedRlEnv", command_name: str) -> torch.Tensor:
   root_quat = env.scene["robot"].data.root_link_quat_w.unsqueeze(1)
   target_quat = _root_motion(env, command_name, "body_quat_w", TEACHER_STEPS)
-  return _rot6d(_quat_delta(root_quat.expand_as(target_quat), target_quat)).reshape(
+  return _rot6d(_quat_in_frame(root_quat.expand_as(target_quat), target_quat)).reshape(
     env.num_envs, -1
   )
 
@@ -757,7 +775,7 @@ class _KeypointObservation:
     lin = self.asset.data.body_link_lin_vel_w[:, self.asset_ids]
     ang = self.asset.data.body_link_ang_vel_w[:, self.asset_ids]
     pos_b = _quat_apply_inverse(root_quat.unsqueeze(1), pos - root_pos.unsqueeze(1))
-    quat_b = _quat_delta(root_quat.unsqueeze(1).expand_as(quat), quat)
+    quat_b = _quat_in_frame(root_quat.unsqueeze(1).expand_as(quat), quat)
     lin_b = _quat_apply_inverse(root_quat.unsqueeze(1), lin - root_lin.unsqueeze(1))
     ang_b = _quat_apply_inverse(root_quat.unsqueeze(1), ang - root_ang.unsqueeze(1))
     return pos_b, quat_b, lin_b, ang_b
@@ -822,11 +840,11 @@ class target_keypoints_rot_b_obs(_KeypointObservation):
     ids = self._motion_ids(command_name)
     target_w = _gather(env, command_name, "body_quat_w", steps)[:, :, ids]
     root_quat = _root_motion(env, command_name, "body_quat_w", steps)
-    target_b = _quat_delta(root_quat.unsqueeze(2).expand_as(target_w), target_w)
+    target_b = _quat_in_frame(root_quat.unsqueeze(2).expand_as(target_w), target_w)
     target_rot = _rot6d(target_b)
     if not include_diff:
       return target_rot.reshape(env.num_envs, -1)
-    target_ref_b = _quat_delta(root_quat[:, :1].unsqueeze(2), target_w)
+    target_ref_b = _quat_in_frame(root_quat[:, :1].unsqueeze(2), target_w)
     diff = _rot6d(_quat_delta(self._current()[1].unsqueeze(1), target_ref_b))
     return torch.cat(
       (target_rot.reshape(env.num_envs, -1), diff.reshape(env.num_envs, -1)), dim=-1
@@ -1033,6 +1051,37 @@ class _RewardBase:
     self.asset = env.scene["robot"]
 
 
+class loco_reward_group_schedule(_RewardBase):
+  """Apply the source pretrain's linear multiplier to the whole loco group."""
+
+  def __init__(self, cfg: RewardTermCfg, env: "ManagerBasedRlEnv"):
+    super().__init__(cfg, env)
+    self.term_names = tuple(str(v) for v in cfg.params["term_names"])
+    self.base_weights = {
+      str(name): float(weight) for name, weight in cfg.params["base_weights"].items()
+    }
+    self.progress_range = tuple(float(v) for v in cfg.params.get("progress_range", (0.0, 1.0)))
+    self.factor_range = tuple(float(v) for v in cfg.params.get("factor_range", (0.5, 1.0)))
+    self.current_factor = float(self.factor_range[0])
+
+  def __call__(self, env: "ManagerBasedRlEnv", **_: Any) -> torch.Tensor:
+    return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+  def step_schedule(
+    self, progress: float, iters: int | None = None
+  ) -> dict[str, float]:
+    del iters
+    start, end = self.progress_range
+    low, high = self.factor_range
+    fraction = min(max((float(progress) - start) / max(end - start, 1.0e-8), 0.0), 1.0)
+    self.current_factor = low + fraction * (high - low)
+    manager = getattr(self.env, "reward_manager", None)
+    if manager is not None:
+      for name in self.term_names:
+        manager.get_term_cfg(name).weight = self.base_weights[name] * self.current_factor
+    return {"factor": self.current_factor}
+
+
 class _KeypointReward(_RewardBase):
   def __init__(self, cfg: RewardTermCfg, env: "ManagerBasedRlEnv"):
     super().__init__(cfg, env)
@@ -1052,7 +1101,7 @@ class _KeypointReward(_RewardBase):
     lin = self.asset.data.body_link_lin_vel_w[:, self.asset_ids]
     ang = self.asset.data.body_link_ang_vel_w[:, self.asset_ids]
     pos_b = _quat_apply_inverse(root_quat.unsqueeze(1), pos - root_pos.unsqueeze(1))
-    quat_b = _quat_delta(root_quat.unsqueeze(1).expand_as(quat), quat)
+    quat_b = _quat_in_frame(root_quat.unsqueeze(1).expand_as(quat), quat)
     lin_b = _quat_apply_inverse(root_quat.unsqueeze(1), lin - root_lin.unsqueeze(1))
     ang_b = _quat_apply_inverse(root_quat.unsqueeze(1), ang - root_ang.unsqueeze(1))
     return pos_b, quat_b, lin_b, ang_b
@@ -1077,7 +1126,10 @@ class root_rot_tracking(_RewardBase):
   def __call__(
     self, env: "ManagerBasedRlEnv", command_name: str, sigma: list[float]
   ) -> torch.Tensor:
-    target = _root_motion_current(env, command_name, "body_quat_w")
+    cmd = _command(env, command_name)
+    target = getattr(cmd, "reward_root_quat_w", None)
+    if not isinstance(target, torch.Tensor):
+      target = _root_motion_current(env, command_name, "body_quat_w")
     error = quat_error_magnitude(self.asset.data.root_link_quat_w, target).unsqueeze(-1)
     return _exp_sigma(error, sigma).squeeze(-1)
 
@@ -1147,7 +1199,7 @@ class keypoint_rot_tracking(_KeypointReward):
     ids = self._motion_ids(command_name)
     root_quat = _root_motion_current(env, command_name, "body_quat_w")
     target_w = _gather_current(env, command_name, "body_quat_w")[:, ids]
-    target = _quat_delta(root_quat.unsqueeze(1).expand_as(target_w), target_w)
+    target = _quat_in_frame(root_quat.unsqueeze(1).expand_as(target_w), target_w)
     error = axis_angle_from_quat(_quat_delta(self._current()[1], target)).norm(dim=-1)
     error = error.mean(dim=-1, keepdim=True)
     return _exp_sigma(error, sigma).squeeze(-1)

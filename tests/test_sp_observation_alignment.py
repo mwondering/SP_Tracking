@@ -10,6 +10,33 @@ import torch
 sp = importlib.import_module("sp_tracking.tasks.tracking.mdp.sp")
 
 
+def test_rot6d_matches_reference_column_major_semantics():
+  # A non-symmetric rotation distinguishes the source column-contiguous
+  # encoding from the previous row-interleaved flattening.
+  quat = torch.tensor([[0.8253356, 0.1693705, -0.2822842, 0.4516547]])
+  matrix = sp.matrix_from_quat(quat)
+  expected = matrix[..., :, :2].transpose(-2, -1).reshape(1, 6)
+
+  actual = sp._rot6d(quat)
+
+  torch.testing.assert_close(actual, expected)
+  assert not torch.equal(actual, matrix[..., :, :2].reshape(1, 6))
+
+
+def test_quaternion_frame_and_delta_follow_distinct_source_semantics():
+  qx = torch.tensor(
+    [[math.cos(0.3), math.sin(0.3), 0.0, 0.0]], dtype=torch.float32
+  )
+  qy = torch.tensor(
+    [[math.cos(0.4), 0.0, math.sin(0.4), 0.0]], dtype=torch.float32
+  )
+  qx_inv = torch.cat((qx[:, :1], -qx[:, 1:]), dim=-1)
+
+  torch.testing.assert_close(sp._quat_in_frame(qx, qy), sp.quat_mul(qx_inv, qy))
+  torch.testing.assert_close(sp._quat_delta(qx, qy), sp.quat_mul(qy, qx_inv))
+  assert not torch.allclose(sp._quat_in_frame(qx, qy), sp._quat_delta(qx, qy))
+
+
 class _FakeAsset:
   def __init__(self, *, data: SimpleNamespace, body_names: tuple[str, ...], joint_count: int):
     self.data = data

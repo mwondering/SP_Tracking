@@ -20,7 +20,7 @@ num_envs: 8192
 episode_length_s: 20.0
 decimation: 4
 seed: 42
-student_train: true
+student_train: false
 
 robot:
   name: g1
@@ -145,7 +145,7 @@ command:
     fk_from_joint_pos: true
     recompute_joint_vel_from_joint_pos: true
     motion_origin_recenter: true
-    sliding_root_xy_reward: true
+    sliding_root_xy_reward: false
     boot_indicator_max: 25
     termination_warmup_steps: 5
     feet_standing_body_names: [left_ankle_roll_link, right_ankle_roll_link]
@@ -222,7 +222,7 @@ action:
   torque_limit_progress_range: [0.0, 0.8]
   raw_action_clip: 10.0
   boot_delay_steps: 2
-  curriculum_mode: full
+  curriculum_mode: progressive
   prev_action_obs: mean
   action_rate_source: sampled
   joint_name_order:

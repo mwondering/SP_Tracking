@@ -17,3 +17,20 @@ rewards:
   - {name: feet_air_time_ref_dense, term: feet_air_time_ref_dense, weight: 1.0, params: {command_name: motion, sensor_name: contact_forces, air_h_low: 0.035, air_h_high: 0.155, contact_h_low: 0.035, contact_h_high: 0.125}}
   - {name: joint_pos_limits, term: joint_pos_limits_sp, weight: 1.0, params: {joint_names: ".*", soft_factor: 0.9}}
   - {name: joint_torque_limits, term: joint_torque_limits, weight: 0.01, params: {joint_names: ".*", soft_factor: 0.75}}
+  # Source pretrain: scale the complete loco group linearly from 0.5 to 1.0.
+  # This zero-valued scheduler updates the listed RewardManager weights.
+  - name: loco_reward_group_schedule
+    term: loco_reward_group_schedule
+    weight: 1.0
+    params:
+      term_names: [survival, joint_vel_l2, action_rate_l2, feet_air_time_ref, feet_air_time_ref_dense, joint_pos_limits, joint_torque_limits]
+      base_weights:
+        survival: 3.0
+        joint_vel_l2: 0.0005
+        action_rate_l2: 0.02
+        feet_air_time_ref: 5.0
+        feet_air_time_ref_dense: 1.0
+        joint_pos_limits: 1.0
+        joint_torque_limits: 0.01
+      progress_range: [0.0, 1.0]
+      factor_range: [0.5, 1.0]
