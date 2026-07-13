@@ -50,6 +50,78 @@ robot:
     - right_wrist_roll_link
     - right_hand_mimic
 
+# The primary SP view is used for reset/reference handling.  The old view is
+# retained separately so BFM-module ablations can use their exact body layout
+# without changing the SP reward/keypoint reference set.
+reference_views:
+  sp_tracking:
+    anchor_body_name: pelvis
+    body_names:
+      - pelvis
+      - left_hip_yaw_link
+      - left_knee_link
+      - left_ankle_roll_link
+      - right_hip_yaw_link
+      - right_knee_link
+      - right_ankle_roll_link
+      - torso_link
+      - head_mimic
+      - left_shoulder_yaw_link
+      - left_wrist_roll_link
+      - left_hand_mimic
+      - right_shoulder_yaw_link
+      - right_wrist_roll_link
+      - right_hand_mimic
+  old_tracking:
+    anchor_body_name: torso_link
+    body_names:
+      - pelvis
+      - left_hip_roll_link
+      - left_knee_link
+      - left_ankle_roll_link
+      - right_hip_roll_link
+      - right_knee_link
+      - right_ankle_roll_link
+      - torso_link
+      - left_shoulder_roll_link
+      - left_elbow_link
+      - left_wrist_yaw_link
+      - right_shoulder_roll_link
+      - right_elbow_link
+      - right_wrist_yaw_link
+    termination_body_names:
+      - left_ankle_roll_link
+      - right_ankle_roll_link
+      - left_wrist_yaw_link
+      - right_wrist_yaw_link
+  # The command loader/FK cache carries the union only in BFM-runtime SP
+  # ablations.  Individual observation/reward terms select one named view.
+  combined:
+    body_names:
+      - pelvis
+      - left_hip_yaw_link
+      - left_knee_link
+      - left_ankle_roll_link
+      - right_hip_yaw_link
+      - right_knee_link
+      - right_ankle_roll_link
+      - torso_link
+      - head_mimic
+      - left_shoulder_yaw_link
+      - left_wrist_roll_link
+      - left_hand_mimic
+      - right_shoulder_yaw_link
+      - right_wrist_roll_link
+      - right_hand_mimic
+      - left_hip_roll_link
+      - right_hip_roll_link
+      - left_shoulder_roll_link
+      - left_elbow_link
+      - left_wrist_yaw_link
+      - right_shoulder_roll_link
+      - right_elbow_link
+      - right_wrist_yaw_link
+
 scene:
   terrain_type: plane
   env_spacing: 2.0

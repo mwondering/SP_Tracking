@@ -104,8 +104,9 @@ termination, and `multi_commands.py` loader defaults.
 loader to `multi_command_largedataset.py`. `tracking_bfm_sp` switches to the
 SP asset bundle plus SP observation/reward/termination sets for ablations and
 debugging. Every task whose name starts with `tracking_bfm_sp` uses the SP XML
-and SP reference profile; `bfm_agent` in a variant name only means the BFM PPO
-and network preset, never the BFM XML.
+and SP reference profile, never the BFM XML. The task table below is the
+authority for the independently selected runtime modules (agent/action,
+sampling, termination, curriculum, and rewards).
 
 ## Tasks
 
@@ -115,12 +116,20 @@ and network preset, never the BFM XML.
 | `tracking_bfm_largedataset` | BFM XML + BFM reference | old / old / BFM PPO | old / none / BFM large-dataset |
 | `tracking_bfm_sp` | SP XML + SP reference | SP / SP / SP PPO | SP / SP / SP large-dataset |
 | `tracking_bfm_sp_old_obs_old_reward_bfm_agent` | SP XML + SP reference | old / old / BFM PPO | SP / SP / SP large-dataset |
-| `tracking_bfm_sp_old_reward` | SP XML + SP reference | SP / old / SP PPO | SP / SP / SP large-dataset |
+| `tracking_bfm_sp_old_reward` | SP XML + SP reference | SP / old / BFM PPO | old / none / BFM multi-motion |
 | `tracking_bfm_sp_bfm_agent_old_reward` | SP XML + SP reference | SP / old / BFM PPO | SP / SP / SP large-dataset |
-| `tracking_bfm_sp_bfm_agent_old_obs` | SP XML + SP reference | old / SP / BFM PPO | SP / SP / SP large-dataset |
+| `tracking_bfm_sp_bfm_agent_old_obs` | SP XML + SP reference | old / SP / BFM PPO | old / none / BFM multi-motion |
 
 These tasks are configured under `src/sp_tracking/conf/task`. Shared PPO defaults
 live in `src/sp_tracking/conf/agent/tracking_bfm_ppo.yaml`.
+
+The two single-module bridge tasks intentionally retain SP XML/reference FK
+preprocessing, but otherwise restore the BFM runtime. In particular,
+`tracking_bfm_sp_old_reward` changes only the observation module to SP, while
+`tracking_bfm_sp_bfm_agent_old_obs` changes only the reward module to SP. The
+legacy observation/reward terms select their own torso-anchored 14-body view,
+so the old actor/critic interface remains 286-dimensional even when the SP
+reward view is also present in the reference cache.
 
 ## Checkpoints, Resume, and Deployment Export
 

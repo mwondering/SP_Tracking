@@ -1,0 +1,133 @@
+defaults:
+  - tracking_bfm_sp
+  - override command: multimotion
+  - override obs: old_tracking
+  - override reward: old_tracking
+  - override /agent@_global_.agent: tracking_bfm_ppo
+  - _self_
+
+# Reusable bridge for ablations that keep SP XML/reference preprocessing while
+# restoring the BFM training runtime.  Child tasks select exactly one SP module
+# (observation or reward) on top of this base.
+name: tracking_bfm_sp_bfm_runtime
+variant:
+  environment_profile: sp_tracking
+  reference_profile: sp_tracking
+  observation_profile: old_tracking
+  reward_profile: old_tracking
+  termination_profile: old_tracking
+  curriculum_profile: none
+  sampling_profile: bfm_multimotion
+  agent_profile: bfm_ppo
+
+num_envs: 1
+episode_length_s: 10.0
+student_train: false
+
+# Keep the SP primary anchor/reference view for reset and SP terms, while the
+# old BFM terms explicitly select ``reference_views.old_tracking`` below.
+robot:
+  body_names: ${task.reference_views.combined.body_names}
+  base_com_body_names: [torso_link]
+  foot_geom_pattern: ^(left|right)_foot[1-7]_collision$
+  termination_body_names: ${task.reference_views.old_tracking.termination_body_names}
+
+command:
+  command:
+    # SP reference profile: use the source XML joint ordering and recreate its
+    # kinematics/velocities.  The selected ``multimotion`` group above supplies
+    # the BFM sampler and reset distributions.
+    fk_from_joint_pos: true
+    recompute_joint_vel_from_joint_pos: true
+    motion_origin_recenter: true
+    sliding_root_xy_reward: false
+    boot_indicator_max: 0
+    termination_warmup_steps: 0
+    feet_standing_body_names: []
+    feet_standing: {}
+    resample_on_motion_end: true
+    adaptive_sampling:
+      strategy: mixture
+      random_probability: null
+    rewind:
+      enabled: false
+      failure_probability: 0.4
+    reset_root_lift_height: 0.0
+    reset_min_body_z: null
+    reset_joint_vel_limit: null
+    # SP observation/reward modules may request long reference horizons even
+    # though the BFM command interface itself has history=0/future=1.
+    reference_cache_steps:
+      joint_pos: [-16, -12, -8, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12, 16, 20]
+      joint_vel: [0]
+      body_pos_w: [-16, -12, -8, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12, 16, 20]
+      body_quat_w: [-16, -12, -8, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12, 16, 20]
+      body_lin_vel_w: [-8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 20]
+      body_ang_vel_w: [-8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 20]
+
+# BFM action dynamics/network interface are part of the runtime profile, not
+# the SP XML/reference profile.
+action:
+  type: joint_position
+  scale: g1_action_scale
+  use_default_offset: true
+  actuator_names: [".*"]
+
+events:
+  push_robot:
+    enabled: true
+    interval_range_s: [1.0, 3.0]
+  base_com:
+    enabled: true
+    ranges:
+      0: [-0.075, 0.075]
+      1: [-0.075, 0.075]
+      2: [-0.075, 0.075]
+  base_mass:
+    enabled: true
+    body_names: [torso_link]
+    ranges: [-1.0, 1.0]
+  encoder_bias:
+    enabled: true
+    bias_range: [-0.01, 0.01]
+  foot_friction:
+    enabled: true
+    ranges: [0.3, 2.0]
+    shared_random: true
+  perturb_body_com: {enabled: false}
+  perturb_body_materials: {enabled: false}
+  motor_params_implicit: {enabled: false}
+  random_joint_offset: {enabled: false}
+  perturb_root_vel: {enabled: false}
+  perturb_body_wrench: {enabled: false}
+  perturb_gravity: {enabled: false}
+
+curriculum:
+  sp_tracking_progress:
+    enabled: false
+
+terminations:
+  - name: time_out
+    term: time_out
+    time_out: true
+  - name: anchor_pos
+    term: bad_anchor_pos_z_only
+    params:
+      command_name: motion
+      threshold: 0.5
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
+  - name: anchor_ori
+    term: bad_anchor_ori
+    params:
+      command_name: motion
+      threshold: 0.8
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
+      asset_cfg:
+        entity_name: robot
+  - name: ee_body_pos
+    term: bad_motion_body_pos_z_only
+    params:
+      command_name: motion
+      threshold: 0.5
+      body_names: ${task.reference_views.old_tracking.termination_body_names}
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}

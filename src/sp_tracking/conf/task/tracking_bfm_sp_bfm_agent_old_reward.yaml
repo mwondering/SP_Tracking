@@ -21,3 +21,8 @@ agent_overrides:
   obs_groups:
     actor: [policy]
     critic: [policy, priv, priv_critic]
+
+# SP observations retain their own named bodies, while the active old reward
+# selects the BFM view from this shared reference cache.
+robot:
+  body_names: ${task.reference_views.combined.body_names}

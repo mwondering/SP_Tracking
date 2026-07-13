@@ -49,6 +49,15 @@ robot:
     - right_elbow_link
     - right_wrist_yaw_link
 
+# Terms in the legacy observation/reward/termination modules consume this
+# named view instead of assuming the command's primary reference view.  On the
+# BFM task both are identical; SP-XML ablations can retain this exact interface.
+reference_views:
+  old_tracking:
+    anchor_body_name: ${task.robot.anchor_body_name}
+    body_names: ${task.robot.body_names}
+    termination_body_names: ${task.robot.termination_body_names}
+
 scene:
   terrain_type: plane
   env_spacing: 2.0
@@ -102,11 +111,13 @@ terminations:
     params:
       command_name: motion
       threshold: 0.5
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
   - name: anchor_ori
     term: bad_anchor_ori
     params:
       command_name: motion
       threshold: 0.8
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
       asset_cfg:
         entity_name: robot
   - name: ee_body_pos
@@ -114,4 +125,5 @@ terminations:
     params:
       command_name: motion
       threshold: 0.5
-      body_names: ${task.robot.termination_body_names}
+      body_names: ${task.reference_views.old_tracking.termination_body_names}
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}

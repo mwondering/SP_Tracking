@@ -74,6 +74,26 @@ def test_prepare_play_cfg_requires_task_for_legacy_local_checkpoint(tmp_path: Pa
   assert list(prepared.env.observations) == ["actor", "critic"]
 
 
+@pytest.mark.parametrize(
+  ("task", "obs_groups"),
+  [
+    ("tracking_bfm_sp_old_reward", ["policy", "priv", "priv_critic"]),
+    ("tracking_bfm_sp_bfm_agent_old_obs", ["actor", "critic"]),
+  ],
+)
+def test_prepare_play_cfg_supports_new_variant_for_legacy_checkpoint(
+  tmp_path: Path, task: str, obs_groups: list[str]
+) -> None:
+  checkpoint_file = tmp_path / "checkpoint_final.pt"
+  torch.save({}, checkpoint_file)
+
+  prepared = prepare_play_cfg(
+    PlayConfig(task=task, checkpoint_file=str(checkpoint_file))  # type: ignore[arg-type]
+  )
+
+  assert list(prepared.env.observations) == obs_groups
+
+
 def test_prepare_play_cfg_rejects_task_mismatch_with_local_checkpoint(tmp_path: Path) -> None:
   checkpoint_file = _save_local_checkpoint(tmp_path, "tracking_bfm_sp")
 

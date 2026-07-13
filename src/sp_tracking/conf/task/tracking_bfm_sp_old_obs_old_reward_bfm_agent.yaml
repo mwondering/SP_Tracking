@@ -18,3 +18,8 @@ variant:
   curriculum_profile: sp_tracking
   sampling_profile: sp_tracking
   agent_profile: bfm_ppo
+
+# The active old modules select their torso-anchored BFM view from this shared
+# SP+BFM reference cache; SP termination/curriculum/sampling remain unchanged.
+robot:
+  body_names: ${task.reference_views.combined.body_names}

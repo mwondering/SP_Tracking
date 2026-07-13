@@ -1,17 +1,39 @@
 defaults:
-  - tracking_bfm_sp
-  - override reward: old_tracking
+  - tracking_bfm_sp_bfm_runtime
+  - override obs: sp_tracking
   - _self_
 
-# Isolate the reward change while retaining the complete SP environment,
-# observation interface, curriculum, sampler, and PPO preset.
+# SP XML/reference plus SP observations only.  Rewards, BFM PPO/action,
+# terminations, curriculum, events, and sampling all come from the BFM runtime
+# base so this isolates the observation module.
 name: tracking_bfm_sp_old_reward
 variant:
   environment_profile: sp_tracking
   reference_profile: sp_tracking
   observation_profile: sp_tracking
   reward_profile: old_tracking
-  termination_profile: sp_tracking
-  curriculum_profile: sp_tracking
-  sampling_profile: sp_tracking
-  agent_profile: sp_ppo
+  termination_profile: old_tracking
+  curriculum_profile: none
+  sampling_profile: bfm_multimotion
+  agent_profile: bfm_ppo
+
+# These are observation-side SP reference features.  They do not change the
+# BFM sampler; they only make the SP observation terms source-compatible.
+command:
+  command:
+    boot_indicator_max: 25
+    feet_standing_body_names: [left_ankle_roll_link, right_ankle_roll_link]
+    feet_standing:
+      z_enter: 0.18
+      z_exit: 0.25
+      vxy_enter: 0.2
+      vxy_exit: 0.3
+      vz_enter: 0.15
+      vz_exit: 0.25
+
+# The BFM PPO/network stays in use, but it must consume the SP observation
+# group names selected above.
+agent_overrides:
+  obs_groups:
+    actor: [policy]
+    critic: [policy, priv, priv_critic]

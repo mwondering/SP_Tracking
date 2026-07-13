@@ -2,27 +2,47 @@ rewards:
   - name: motion_global_root_pos
     term: motion_global_anchor_position_error_exp
     weight: 1.0
-    params: {command_name: motion, std: 0.3}
+    params:
+      command_name: motion
+      std: 0.3
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
   - name: motion_global_root_ori
     term: motion_global_anchor_orientation_error_exp
     weight: 1.0
-    params: {command_name: motion, std: 0.4}
+    params:
+      command_name: motion
+      std: 0.4
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
   - name: motion_body_pos
     term: motion_relative_body_position_error_exp
     weight: 1.0
-    params: {command_name: motion, std: 0.3}
+    params:
+      command_name: motion
+      std: 0.3
+      body_names: ${task.reference_views.old_tracking.body_names}
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
   - name: motion_body_ori
     term: motion_relative_body_orientation_error_exp
     weight: 1.0
-    params: {command_name: motion, std: 0.4}
+    params:
+      command_name: motion
+      std: 0.4
+      body_names: ${task.reference_views.old_tracking.body_names}
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
   - name: motion_body_lin_vel
     term: motion_global_body_linear_velocity_error_exp
     weight: 1.0
-    params: {command_name: motion, std: 1.0}
+    params:
+      command_name: motion
+      std: 1.0
+      body_names: ${task.reference_views.old_tracking.body_names}
   - name: motion_body_ang_vel
     term: motion_global_body_angular_velocity_error_exp
     weight: 1.0
-    params: {command_name: motion, std: 3.14}
+    params:
+      command_name: motion
+      std: 3.14
+      body_names: ${task.reference_views.old_tracking.body_names}
   - name: action_rate_l2
     term: action_rate_l2
     weight: -0.1

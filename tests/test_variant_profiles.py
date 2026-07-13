@@ -20,6 +20,7 @@ def test_named_variants_form_a_supported_profile_matrix() -> None:
       "reward": "motion_global_root_pos",
       "agent_groups": {"actor": ("actor",), "critic": ("critic",)},
       "sp_environment": False,
+      "runtime": "bfm",
     },
     "tracking_bfm_sp": {
       "environment": "sp_tracking",
@@ -31,6 +32,7 @@ def test_named_variants_form_a_supported_profile_matrix() -> None:
         "critic": ("policy", "priv", "priv_critic"),
       },
       "sp_environment": True,
+      "runtime": "sp",
     },
     "tracking_bfm_sp_old_obs_old_reward_bfm_agent": {
       "environment": "sp_tracking",
@@ -39,6 +41,7 @@ def test_named_variants_form_a_supported_profile_matrix() -> None:
       "reward": "motion_global_root_pos",
       "agent_groups": {"actor": ("actor",), "critic": ("critic",)},
       "sp_environment": True,
+      "runtime": "sp",
     },
     "tracking_bfm_sp_old_reward": {
       "environment": "sp_tracking",
@@ -50,6 +53,7 @@ def test_named_variants_form_a_supported_profile_matrix() -> None:
         "critic": ("policy", "priv", "priv_critic"),
       },
       "sp_environment": True,
+      "runtime": "bfm",
     },
     "tracking_bfm_sp_bfm_agent_old_reward": {
       "environment": "sp_tracking",
@@ -61,6 +65,7 @@ def test_named_variants_form_a_supported_profile_matrix() -> None:
         "critic": ("policy", "priv", "priv_critic"),
       },
       "sp_environment": True,
+      "runtime": "sp",
     },
     "tracking_bfm_sp_bfm_agent_old_obs": {
       "environment": "sp_tracking",
@@ -69,6 +74,7 @@ def test_named_variants_form_a_supported_profile_matrix() -> None:
       "reward": "root_pos_tracking",
       "agent_groups": {"actor": ("actor",), "critic": ("critic",)},
       "sp_environment": True,
+      "runtime": "bfm",
     },
   }
 
@@ -92,13 +98,61 @@ def test_named_variants_form_a_supported_profile_matrix() -> None:
       assert command.motion_type == "mujoco"
       assert command.fk_from_joint_pos is True
       assert command.recompute_joint_vel_from_joint_pos is True
-      assert type(env_cfg.actions["joint_pos"]).__name__ == "SpTrackingJointPositionActionCfg"
-      assert type(command).__name__ == "LargeDatasetMultiMotionCommandCfg"
-      assert command.adaptive_sampling.strategy == "branch"
-      assert command.rewind.enabled is True
-      assert "sp_tracking_progress" in env_cfg.curriculum
       assert "substep_tracking_cache" in env_cfg.metrics
       assert "contact_forces" in {sensor.name for sensor in env_cfg.scene.sensors}
-      assert {"body_z_termination", "gravity_dir_termination"} <= set(
-        env_cfg.terminations
+      uses_old_view = (
+        expected["obs_groups"] == ("actor", "critic")
+        or expected["reward"] == "motion_global_root_pos"
       )
+      if uses_old_view:
+        assert tuple(command.body_names) == tuple(
+          cfg.task.reference_views.combined.body_names
+        )
+        if expected["reward"] == "motion_global_root_pos":
+          reward_params = env_cfg.rewards["motion_body_pos"].params
+          assert tuple(reward_params["body_names"]) == tuple(
+            cfg.task.reference_views.old_tracking.body_names
+          )
+          assert (
+            reward_params["anchor_body_name"]
+            == cfg.task.reference_views.old_tracking.anchor_body_name
+          )
+      if expected["runtime"] == "sp":
+        assert type(env_cfg.actions["joint_pos"]).__name__ == "SpTrackingJointPositionActionCfg"
+        assert type(command).__name__ == "LargeDatasetMultiMotionCommandCfg"
+        assert command.adaptive_sampling.strategy == "branch"
+        assert command.rewind.enabled is True
+        assert "sp_tracking_progress" in env_cfg.curriculum
+        assert {"body_z_termination", "gravity_dir_termination"} <= set(
+          env_cfg.terminations
+        )
+      else:
+        assert type(env_cfg.actions["joint_pos"]).__name__ == "JointPositionActionCfg"
+        assert type(command).__name__ == "MultiMotionCommandCfg"
+        assert command.adaptive_sampling.strategy == "mixture"
+        assert command.adaptive_sampling.random_probability is None
+        assert command.rewind.enabled is False
+        assert command.resample_on_motion_end is True
+        assert env_cfg.curriculum == {}
+        assert set(env_cfg.events) == {
+          "push_robot",
+          "base_com",
+          "base_mass",
+          "encoder_bias",
+          "foot_friction",
+        }
+        assert set(env_cfg.terminations) == {
+          "time_out",
+          "anchor_pos",
+          "anchor_ori",
+          "ee_body_pos",
+        }
+        if expected["obs_groups"] == ("actor", "critic"):
+          body_params = env_cfg.observations["actor"].terms["body_pos"].params
+          assert tuple(body_params["body_names"]) == tuple(
+            cfg.task.reference_views.old_tracking.body_names
+          )
+          assert (
+            body_params["anchor_body_name"]
+            == cfg.task.reference_views.old_tracking.anchor_body_name
+          )

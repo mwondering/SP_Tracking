@@ -6,7 +6,14 @@ from typing import TYPE_CHECKING, cast
 import torch
 
 from mjlab.sensor import ContactSensor
-from mjlab.utils.lab_api.math import quat_error_magnitude, subtract_frame_transforms
+from mjlab.utils.lab_api.math import (
+  quat_apply,
+  quat_error_magnitude,
+  quat_inv,
+  quat_mul,
+  subtract_frame_transforms,
+  yaw_quat,
+)
 
 from .multi_commands import MotionCommand
 
@@ -24,21 +31,89 @@ def _get_body_indexes(
   ]
 
 
+def _anchor_pose(
+  command: MotionCommand, anchor_body_name: str | None
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+  if anchor_body_name is None:
+    return (
+      command.anchor_pos_w,
+      command.anchor_quat_w,
+      command.robot_anchor_pos_w,
+      command.robot_anchor_quat_w,
+    )
+  body_indexes = _get_body_indexes(command, (anchor_body_name,))
+  if len(body_indexes) != 1:
+    raise ValueError(
+      f"Anchor body '{anchor_body_name}' is absent from the command reference."
+    )
+  body_index = body_indexes[0]
+  return (
+    command.body_pos_w[:, body_index],
+    command.body_quat_w[:, body_index],
+    command.robot_body_pos_w[:, body_index],
+    command.robot_body_quat_w[:, body_index],
+  )
+
+
+def _relative_reference_body_poses(
+  command: MotionCommand,
+  body_indexes: list[int],
+  anchor_body_name: str | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+  """Match command-relative poses for an optional named reference view.
+
+  ``MultiMotionCommand`` stores its default relative body poses using the
+  primary command anchor.  Legacy BFM terms may instead select a torso view
+  while SP reset/reward terms retain a pelvis primary anchor, so recompute the
+  exact yaw-aligned construction for that alternate view here.
+  """
+  if anchor_body_name is None:
+    return (
+      command.body_pos_relative_w[:, body_indexes],
+      command.body_quat_relative_w[:, body_indexes],
+    )
+
+  anchor_pos_w, anchor_quat_w, robot_anchor_pos_w, robot_anchor_quat_w = (
+    _anchor_pose(command, anchor_body_name)
+  )
+  num_bodies = len(body_indexes)
+  delta_pos_w = robot_anchor_pos_w[:, None, :].repeat(1, num_bodies, 1)
+  delta_pos_w[..., 2] = anchor_pos_w[:, None, 2]
+  delta_ori_w = yaw_quat(
+    quat_mul(robot_anchor_quat_w, quat_inv(anchor_quat_w))
+  ).unsqueeze(1).expand(-1, num_bodies, -1)
+  body_pos_w = command.body_pos_w[:, body_indexes]
+  body_quat_w = command.body_quat_w[:, body_indexes]
+  return (
+    delta_pos_w
+    + quat_apply(delta_ori_w, body_pos_w - anchor_pos_w[:, None, :]),
+    quat_mul(delta_ori_w, body_quat_w),
+  )
+
+
 def motion_global_anchor_position_error_exp(
-  env: ManagerBasedRlEnv, command_name: str, std: float
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  std: float,
+  anchor_body_name: str | None = None,
 ) -> torch.Tensor:
   command = cast(MotionCommand, env.command_manager.get_term(command_name))
-  error = torch.sum(
-    torch.square(command.anchor_pos_w - command.robot_anchor_pos_w), dim=-1
-  )
+  anchor_pos_w, _, robot_anchor_pos_w, _ = _anchor_pose(command, anchor_body_name)
+  error = torch.sum(torch.square(anchor_pos_w - robot_anchor_pos_w), dim=-1)
   return torch.exp(-error / std**2)
 
 
 def motion_global_anchor_orientation_error_exp(
-  env: ManagerBasedRlEnv, command_name: str, std: float
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  std: float,
+  anchor_body_name: str | None = None,
 ) -> torch.Tensor:
   command = cast(MotionCommand, env.command_manager.get_term(command_name))
-  error = quat_error_magnitude(command.anchor_quat_w, command.robot_anchor_quat_w) ** 2
+  _, anchor_quat_w, _, robot_anchor_quat_w = _anchor_pose(
+    command, anchor_body_name
+  )
+  error = quat_error_magnitude(anchor_quat_w, robot_anchor_quat_w) ** 2
   return torch.exp(-error / std**2)
 
 
@@ -47,13 +122,16 @@ def motion_relative_body_position_error_exp(
   command_name: str,
   std: float,
   body_names: tuple[str, ...] | None = None,
+  anchor_body_name: str | None = None,
 ) -> torch.Tensor:
   command = cast(MotionCommand, env.command_manager.get_term(command_name))
   body_indexes = _get_body_indexes(command, body_names)
+  reference_pos_w, _ = _relative_reference_body_poses(
+    command, body_indexes, anchor_body_name
+  )
   error = torch.sum(
     torch.square(
-      command.body_pos_relative_w[:, body_indexes]
-      - command.robot_body_pos_w[:, body_indexes]
+      reference_pos_w - command.robot_body_pos_w[:, body_indexes]
     ),
     dim=-1,
   )
@@ -65,12 +143,16 @@ def motion_relative_body_orientation_error_exp(
   command_name: str,
   std: float,
   body_names: tuple[str, ...] | None = None,
+  anchor_body_name: str | None = None,
 ) -> torch.Tensor:
   command = cast(MotionCommand, env.command_manager.get_term(command_name))
   body_indexes = _get_body_indexes(command, body_names)
+  _, reference_quat_w = _relative_reference_body_poses(
+    command, body_indexes, anchor_body_name
+  )
   error = (
     quat_error_magnitude(
-      command.body_quat_relative_w[:, body_indexes],
+      reference_quat_w,
       command.robot_body_quat_w[:, body_indexes],
     )
     ** 2

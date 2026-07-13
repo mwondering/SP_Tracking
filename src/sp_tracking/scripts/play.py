@@ -23,14 +23,32 @@ TASK_OVERRIDES = {
   "tracking_bfm": [],
   "tracking_bfm_largedataset": ["task=tracking_bfm_largedataset"],
   "tracking_bfm_sp": ["task=tracking_bfm_sp"],
+  "tracking_bfm_sp_old_obs_old_reward_bfm_agent": [
+    "task=tracking_bfm_sp_old_obs_old_reward_bfm_agent"
+  ],
+  "tracking_bfm_sp_old_reward": ["task=tracking_bfm_sp_old_reward"],
+  "tracking_bfm_sp_bfm_agent_old_reward": [
+    "task=tracking_bfm_sp_bfm_agent_old_reward"
+  ],
+  "tracking_bfm_sp_bfm_agent_old_obs": ["task=tracking_bfm_sp_bfm_agent_old_obs"],
 }
+
+TaskName = Literal[
+  "tracking_bfm",
+  "tracking_bfm_largedataset",
+  "tracking_bfm_sp",
+  "tracking_bfm_sp_old_obs_old_reward_bfm_agent",
+  "tracking_bfm_sp_old_reward",
+  "tracking_bfm_sp_bfm_agent_old_reward",
+  "tracking_bfm_sp_bfm_agent_old_obs",
+]
 
 
 @dataclass(frozen=True)
 class PlayConfig:
   # New checkpoints are self-describing; task is only needed for legacy local
   # checkpoints that do not carry the source-style ``cfg`` field.
-  task: Literal["tracking_bfm", "tracking_bfm_largedataset", "tracking_bfm_sp"] | None = None
+  task: TaskName | None = None
   checkpoint_file: str | None = None
   motion_path: str | None = None
   motion_file: str | None = None
@@ -111,7 +129,7 @@ def _prepare_checkpoint_train_cfg(
     if requested_task is None:
       raise ValueError(
         "This legacy checkpoint has no embedded cfg. Pass --task explicitly "
-        "to select tracking_bfm or tracking_bfm_sp."
+        f"to select one of: {', '.join(TASK_OVERRIDES)}."
       )
     fallback_cfg = _compose_train(TASK_OVERRIDES[requested_task])
     return prepare_train_cfg(fallback_cfg)
