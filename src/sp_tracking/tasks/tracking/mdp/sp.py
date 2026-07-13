@@ -1063,6 +1063,9 @@ class loco_reward_group_schedule(_RewardBase):
     self.progress_range = tuple(float(v) for v in cfg.params.get("progress_range", (0.0, 1.0)))
     self.factor_range = tuple(float(v) for v in cfg.params.get("factor_range", (0.5, 1.0)))
     self.current_factor = float(self.factor_range[0])
+    state = dict(getattr(env, "_sp_tracking_curriculum_state", {"progress": 0.0}))
+    state["reward/loco_reward_group_schedule/factor"] = self.current_factor
+    env._sp_tracking_curriculum_state = state
 
   def __call__(self, env: "ManagerBasedRlEnv", **_: Any) -> torch.Tensor:
     return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
