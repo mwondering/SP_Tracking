@@ -19,6 +19,37 @@ class SplitLrPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
   clamp_rewards_min: float | None = None
 
 
+@dataclass
+class HeftTeacherPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
+  """Teacher-only HEFT pretrain options used exclusively by the SP agent."""
+
+  entropy_coef_start: float = 0.01
+  entropy_coef_end: float = 0.005
+  desired_kl_upper: tuple[tuple[float, float], ...] = (
+    (0.0, 0.015),
+    (0.15, 0.015),
+    (0.2, 0.01),
+    (0.8, 0.0075),
+    (1.0, 0.0075),
+  )
+  lr_schedule_scale_factor: float = 1.05
+  lr_schedule_min: float = 1.0e-7
+  lr_schedule_max: float = 1.0e-3
+  symmetry_cfg: dict[str, Any] | None = None
+
+
+@dataclass
+class HeftTeacherActorCfg(RslRlModelCfg):
+  privileged_latent_dim: int = 256
+  vecnorm_decay: float = 0.9999
+  init_std: tuple[float, ...] | None = None
+
+
+@dataclass
+class HeftTeacherCriticCfg(RslRlModelCfg):
+  vecnorm_decay: float = 0.9999
+
+
 def _to_container(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
   return OmegaConf.to_container(cfg, resolve=True) if isinstance(cfg, DictConfig) else dict(cfg)
 
@@ -42,15 +73,29 @@ def build_agent_cfg(
     merged = OmegaConf.merge(OmegaConf.create(data), overrides)
     data = OmegaConf.to_container(merged, resolve=True)
     assert isinstance(data, dict)
-  actor = RslRlModelCfg(**_filter_dataclass_kwargs(RslRlModelCfg, dict(data.pop("actor"))))
-  critic = RslRlModelCfg(**_filter_dataclass_kwargs(RslRlModelCfg, dict(data.pop("critic"))))
+  actor_data = dict(data.pop("actor"))
+  critic_data = dict(data.pop("critic"))
+  actor_cls = (
+    HeftTeacherActorCfg
+    if str(actor_data.get("class_name", "")).endswith(":HeftTeacherActor")
+    else RslRlModelCfg
+  )
+  critic_cls = (
+    HeftTeacherCriticCfg
+    if str(critic_data.get("class_name", "")).endswith(":HeftTeacherCritic")
+    else RslRlModelCfg
+  )
+  actor = actor_cls(**_filter_dataclass_kwargs(actor_cls, actor_data))
+  critic = critic_cls(**_filter_dataclass_kwargs(critic_cls, critic_data))
   algorithm_data = dict(data.pop("algorithm"))
   split_lr_keys = {"actor_learning_rate", "critic_learning_rate", "clamp_rewards_min"}
-  algorithm_cls = (
-    SplitLrPpoAlgorithmCfg
-    if split_lr_keys.intersection(algorithm_data)
-    else RslRlPpoAlgorithmCfg
-  )
+  algorithm_class_name = str(algorithm_data.get("class_name", ""))
+  if algorithm_class_name.endswith(":HeftTeacherPPO"):
+    algorithm_cls = HeftTeacherPpoAlgorithmCfg
+  elif split_lr_keys.intersection(algorithm_data):
+    algorithm_cls = SplitLrPpoAlgorithmCfg
+  else:
+    algorithm_cls = RslRlPpoAlgorithmCfg
   algorithm = algorithm_cls(
     **_filter_dataclass_kwargs(algorithm_cls, algorithm_data)
   )
@@ -79,7 +124,9 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
   data = asdict(cfg)
   for model_name in ("actor", "critic"):
     model = data[model_name]
-    if model.get("class_name") == "MLPModel":
+    if model.get("class_name") == "MLPModel" or str(
+      model.get("class_name", "")
+    ).endswith((":HeftTeacherActor", ":HeftTeacherCritic")):
       for key in ("cnn_cfg", "rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
         model.pop(key, None)
   return data

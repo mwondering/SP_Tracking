@@ -46,6 +46,23 @@ def test_build_sim2real_policy_metadata_uses_policy_and_action_keys() -> None:
   assert metadata["checkpoint"] == "checkpoint_12.pt"
 
 
+def test_build_metadata_uses_custom_flattened_teacher_input_name() -> None:
+  class TeacherPolicy(torch.nn.Module):
+    input_size = 11
+    deploy_input_names = ["policy_priv"]
+
+  metadata = build_sim2real_policy_metadata(
+    env=SimpleNamespace(num_actions=3),
+    policy=TeacherPolicy(),
+    run_name="test",
+    iteration=1,
+    checkpoint_name="checkpoint_1.pt",
+  )
+
+  assert metadata["in_keys"] == ["policy_priv"]
+  assert metadata["in_shapes"] == [[[1, 11]]]
+
+
 def test_export_sim2real_policy_onnx_writes_policy_json(tmp_path: Path) -> None:
   onnx_path = tmp_path / "policy.onnx"
 

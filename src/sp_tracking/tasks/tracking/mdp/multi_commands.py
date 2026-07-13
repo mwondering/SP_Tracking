@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import math
 import os
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
@@ -16,6 +17,7 @@ from mjlab.utils.lab_api.math import (
   quat_apply,
   quat_error_magnitude,
   quat_from_euler_xyz,
+  quat_from_angle_axis,
   quat_inv,
   quat_mul,
   sample_uniform,
@@ -50,6 +52,8 @@ class RewindCfg:
 
   enabled: bool = False
   failure_probability: float = 0.4
+  min_steps: int = 0
+  max_steps: int = 0
 
 
 def apply_reset_ground_clearance(
@@ -843,6 +847,143 @@ class MultiMotionCommand(CommandTerm):
     )
     self.reward_root_quat_w[:, 0] = 1.0
     self._shared_joint_observation_cache: dict[tuple[str, float], torch.Tensor] = {}
+    self._initialize_student_motion_randomization()
+
+  def _initialize_student_motion_randomization(self) -> None:
+    cfg = dict(self.cfg.student_motion_randomization)
+    self._student_motion_randomization_cfg = cfg
+    self._student_motion_randomization_enabled = bool(cfg.get("enable", False))
+    if not self._student_motion_randomization_enabled:
+      return
+    shape = (self.num_envs,)
+    self._student_root_z_offset = torch.zeros(shape, device=self.device)
+    self._student_xy_direction = torch.zeros((self.num_envs, 2), device=self.device)
+    self._student_xy_amplitude = torch.zeros(shape, device=self.device)
+    self._student_xy_omega = torch.zeros(shape, device=self.device)
+    self._student_xy_phase = torch.zeros(shape, device=self.device)
+    self._student_z_amplitude = torch.zeros(shape, device=self.device)
+    self._student_z_omega = torch.zeros(shape, device=self.device)
+    self._student_z_phase = torch.zeros(shape, device=self.device)
+    self._student_rot_axis = torch.zeros((self.num_envs, 3), device=self.device)
+    self._student_rot_amplitude = torch.zeros(shape, device=self.device)
+    self._student_rot_omega = torch.zeros(shape, device=self.device)
+    self._student_rot_phase = torch.zeros(shape, device=self.device)
+    joint_names = tuple(getattr(self.motion, "joint_names", self.robot.joint_names))
+    bias_std = torch.zeros(len(joint_names), device=self.device)
+    for pattern, value in dict(cfg.get("joint_pos_bias_std", {})).items():
+      for index, name in enumerate(joint_names):
+        if re.fullmatch(str(pattern), name):
+          bias_std[index] = float(value)
+    self._student_joint_bias_std = bias_std
+    self._student_joint_bias = torch.zeros(
+      (self.num_envs, len(joint_names)), device=self.device
+    )
+    self._resample_student_motion_randomization(
+      torch.arange(self.num_envs, device=self.device)
+    )
+
+  @staticmethod
+  def _random_unit(shape: tuple[int, ...], device) -> torch.Tensor:
+    value = torch.randn(shape, device=device)
+    return value / value.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
+
+  def _sample_log_uniform(self, count: int, bounds) -> torch.Tensor:
+    low, high = (float(bounds[0]), float(bounds[1]))
+    return torch.empty(count, device=self.device).uniform_(math.log(low), math.log(high)).exp()
+
+  def _resample_student_motion_randomization(self, env_ids: torch.Tensor) -> None:
+    if (
+      not getattr(self, "_student_motion_randomization_enabled", False)
+      or env_ids.numel() == 0
+    ):
+      return
+    cfg = self._student_motion_randomization_cfg
+    pos = dict(cfg["root_pos_drift"])
+    rot = dict(cfg["root_rot_drift"])
+    count = env_ids.numel()
+    self._student_root_z_offset[env_ids] = torch.empty(count, device=self.device).uniform_(
+      *map(float, pos["root_z_offset_range_m"])
+    )
+    self._student_xy_direction[env_ids] = self._random_unit((count, 2), self.device)
+    xy_frequency = self._sample_log_uniform(count, pos["xy_freq_range_hz"])
+    xy_omega = 2.0 * math.pi * xy_frequency
+    xy_speed = torch.empty(count, device=self.device).uniform_(*map(float, pos["xy_speed_range"]))
+    self._student_xy_amplitude[env_ids] = xy_speed / xy_omega
+    self._student_xy_omega[env_ids] = xy_omega
+    self._student_xy_phase[env_ids] = torch.rand(count, device=self.device) * 2.0 * math.pi
+    z_frequency = self._sample_log_uniform(count, pos["z_freq_range_hz"])
+    self._student_z_omega[env_ids] = 2.0 * math.pi * z_frequency
+    self._student_z_amplitude[env_ids] = torch.empty(count, device=self.device).uniform_(
+      *map(float, pos["z_amplitude_range_m"])
+    )
+    self._student_z_phase[env_ids] = torch.rand(count, device=self.device) * 2.0 * math.pi
+    self._student_rot_axis[env_ids] = self._random_unit((count, 3), self.device)
+    rot_frequency = self._sample_log_uniform(count, rot["freq_range_hz"])
+    self._student_rot_omega[env_ids] = 2.0 * math.pi * rot_frequency
+    self._student_rot_amplitude[env_ids] = torch.empty(count, device=self.device).uniform_(
+      *map(float, rot["amplitude_range_rad"])
+    )
+    self._student_rot_phase[env_ids] = torch.rand(count, device=self.device) * 2.0 * math.pi
+    noise = torch.rand((count, self._student_joint_bias.shape[1]), device=self.device) * 2.0 - 1.0
+    self._student_joint_bias[env_ids] = noise * self._student_joint_bias_std
+
+  @staticmethod
+  def _spherical_noise(value: torch.Tensor, radius: float) -> torch.Tensor:
+    if radius <= 0.0:
+      return value
+    direction = torch.randn_like(value)
+    direction /= direction.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
+    return value + direction * torch.rand_like(value[..., :1]) * radius
+
+  @staticmethod
+  def _quaternion_noise(value: torch.Tensor, radius: float) -> torch.Tensor:
+    if radius <= 0.0:
+      return value
+    axis = torch.randn_like(value[..., 1:])
+    axis /= axis.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
+    angle = (torch.rand_like(value[..., :1]) * 2.0 - 1.0) * radius
+    delta = quat_from_angle_axis(angle.squeeze(-1), axis)
+    return quat_mul(delta, value)
+
+  def gather_student_reference(
+    self, field_name: str, relative_steps: tuple[int, ...]
+  ) -> torch.Tensor:
+    value = self.gather_reference(field_name, relative_steps).clone()
+    if not self._student_motion_randomization_enabled:
+      return value
+    cfg = self._student_motion_randomization_cfg
+    steps = torch.as_tensor(relative_steps, device=self.device)
+    time_s = (self.time_steps[:, None] + steps[None]).float() * float(self._env.step_dt)
+    if field_name == "body_pos_w":
+      xy = self._student_xy_amplitude[:, None] * torch.sin(
+        self._student_xy_omega[:, None] * time_s + self._student_xy_phase[:, None]
+      )
+      z = self._student_z_amplitude[:, None] * torch.sin(
+        self._student_z_omega[:, None] * time_s + self._student_z_phase[:, None]
+      ) + self._student_root_z_offset[:, None]
+      offset = value.new_zeros((self.num_envs, len(relative_steps), 3))
+      offset[..., :2] = xy[..., None] * self._student_xy_direction[:, None]
+      offset[..., 2] = z
+      root = value[:, :, self.motion_anchor_body_index]
+      value[:, :, self.motion_anchor_body_index] = self._spherical_noise(
+        root + offset, float(cfg.get("root_pos_noise_std", 0.0))
+      )
+    elif field_name == "body_quat_w":
+      angle = self._student_rot_amplitude[:, None] * torch.sin(
+        self._student_rot_omega[:, None] * time_s + self._student_rot_phase[:, None]
+      )
+      axis = self._student_rot_axis[:, None].expand(-1, len(relative_steps), -1)
+      delta = quat_from_angle_axis(angle, axis)
+      root = quat_mul(delta, value[:, :, self.motion_anchor_body_index])
+      value[:, :, self.motion_anchor_body_index] = self._quaternion_noise(
+        root, float(cfg.get("root_ori_noise_std", 0.0))
+      )
+    elif field_name == "joint_pos":
+      value += self._student_joint_bias[:, None].to(value.dtype)
+      std = float(cfg.get("joint_pos_noise_std", 0.0))
+      if std > 0.0:
+        value += (torch.rand_like(value) * 2.0 - 1.0) * std
+    return value
 
   def _clear_shared_joint_observation_cache(self) -> None:
     cache = getattr(self, "_shared_joint_observation_cache", None)
@@ -909,6 +1050,7 @@ class MultiMotionCommand(CommandTerm):
   ) -> None:
     if env_ids.numel() == 0:
       return
+    self._resample_student_motion_randomization(env_ids)
     self.boot_indicator[env_ids] = float(max(int(self.cfg.boot_indicator_max), 0))
     self.feet_standing[env_ids] = False
     # These buffers implement source-style consecutive-frame termination.
@@ -1816,9 +1958,18 @@ class MultiMotionCommand(CommandTerm):
       ).clamp_min(0)
 
   def _uniform_sampling(self, env_ids: torch.Tensor):
-    self.time_steps[env_ids] = (
+    lower = max(int(self.cfg.skip_initial_frames), 0)
+    positive_steps = [step for step in self._configured_reference_steps() if step > 0]
+    future_margin = max(positive_steps, default=0)
+    upper = (
+      self.motion_length[env_ids]
+      - future_margin
+      - max(int(self.cfg.sample_tail_margin_steps), 0)
+    ).clamp_min(lower)
+    span = (upper - lower).clamp_min(0)
+    self.time_steps[env_ids] = lower + (
       sample_uniform(0.0, 1.0, (len(env_ids),), device=self.device)
-      * self.motion_length[env_ids]
+      * span
     ).long()
     if self.cfg.if_log_metrics:
       uniform_probabilities = self._uniform_baseline_probabilities(
@@ -1866,10 +2017,25 @@ class MultiMotionCommand(CommandTerm):
     rewind_env_ids = self._failure_rewind_env_ids(env_ids)
     if rewind_env_ids.numel() == 0:
       return env_ids
-    bin_ids = self._compute_motion_bin_indices(
-      self.time_steps[rewind_env_ids], self.motion_idx[rewind_env_ids]
-    )
-    self.time_steps[rewind_env_ids] = bin_ids * self.bin_width_steps
+    rewind_cfg = self.cfg.rewind
+    minimum = max(int(rewind_cfg.min_steps), 0)
+    maximum = max(int(rewind_cfg.max_steps), minimum)
+    if maximum > 0:
+      rewind = torch.randint(
+        minimum,
+        maximum + 1,
+        (rewind_env_ids.numel(),),
+        device=self.device,
+      )
+      first_valid_frame = max(int(getattr(self.cfg, "skip_initial_frames", 0)), 0)
+      self.time_steps[rewind_env_ids] = (
+        self.time_steps[rewind_env_ids] - rewind
+      ).clamp_min(first_valid_frame)
+    else:
+      bin_ids = self._compute_motion_bin_indices(
+        self.time_steps[rewind_env_ids], self.motion_idx[rewind_env_ids]
+      )
+      self.time_steps[rewind_env_ids] = bin_ids * self.bin_width_steps
     if self.cfg.if_log_metrics and "rewind_reset" in self.metrics:
       self.metrics["rewind_reset"][rewind_env_ids] = 1.0
     keep_adaptive = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
@@ -1883,14 +2049,27 @@ class MultiMotionCommand(CommandTerm):
     root_ori = self.body_quat_w[:, 0].clone()
     root_lin_vel = self.body_lin_vel_w[:, 0].clone()
     root_ang_vel = self.body_ang_vel_w[:, 0].clone()
-    range_list = [
-      self.cfg.pose_range.get(key, (0.0, 0.0))
-      for key in ["x", "y", "z", "roll", "pitch", "yaw"]
-    ]
-    ranges = torch.tensor(range_list, device=self.device)
-    rand_samples = sample_uniform(
-      ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device
-    )
+    init_noise = self.cfg.init_noise
+    if init_noise:
+      pos_std = float(init_noise.get("root_pos", 0.0))
+      ori_std = float(init_noise.get("root_ori", 0.0))
+      rand_samples = torch.cat(
+        (
+          torch.randn((len(env_ids), 3), device=self.device).clamp(-1, 1) * pos_std,
+          torch.zeros((len(env_ids), 3), device=self.device),
+        ),
+        dim=-1,
+      )
+      rand_samples[:, 2].clamp_min_(0.0)
+    else:
+      range_list = [
+        self.cfg.pose_range.get(key, (0.0, 0.0))
+        for key in ["x", "y", "z", "roll", "pitch", "yaw"]
+      ]
+      ranges = torch.tensor(range_list, device=self.device)
+      rand_samples = sample_uniform(
+        ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device
+      )
     orientations_delta = quat_from_euler_xyz(
       rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5]
     )
@@ -1904,25 +2083,46 @@ class MultiMotionCommand(CommandTerm):
       min_body_z=self.cfg.reset_min_body_z,
     )
     root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
-    range_list = [
-      self.cfg.velocity_range.get(key, (0.0, 0.0))
-      for key in ["x", "y", "z", "roll", "pitch", "yaw"]
-    ]
-    ranges = torch.tensor(range_list, device=self.device)
-    rand_samples = sample_uniform(
-      ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device
-    )
+    if init_noise:
+      root_ori[env_ids] = self._quaternion_noise(root_ori[env_ids], ori_std)
+    if init_noise:
+      lin_std = float(init_noise.get("root_lin_vel", 0.0))
+      ang_std = float(init_noise.get("root_ang_vel", 0.0))
+      rand_samples = torch.cat(
+        (
+          torch.randn((len(env_ids), 3), device=self.device).clamp(-1, 1) * lin_std,
+          torch.randn((len(env_ids), 3), device=self.device).clamp(-1, 1) * ang_std,
+        ),
+        dim=-1,
+      )
+    else:
+      range_list = [
+        self.cfg.velocity_range.get(key, (0.0, 0.0))
+        for key in ["x", "y", "z", "roll", "pitch", "yaw"]
+      ]
+      ranges = torch.tensor(range_list, device=self.device)
+      rand_samples = sample_uniform(
+        ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device
+      )
     root_lin_vel[env_ids] += rand_samples[:, :3]
     root_ang_vel[env_ids] += rand_samples[:, 3:]
 
     joint_pos = self.joint_pos.clone()
     joint_vel = self.joint_vel.clone()
-    joint_pos += sample_uniform(
-      lower=self.cfg.joint_position_range[0],
-      upper=self.cfg.joint_position_range[1],
-      size=joint_pos.shape,
-      device=joint_pos.device,
-    )
+    if init_noise:
+      joint_pos += torch.randn_like(joint_pos).clamp(-1, 1) * float(
+        init_noise.get("joint_pos", 0.0)
+      )
+      joint_vel += torch.randn_like(joint_vel).clamp(-1, 1) * float(
+        init_noise.get("joint_vel", 0.0)
+      )
+    else:
+      joint_pos += sample_uniform(
+        lower=self.cfg.joint_position_range[0],
+        upper=self.cfg.joint_position_range[1],
+        size=joint_pos.shape,
+        device=joint_pos.device,
+      )
     soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
     joint_pos[env_ids] = torch.clip(
       joint_pos[env_ids],
@@ -2181,6 +2381,10 @@ class MultiMotionCommandCfg(CommandTermCfg):
   reset_root_lift_height: float = 0.0
   reset_min_body_z: float | None = None
   reset_joint_vel_limit: float | None = None
+  init_noise: dict[str, float] = field(default_factory=dict)
+  skip_initial_frames: int = 0
+  sample_tail_margin_steps: int = 0
+  student_motion_randomization: dict = field(default_factory=dict)
 
   # Ref Motion: Future/History steps configuration for N-step lookahead
   future_steps: int = 5  # 1

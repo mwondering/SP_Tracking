@@ -92,6 +92,19 @@ Use the SP large-dataset/observation/reward variant:
 uv run sp-train task=tracking_bfm_sp motion_path=/path/to/motions
 ```
 
+The SP profile is a teacher-only HEFT-style pretrain: the actor consumes
+`policy + priv`, encodes `priv` to 256 dimensions, and trains with the matching
+teacher network, optimizer, schedules, symmetry and motion randomization. Start
+pretraining from scratch with:
+
+```bash
+uv run sp-train task=tracking_bfm_sp motion_path=/path/to/motions
+```
+
+The resulting checkpoint is self-describing and can be passed directly to
+`sp-play`. This profile intentionally does not implement the student/adapt
+stage. The original `tracking_bfm` task and its MLP/PPO preset are unchanged.
+
 Use the old BFM LargeDataset-equivalent task:
 
 ```bash

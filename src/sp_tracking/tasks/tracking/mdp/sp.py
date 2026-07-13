@@ -215,6 +215,20 @@ def _gather(
   return cmd._gather_motion_field(field_name, cmd.motion_idx, time_steps)
 
 
+def _gather_horizon(
+  env: "ManagerBasedRlEnv",
+  command_name: str,
+  field_name: str,
+  steps: tuple[int, ...],
+  horizon: Literal["teacher", "student"],
+) -> torch.Tensor:
+  cmd = _command(env, command_name)
+  gather_student = getattr(cmd, "gather_student_reference", None)
+  if horizon == "student" and callable(gather_student):
+    return gather_student(field_name, steps)
+  return _gather(env, command_name, field_name, steps)
+
+
 def _gather_current(
   env: "ManagerBasedRlEnv", command_name: str, field_name: str
 ) -> torch.Tensor:
@@ -226,9 +240,12 @@ def _root_motion(
   command_name: str,
   field_name: str,
   steps: tuple[int, ...],
+  horizon: Literal["teacher", "student"] = "teacher",
 ) -> torch.Tensor:
   cmd = _command(env, command_name)
-  data = _gather(env, command_name, field_name, steps)
+  data = _gather_horizon(
+    env, command_name, field_name, steps, horizon
+  )
   return data[:, :, cmd.motion_anchor_body_index]
 
 
@@ -658,8 +675,8 @@ def command_obs(
   root_quat = _perturb_quaternion(
     env.scene["robot"].data.root_link_quat_w, noise_std
   ).unsqueeze(1)
-  future_quat = _root_motion(env, command_name, "body_quat_w", steps)
-  future_pos = _root_motion(env, command_name, "body_pos_w", steps)
+  future_quat = _root_motion(env, command_name, "body_quat_w", steps, horizon)
+  future_pos = _root_motion(env, command_name, "body_pos_w", steps, horizon)
   pos_diff = _quat_apply_inverse(
     future_quat[:, :1], future_pos[:, 1:] - future_pos[:, :1]
   )
@@ -677,7 +694,10 @@ def target_joint_pos_obs(
   noise_std: float = 0.0,
 ) -> torch.Tensor:
   target = _canonical_joint_tensor(
-    env, _gather(env, command_name, "joint_pos", _steps(horizon))
+    env,
+    _gather_horizon(
+      env, command_name, "joint_pos", _steps(horizon), horizon
+    ),
   )
   current = _current_joint_observation(env, command_name, "joint_pos", noise_std)
   current = _canonical_joint_tensor(
@@ -695,7 +715,9 @@ def target_root_z_obs(
   command_name: str,
   horizon: Literal["teacher", "student"],
 ) -> torch.Tensor:
-  return _root_motion(env, command_name, "body_pos_w", _steps(horizon))[..., 2]
+  return _root_motion(
+    env, command_name, "body_pos_w", _steps(horizon), horizon
+  )[..., 2]
 
 
 def target_projected_gravity_b_obs(
@@ -703,7 +725,9 @@ def target_projected_gravity_b_obs(
   command_name: str,
   horizon: Literal["teacher", "student"],
 ) -> torch.Tensor:
-  quat = _root_motion(env, command_name, "body_quat_w", _steps(horizon))
+  quat = _root_motion(
+    env, command_name, "body_quat_w", _steps(horizon), horizon
+  )
   return _projected_gravity(quat).reshape(env.num_envs, -1)
 
 

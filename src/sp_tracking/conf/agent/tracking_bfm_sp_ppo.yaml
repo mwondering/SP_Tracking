@@ -1,8 +1,8 @@
 experiment_name: g1_sp_tracking
-save_interval: 1000
+save_interval: 150
 num_steps_per_env: 32
 max_iterations: 300000
-seed: 42
+seed: 0
 logger: wandb
 wandb_project: mjlab
 run_name: ""
@@ -13,14 +13,22 @@ clip_actions: null
 upload_model: false
 
 obs_groups:
-  actor: [policy]
+  # HEFT pretrain teacher information set. The custom actor encodes ``priv``
+  # to 256 dimensions before concatenating it with ``policy``.
+  actor: [policy, priv]
   critic: [policy, priv, priv_critic]
 
 actor:
   hidden_dims: [1024, 1024, 512]
-  activation: elu
+  activation: mish
   obs_normalization: true
-  class_name: MLPModel
+  class_name: sp_tracking.tasks.tracking.rl.heft_models:HeftTeacherActor
+  privileged_latent_dim: 256
+  vecnorm_decay: 0.9999
+  init_std:
+    [1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5,
+     1.5, 1.5, 1.2, 1.2, 1.0, 1.0, 1.2, 1.2, 1.0, 1.0,
+     1.2, 1.2, 1.2, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   distribution_cfg:
     class_name: GaussianDistribution
     init_std: 1.0
@@ -28,25 +36,39 @@ actor:
 
 critic:
   hidden_dims: [1024, 512, 512]
-  activation: elu
+  activation: mish
   obs_normalization: true
-  class_name: MLPModel
+  class_name: sp_tracking.tasks.tracking.rl.heft_models:HeftTeacherCritic
+  vecnorm_decay: 0.9999
   distribution_cfg: null
 
 algorithm:
-  class_name: sp_tracking.tasks.tracking.rl.ppo:SparseTrackSplitLrPPO
+  class_name: sp_tracking.tasks.tracking.rl.ppo:HeftTeacherPPO
   value_loss_coef: 1.0
-  use_clipped_value_loss: true
+  use_clipped_value_loss: false
   clip_param: 0.2
-  entropy_coef: 0.005
+  entropy_coef: 0.01
+  entropy_coef_start: 0.01
+  entropy_coef_end: 0.005
   num_learning_epochs: 3
   num_mini_batches: 8
   learning_rate: 0.0001
   actor_learning_rate: 0.0001
   critic_learning_rate: 0.0005
   clamp_rewards_min: 0.0
+  optimizer: muon
   schedule: adaptive
   gamma: 0.99
   lam: 0.95
   desired_kl: 0.01
+  desired_kl_upper:
+    [[0.0, 0.015], [0.15, 0.015], [0.2, 0.01], [0.8, 0.0075], [1.0, 0.0075]]
+  lr_schedule_scale_factor: 1.05
+  lr_schedule_min: 1.0e-7
+  lr_schedule_max: 1.0e-3
   max_grad_norm: 1.0
+  symmetry_cfg:
+    data_augmentation_func: sp_tracking.tasks.tracking.rl.symmetry:heft_teacher_symmetry
+    use_data_augmentation: false
+    use_mirror_loss: true
+    mirror_loss_coeff: 0.2

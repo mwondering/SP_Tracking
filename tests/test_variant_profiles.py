@@ -28,7 +28,7 @@ def test_named_variants_form_a_supported_profile_matrix() -> None:
       "obs_groups": ("policy", "priv", "priv_critic"),
       "reward": "root_pos_tracking",
       "agent_groups": {
-        "actor": ("policy",),
+        "actor": ("policy", "priv"),
         "critic": ("policy", "priv", "priv_critic"),
       },
       "sp_environment": True,
@@ -120,7 +120,8 @@ def test_named_variants_form_a_supported_profile_matrix() -> None:
       if expected["runtime"] == "sp":
         assert type(env_cfg.actions["joint_pos"]).__name__ == "SpTrackingJointPositionActionCfg"
         assert type(command).__name__ == "LargeDatasetMultiMotionCommandCfg"
-        assert command.adaptive_sampling.strategy == "branch"
+        assert command.adaptive_sampling.strategy == "mixture"
+        assert command.sampling_mode == "uniform"
         assert command.rewind.enabled is True
         assert "sp_tracking_progress" in env_cfg.curriculum
         assert {"body_z_termination", "gravity_dir_termination"} <= set(

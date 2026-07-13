@@ -82,8 +82,13 @@ def test_sp_task_applies_one_stage_sp_tracking_agent_preset() -> None:
   assert prepared.agent.num_steps_per_env == 32
   assert prepared.agent.actor.hidden_dims == (1024, 1024, 512)
   assert prepared.agent.critic.hidden_dims == (1024, 512, 512)
+  assert prepared.agent.actor.class_name.endswith(":HeftTeacherActor")
+  assert prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")
+  assert prepared.agent.algorithm.class_name.endswith(":HeftTeacherPPO")
+  assert prepared.agent.actor.activation == "mish"
+  assert prepared.agent.critic.activation == "mish"
   assert prepared.agent.obs_groups == {
-    "actor": ("policy",),
+    "actor": ("policy", "priv"),
     "critic": ("policy", "priv", "priv_critic"),
   }
   assert prepared.agent.algorithm.num_learning_epochs == 3
@@ -91,6 +96,10 @@ def test_sp_task_applies_one_stage_sp_tracking_agent_preset() -> None:
   assert prepared.agent.algorithm.actor_learning_rate == 1.0e-4
   assert prepared.agent.algorithm.critic_learning_rate == 5.0e-4
   assert prepared.agent.algorithm.clamp_rewards_min == 0.0
+  assert prepared.agent.algorithm.optimizer == "muon"
+  assert prepared.agent.algorithm.use_clipped_value_loss is False
+  assert prepared.agent.save_interval == 150
+  assert prepared.agent.seed == 0
   assert prepared.agent.load_checkpoint == "checkpoint_.*.pt"
   assert prepared.agent.upload_model is False
 
@@ -101,6 +110,15 @@ def test_sp_agent_preset_allows_standard_cli_agent_overrides() -> None:
   prepared = prepare_train_cfg(cfg)
 
   assert prepared.agent.num_steps_per_env == 7
+
+
+def test_baseline_task_keeps_original_training_stack() -> None:
+  prepared = prepare_train_cfg(_compose("task=tracking_bfm"))
+
+  assert prepared.agent.actor.class_name == "MLPModel"
+  assert prepared.agent.critic.class_name == "MLPModel"
+  assert prepared.agent.algorithm.class_name == "PPO"
+  assert prepared.agent.seed == 42
 
 
 def test_root_conf_directory_is_not_a_second_config_source() -> None:

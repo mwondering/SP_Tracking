@@ -11,6 +11,8 @@ from rsl_rl.models import MLPModel
 from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import resolve_optimizer
 
+from .optim import OptimizerGroup, build_heft_optimizer
+
 
 class SparseTrackSplitLrPPO(PPO):
   """PPO with SparseTrack-style actor and critic optimizer learning rates."""
@@ -163,6 +165,10 @@ class SparseTrackSplitLrPPO(PPO):
 
     for batch in generator:
       original_batch_size = batch.observations.batch_size[0]
+      valid_mask = None
+      get_valid_mask = getattr(self, "_heft_valid_mask", None)
+      if callable(get_valid_mask):
+        valid_mask = get_valid_mask(batch.observations, original_batch_size)
 
       if self.normalize_advantage_per_mini_batch:
         with torch.no_grad():
@@ -185,6 +191,10 @@ class SparseTrackSplitLrPPO(PPO):
         masks=batch.masks,
         hidden_state=batch.hidden_states[1],
       )
+      mirrored_values = None
+      mirror_critic = getattr(self, "_heft_mirrored_critic_values", None)
+      if callable(mirror_critic):
+        mirrored_values = mirror_critic(batch.observations, original_batch_size)
       distribution_params = tuple(
         p[:original_batch_size] for p in self.actor.output_distribution_params
       )
@@ -202,28 +212,32 @@ class SparseTrackSplitLrPPO(PPO):
             torch.distributed.all_reduce(kl_mean, op=torch.distributed.ReduceOp.SUM)
             kl_mean /= self.gpu_world_size
 
-          if self.gpu_global_rank == 0:
-            if kl_mean > self.desired_kl * 2.0:
-              self.actor_learning_rate = max(1e-5, self.actor_learning_rate / 1.5)
-              self.critic_learning_rate = max(1e-5, self.critic_learning_rate / 1.5)
-            elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
-              self.actor_learning_rate = min(1e-2, self.actor_learning_rate * 1.5)
-              self.critic_learning_rate = min(1e-2, self.critic_learning_rate * 1.5)
+          heft_scheduler = getattr(self, "_update_heft_actor_lr", None)
+          if callable(heft_scheduler):
+            heft_scheduler(kl_mean)
+          else:
+            if self.gpu_global_rank == 0:
+              if kl_mean > self.desired_kl * 2.0:
+                self.actor_learning_rate = max(1e-5, self.actor_learning_rate / 1.5)
+                self.critic_learning_rate = max(1e-5, self.critic_learning_rate / 1.5)
+              elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
+                self.actor_learning_rate = min(1e-2, self.actor_learning_rate * 1.5)
+                self.critic_learning_rate = min(1e-2, self.critic_learning_rate * 1.5)
 
-          if self.is_multi_gpu:
-            actor_lr_tensor = torch.tensor(self.actor_learning_rate, device=self.device)
-            critic_lr_tensor = torch.tensor(
-              self.critic_learning_rate,
-              device=self.device,
-            )
-            torch.distributed.broadcast(actor_lr_tensor, src=0)
-            torch.distributed.broadcast(critic_lr_tensor, src=0)
-            self.actor_learning_rate = actor_lr_tensor.item()
-            self.critic_learning_rate = critic_lr_tensor.item()
+            if self.is_multi_gpu:
+              actor_lr_tensor = torch.tensor(self.actor_learning_rate, device=self.device)
+              critic_lr_tensor = torch.tensor(
+                self.critic_learning_rate,
+                device=self.device,
+              )
+              torch.distributed.broadcast(actor_lr_tensor, src=0)
+              torch.distributed.broadcast(critic_lr_tensor, src=0)
+              self.actor_learning_rate = actor_lr_tensor.item()
+              self.critic_learning_rate = critic_lr_tensor.item()
 
-          self.learning_rate = self.actor_learning_rate
-          self.optimizer.param_groups[0]["lr"] = self.actor_learning_rate
-          self.optimizer.param_groups[1]["lr"] = self.critic_learning_rate
+            self.learning_rate = self.actor_learning_rate
+            self.optimizer.param_groups[0]["lr"] = self.actor_learning_rate
+            self.optimizer.param_groups[1]["lr"] = self.critic_learning_rate
 
       ratio = torch.exp(actions_log_prob - torch.squeeze(batch.old_actions_log_prob))  # type: ignore
       surrogate = -torch.squeeze(batch.advantages) * ratio  # type: ignore
@@ -232,7 +246,10 @@ class SparseTrackSplitLrPPO(PPO):
         1.0 - self.clip_param,
         1.0 + self.clip_param,
       )
-      surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
+      surrogate_terms = torch.max(surrogate, surrogate_clipped)
+      if valid_mask is not None:
+        surrogate_terms = surrogate_terms * valid_mask.squeeze(-1)
+      surrogate_loss = surrogate_terms.mean()
 
       if self.use_clipped_value_loss:
         value_clipped = batch.values + (values - batch.values).clamp(
@@ -243,13 +260,30 @@ class SparseTrackSplitLrPPO(PPO):
         value_losses_clipped = (value_clipped - batch.returns).pow(2)
         value_loss = torch.max(value_losses, value_losses_clipped).mean()
       else:
-        value_loss = (batch.returns - values).pow(2).mean()
+        value_errors = (batch.returns - values).pow(2)
+        if valid_mask is not None:
+          value_errors = value_errors * valid_mask
+        value_loss = value_errors.mean()
+      if mirrored_values is not None:
+        mirror_targets = batch.returns[:original_batch_size]
+        mirror_errors = (mirror_targets - mirrored_values).pow(2)
+        if valid_mask is not None:
+          mirror_errors = mirror_errors * valid_mask
+        value_loss = 0.5 * (
+          value_loss + mirror_errors.mean()
+        )
 
       loss = (
         surrogate_loss
         + self.value_loss_coef * value_loss
         - self.entropy_coef * entropy.mean()
       )
+
+      std_symmetry_loss = None
+      get_std_symmetry_loss = getattr(self.actor, "std_symmetry_loss", None)
+      if callable(get_std_symmetry_loss):
+        std_symmetry_loss = get_std_symmetry_loss()
+        loss = loss + 10.0 * std_symmetry_loss
 
       rnd_loss = (
         self.rnd.compute_loss(batch.observations[:original_batch_size])
@@ -309,6 +343,10 @@ class SparseTrackSplitLrPPO(PPO):
       loss_dict["rnd"] = mean_rnd_loss
     if self.symmetry:
       loss_dict["symmetry"] = mean_symmetry_loss
+    if callable(getattr(self.actor, "std_symmetry_loss", None)):
+      loss_dict["symmetry_std"] = float(
+        self.actor.std_symmetry_loss().detach().item()
+      )
 
     self.storage.clear()
     return loss_dict
@@ -331,3 +369,236 @@ class SparseTrackSplitLrPPO(PPO):
           all_grads[offset : offset + numel].view_as(param.grad.data)
         )
         offset += numel
+
+
+def _schedule_value(schedule, progress: float) -> float:
+  if isinstance(schedule, (int, float)):
+    return float(schedule)
+  points = [(float(x), float(y)) for x, y in schedule]
+  if progress <= points[0][0]:
+    return points[0][1]
+  for (x0, y0), (x1, y1) in zip(points, points[1:]):
+    if progress <= x1:
+      return y0 + (y1 - y0) * (progress - x0) / (x1 - x0)
+  return points[-1][1]
+
+
+class HeftTeacherPPO(SparseTrackSplitLrPPO):
+  """Teacher-only HEFT pretrain optimizer and schedules on RSL storage."""
+
+  _HEFT_STATE_KEY = "heft_teacher_pretrain_state"
+
+  @staticmethod
+  def construct_algorithm(obs, env, cfg: dict, device: str):
+    obs["is_init"] = torch.ones(
+      (*obs.batch_size, 1), dtype=torch.bool, device=obs.device
+    )
+    algorithm = PPO.construct_algorithm(obs, env, cfg, device)
+    algorithm._heft_next_is_init = torch.ones(
+      (env.num_envs, 1), dtype=torch.bool, device=device
+    )
+    return algorithm
+
+  def __init__(
+    self,
+    actor,
+    critic,
+    storage,
+    *args,
+    actor_learning_rate: float = 1.0e-4,
+    critic_learning_rate: float = 5.0e-4,
+    entropy_coef_start: float = 0.01,
+    entropy_coef_end: float = 0.005,
+    desired_kl_upper=((0.0, 0.015), (0.15, 0.015), (0.2, 0.01), (0.8, 0.0075), (1.0, 0.0075)),
+    lr_schedule_scale_factor: float = 1.05,
+    lr_schedule_min: float = 1.0e-7,
+    lr_schedule_max: float = 1.0e-3,
+    optimizer: str = "muon",
+    **kwargs,
+  ) -> None:
+    if optimizer != "muon":
+      raise ValueError("HeftTeacherPPO requires optimizer=muon")
+    kwargs.pop("entropy_coef", None)
+    super().__init__(
+      actor,
+      critic,
+      storage,
+      *args,
+      actor_learning_rate=actor_learning_rate,
+      critic_learning_rate=critic_learning_rate,
+      entropy_coef=entropy_coef_start,
+      optimizer="adam",
+      **kwargs,
+    )
+    actor_optimizer = build_heft_optimizer(
+      actor.parameters(),
+      lr=actor_learning_rate,
+      adamw_only=actor.adamw_only_parameters(),
+    )
+    critic_optimizer = build_heft_optimizer(
+      critic.parameters(),
+      lr=critic_learning_rate,
+      adamw_only=critic.adamw_only_parameters(),
+    )
+    self.optimizer = OptimizerGroup([actor_optimizer, critic_optimizer])
+    self._actor_optimizer = actor_optimizer
+    self._critic_optimizer = critic_optimizer
+    self.entropy_coef_start = float(entropy_coef_start)
+    self.entropy_coef_end = float(entropy_coef_end)
+    self.desired_kl_upper = desired_kl_upper
+    self.lr_schedule_scale_factor = float(lr_schedule_scale_factor)
+    self.lr_schedule_min = float(lr_schedule_min)
+    self.lr_schedule_max = float(lr_schedule_max)
+    self.progress = 0.0
+
+  @staticmethod
+  def _set_optimizer_lr(optimizer, value: float) -> None:
+    for group in optimizer.param_groups:
+      group["lr"] = float(value)
+
+  def step_schedule(self, progress: float, iteration: int) -> dict[str, float]:
+    del iteration
+    self.progress = max(0.0, min(float(progress), 1.0))
+    self.entropy_coef = self.entropy_coef_start * (
+      self.entropy_coef_end / self.entropy_coef_start
+    ) ** self.progress
+    return {"entropy_coef": self.entropy_coef, "progress": self.progress}
+
+  def process_env_step(self, obs, rewards, dones, extras) -> None:
+    """Match HEFT's symmetric VecNorm update before storing a transition."""
+    if self.symmetry is not None:
+      normalized_obs, _ = self.symmetry.data_augmentation_func(
+        env=self.symmetry.env, obs=obs, actions=None
+      )
+    else:
+      normalized_obs = obs
+    self.actor.update_normalization(normalized_obs)
+    self.critic.update_normalization(normalized_obs)
+    if self.clamp_rewards_min is not None:
+      rewards = rewards.clamp_min(float(self.clamp_rewards_min))
+    self.transition.rewards = rewards.clone()
+    self.transition.dones = dones
+    if "time_outs" in extras:
+      self.transition.rewards += self.gamma * torch.squeeze(
+        self.transition.values * extras["time_outs"].unsqueeze(1).to(self.device),
+        1,
+      )
+    self.storage.add_transition(self.transition)
+    self.transition.clear()
+    self._heft_next_is_init = dones.reshape(-1, 1).bool()
+    self.actor.reset(dones)
+    self.critic.reset(dones)
+
+  def act(self, obs):
+    if not hasattr(self, "_heft_next_is_init"):
+      self._heft_next_is_init = torch.ones(
+        (obs.batch_size[0], 1), dtype=torch.bool, device=obs.device
+      )
+    obs["is_init"] = self._heft_next_is_init
+    normalizer = getattr(self.actor, "obs_normalizer", None)
+    count = getattr(normalizer, "count", None)
+    if isinstance(count, torch.Tensor) and not bool((count > 0).all()):
+      if self.symmetry is not None:
+        normalization_obs, _ = self.symmetry.data_augmentation_func(
+          env=self.symmetry.env, obs=obs, actions=None
+        )
+      else:
+        normalization_obs = obs
+      self.actor.update_normalization(normalization_obs)
+      self.critic.update_normalization(normalization_obs)
+    return super().act(obs)
+
+  def compute_returns(self, obs) -> None:
+    """Compute GAE with HEFT's global (cross-rank) advantage statistics."""
+    st = self.storage
+    critic_hidden_state = self.critic.get_hidden_state()
+    last_values = self.critic(obs).detach()
+    self.critic.reset(hidden_state=critic_hidden_state)
+    advantage = 0
+    for step in reversed(range(st.num_transitions_per_env)):
+      next_values = (
+        last_values
+        if step == st.num_transitions_per_env - 1
+        else st.values[step + 1]
+      )
+      alive = 1.0 - st.dones[step].float()
+      delta = st.rewards[step] + alive * self.gamma * next_values - st.values[step]
+      advantage = delta + alive * self.gamma * self.lam * advantage
+      st.returns[step] = advantage + st.values[step]
+    st.advantages = st.returns - st.values
+    if self.normalize_advantage_per_mini_batch:
+      return
+    valid = (~st.observations["is_init"]).to(st.advantages.dtype)
+    total = (st.advantages * valid).sum()
+    square_total = (st.advantages.square() * valid).sum()
+    count = valid.sum().clamp_min(1.0)
+    if self.is_multi_gpu:
+      packed = torch.stack((total, square_total, count))
+      torch.distributed.all_reduce(packed, op=torch.distributed.ReduceOp.SUM)
+      total, square_total, count = packed
+    mean = total / count
+    variance = (square_total / count - mean.square()).clamp_min(0.0)
+    st.advantages = (st.advantages - mean) / (variance.sqrt() + 1.0e-8)
+
+  @staticmethod
+  def _heft_valid_mask(observations, original_batch_size: int):
+    return (~observations["is_init"][:original_batch_size]).to(torch.float32)
+
+  def _heft_mirrored_critic_values(self, observations, original_batch_size: int):
+    if self.symmetry is None:
+      return None
+    augmented, _ = self.symmetry.data_augmentation_func(
+      env=self.symmetry.env,
+      obs=observations[:original_batch_size],
+      actions=None,
+    )
+    if augmented is None:
+      return None
+    return self.critic(augmented[original_batch_size:])
+
+  def _update_heft_actor_lr(self, kl: torch.Tensor) -> None:
+    upper = _schedule_value(self.desired_kl_upper, self.progress)
+    kl_value = float(kl.item())
+    new_lr = self.actor_learning_rate
+    if kl_value > upper:
+      new_lr = max(self.lr_schedule_min, new_lr / self.lr_schedule_scale_factor)
+    if self.is_multi_gpu:
+      value = torch.tensor(new_lr, device=self.device)
+      torch.distributed.all_reduce(value, op=torch.distributed.ReduceOp.SUM)
+      new_lr = float((value / self.gpu_world_size).item())
+    self.actor_learning_rate = new_lr
+    self.learning_rate = new_lr
+    self._set_optimizer_lr(self._actor_optimizer, new_lr)
+
+  def update(self) -> dict[str, float]:
+    result = super().update()
+    self.actor.clamp_std()
+    result["entropy_coef"] = float(self.entropy_coef)
+    result["actor_lr"] = float(self.actor_learning_rate)
+    result["critic_lr"] = float(self.critic_learning_rate)
+    return result
+
+  def save(self) -> dict:
+    state = super().save()
+    state[self._HEFT_STATE_KEY] = {
+      "progress": self.progress,
+      "entropy_coef": self.entropy_coef,
+      "actor_learning_rate": self.actor_learning_rate,
+      "critic_learning_rate": self.critic_learning_rate,
+    }
+    return state
+
+  def load(self, loaded_dict: dict, load_cfg: dict | None, strict: bool) -> bool:
+    load_iteration = super().load(loaded_dict, load_cfg, strict)
+    state = loaded_dict.get(self._HEFT_STATE_KEY, {})
+    self.progress = float(state.get("progress", self.progress))
+    self.entropy_coef = float(state.get("entropy_coef", self.entropy_coef))
+    self.actor_learning_rate = float(
+      state.get("actor_learning_rate", self.actor_learning_rate)
+    )
+    self.critic_learning_rate = float(
+      state.get("critic_learning_rate", self.critic_learning_rate)
+    )
+    self._set_optimizer_lr(self._actor_optimizer, self.actor_learning_rate)
+    self._set_optimizer_lr(self._critic_optimizer, self.critic_learning_rate)
+    return load_iteration

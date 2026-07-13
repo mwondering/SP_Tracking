@@ -3,7 +3,8 @@ defaults:
   - task: tracking_bfm
   - _self_
 
-seed: 42
+seed: ${task.seed}
+total_frames: ${oc.select:task.total_frames,null}
 debug: false
 headless: true
 log_root: logs/rsl_rl

@@ -142,7 +142,7 @@ def _resolve_resume_path(
 
 def run_train(cfg: DictConfig) -> None:
   prepared = prepare_train_cfg(cfg)
-  device, _rank, _world_size = _resolve_runtime_device(cfg.get("gpu_ids", [0]))
+  device, _rank, world_size = _resolve_runtime_device(cfg.get("gpu_ids", [0]))
   configure_torch_backends()
 
   env = ManagerBasedRlEnv(
@@ -151,6 +151,14 @@ def run_train(cfg: DictConfig) -> None:
     render_mode="rgb_array" if bool(cfg.get("video", False)) else None,
   )
   wrapped_env = RslRlVecEnvWrapper(env, clip_actions=prepared.agent.clip_actions)
+  total_frames = cfg.get("total_frames")
+  if total_frames is not None:
+    global_frames_per_iteration = (
+      int(env.num_envs) * int(prepared.agent.num_steps_per_env) * int(world_size)
+    )
+    prepared.agent.max_iterations = max(
+      int(total_frames) // max(global_frames_per_iteration, 1), 1
+    )
   log_dir = _make_log_dir(cfg, prepared.agent)
   _save_resolved_cfg(log_dir, cfg)
   launch_script_artifact_path = _copy_launch_script_to_log_dir(
@@ -175,7 +183,9 @@ def run_train(cfg: DictConfig) -> None:
     runner.load(str(resume_path), map_location=device)
   runner.learn(
     num_learning_iterations=prepared.agent.max_iterations,
-    init_at_random_ep_len=True,
+    init_at_random_ep_len=bool(
+      cfg.get("task", {}).get("init_at_random_ep_len", True)
+    ),
   )
   wrapped_env.close()
 

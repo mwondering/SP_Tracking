@@ -56,7 +56,7 @@ def test_prepare_play_cfg_uses_embedded_sp_cfg_without_task_flag(tmp_path: Path)
   assert prepared.env.commands["motion"].motion_path == str(motion_path)
   assert list(prepared.env.observations) == ["policy", "priv", "priv_critic"]
   assert prepared.agent.obs_groups == {
-    "actor": ("policy",),
+    "actor": ("policy", "priv"),
     "critic": ("policy", "priv", "priv_critic"),
   }
 

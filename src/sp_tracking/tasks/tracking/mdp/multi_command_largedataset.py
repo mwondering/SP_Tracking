@@ -33,6 +33,43 @@ from .multi_commands import (
 from .motion_fk import MotionFKHelper
 
 
+def _build_motion_group_probabilities(
+  motion_files: list[str], groups: list[dict], device
+) -> torch.Tensor | None:
+  """Build HEFT-style per-group motion-uniform sampling probabilities."""
+  if not groups:
+    return None
+  probabilities = torch.zeros(len(motion_files), dtype=torch.float32, device=device)
+  assignments = torch.full((len(motion_files),), -1, dtype=torch.long)
+  normalized_paths = [
+    f"/{os.path.normpath(path).replace(os.sep, '/').strip('/')}/"
+    for path in motion_files
+  ]
+  for group_id, group in enumerate(groups):
+    fragment = f"/{str(group['path_fragment']).strip('/')}/"
+    matched = torch.tensor(
+      [fragment in path for path in normalized_paths], dtype=torch.bool
+    )
+    if bool((assignments[matched] >= 0).any()):
+      raise ValueError(f"motion sampling groups overlap at {fragment!r}")
+    assignments[matched] = group_id
+  # A custom/flat dataset should remain usable without silently dropping files.
+  if bool((assignments < 0).any()):
+    return None
+  weights = torch.tensor(
+    [float(group["weight"]) for group in groups], device=device
+  )
+  if bool((weights <= 0).any()):
+    raise ValueError("motion sampling group weights must be positive")
+  weights /= weights.sum()
+  for group_id, weight in enumerate(weights):
+    mask = assignments.to(device) == group_id
+    if not bool(mask.any()):
+      return None
+    probabilities[mask] = weight / mask.sum()
+  return probabilities / probabilities.sum()
+
+
 def _bootstrap_log_line(message: str) -> str:
   rank = os.environ.get("RANK", "unknown")
   local_rank = os.environ.get("LOCAL_RANK", "unknown")
@@ -2035,6 +2072,11 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       recompute_joint_vel_from_joint_pos=self.cfg.recompute_joint_vel_from_joint_pos,
       fk_helper=fk_helper,
     )
+    self._global_motion_sampling_probabilities = _build_motion_group_probabilities(
+      self.motion_store.motion_files,
+      list(self.cfg.motion_sampling_groups),
+      self.device,
+    )
     _bootstrap_debug(
       f"after LargeDatasetMotionStore elapsed={time.perf_counter() - store_start:.3f}s"
     )
@@ -2046,7 +2088,7 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
     initial_motion_ids = self._sample_unique_motion_ids(
       torch.arange(self.motion_store.num_files, dtype=torch.long, device=self.device),
       subset_size,
-      probabilities=None,
+      probabilities=self._global_motion_sampling_probabilities,
     )
     _bootstrap_debug(
       f"initial active subset sampled first_ids={initial_motion_ids[:5].detach().cpu().tolist()}"
@@ -2870,9 +2912,18 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
       ).clamp_min(0)
 
   def _uniform_sampling(self, env_ids: torch.Tensor):
-    self.time_steps[env_ids] = (
+    lower = max(int(self.cfg.skip_initial_frames), 0)
+    positive_steps = [step for step in self._configured_reference_steps() if step > 0]
+    future_margin = max(positive_steps, default=0)
+    upper = (
+      self.motion_length[env_ids]
+      - future_margin
+      - max(int(self.cfg.sample_tail_margin_steps), 0)
+    ).clamp_min(lower)
+    span = (upper - lower).clamp_min(0)
+    self.time_steps[env_ids] = lower + (
       sample_uniform(0.0, 1.0, (len(env_ids),), device=self.device)
-      * self.motion_length[env_ids]
+      * span
     ).long()
     if self.cfg.if_log_metrics:
       uniform_probabilities = self._uniform_baseline_probabilities(
@@ -3010,7 +3061,15 @@ class LargeDatasetMultiMotionCommand(MultiMotionCommand):
 
   def _sample_active_motion_ids(self, count: int) -> torch.Tensor:
     active_ids = self.active_subset.active_motion_ids
-    random_indices = torch.randint(active_ids.numel(), (count,), device=self.device)
+    probabilities = self._global_motion_sampling_probabilities
+    if probabilities is None:
+      random_indices = torch.randint(active_ids.numel(), (count,), device=self.device)
+    else:
+      active_probabilities = probabilities[active_ids]
+      active_probabilities /= active_probabilities.sum()
+      random_indices = torch.multinomial(
+        active_probabilities, count, replacement=True
+      )
     return active_ids[random_indices]
 
   def _sample_unique_motion_ids(
@@ -3031,6 +3090,7 @@ class LargeDatasetMultiMotionCommandCfg(MultiMotionCommandCfg):
   """Opt-in large-dataset motion command configuration."""
 
   active_subset_size: int = 20_000
+  motion_sampling_groups: tuple[dict, ...] = ()
   subset_refresh_count: int = 10
   subset_min_resident_iterations: int = 50
   subset_adaptive_refresh_ratio: float = 0.5

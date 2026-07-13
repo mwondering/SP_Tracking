@@ -680,6 +680,11 @@ class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     unwrapped_env = self.env.unwrapped
     state: dict[str, float] = {"progress": progress}
 
+    algorithm_schedule = getattr(getattr(self, "alg", None), "step_schedule", None)
+    if callable(algorithm_schedule):
+      result = algorithm_schedule(progress, iteration)
+      self._record_schedule_state(state, "algorithm", "pretrain", result)
+
     command_manager = getattr(unwrapped_env, "command_manager", None)
     for name in getattr(command_manager, "active_terms", ()):
       term = command_manager.get_term(name)
@@ -1042,6 +1047,15 @@ class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     mean = state_dict.get("_mean") if isinstance(state_dict, dict) else None
     var = state_dict.get("_var") if isinstance(state_dict, dict) else None
     count = state_dict.get("count") if isinstance(state_dict, dict) else None
+    if isinstance(state_dict, dict) and all(
+      isinstance(state_dict.get(key), torch.Tensor)
+      for key in ("sum", "ssq", "count")
+    ):
+      return {
+        "sum": state_dict["sum"].squeeze(0),
+        "ssq": state_dict["ssq"].squeeze(0),
+        "count": state_dict["count"].reshape(1),
+      }
     if not all(isinstance(value, torch.Tensor) for value in (mean, var, count)):
       return {}
 
@@ -1069,17 +1083,21 @@ class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     # Current tracking_bfm calls this observation group ``actor`` whereas the
     # source deployment interface calls its actor input ``policy``.  Preserve
     # both names; SP already uses ``policy`` directly.
-    keys = list(actor_groups) if len(actor_groups) == 1 else []
-    if "policy" not in keys:
-      keys.append("policy")
-    if not keys:
-      return None
-
     extra_state: dict[str, torch.Tensor] = {}
-    for key in keys:
-      extra_state[f"{key}_sum"] = stats["sum"]
-      extra_state[f"{key}_ssq"] = stats["ssq"]
-      extra_state[f"{key}_count"] = stats["count"]
+    if actor_groups == ("policy", "priv") and hasattr(actor, "policy_dim"):
+      split = int(actor.policy_dim)
+      for key, region in (("policy", slice(None, split)), ("priv", slice(split, None))):
+        extra_state[f"{key}_sum"] = stats["sum"][region]
+        extra_state[f"{key}_ssq"] = stats["ssq"][region]
+        extra_state[f"{key}_count"] = stats["count"]
+    else:
+      keys = list(actor_groups) if len(actor_groups) == 1 else []
+      if "policy" not in keys:
+        keys.append("policy")
+      for key in keys:
+        extra_state[f"{key}_sum"] = stats["sum"]
+        extra_state[f"{key}_ssq"] = stats["ssq"]
+        extra_state[f"{key}_count"] = stats["count"]
     return {"_extra_state": extra_state}
 
   def _deploy_metadata(self) -> dict:

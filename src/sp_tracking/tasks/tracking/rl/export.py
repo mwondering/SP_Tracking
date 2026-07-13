@@ -19,6 +19,11 @@ def _policy_input_size(policy: torch.nn.Module) -> int:
   return int(dummy_inputs[0].shape[-1])
 
 
+def _policy_input_names(policy: torch.nn.Module) -> list[str]:
+  names = getattr(policy, "deploy_input_names", None)
+  return [str(name) for name in names] if names else ["policy"]
+
+
 def build_sim2real_policy_metadata(
   *,
   env: Any,
@@ -33,7 +38,7 @@ def build_sim2real_policy_metadata(
     "run_name": run_name,
     "iteration": iteration,
     "checkpoint": checkpoint_name,
-    "in_keys": ["policy"],
+    "in_keys": _policy_input_names(policy),
     "out_keys": ["action"],
     "in_shapes": [[[1, input_size]]],
     "num_actions": int(getattr(env, "num_actions")),
@@ -61,13 +66,16 @@ def export_sim2real_policy_onnx(
   onnx_model.eval()
   input_size = _policy_input_size(onnx_model)
   dummy_obs = torch.zeros(1, input_size, dtype=torch.float32)
+  input_names = _policy_input_names(onnx_model)
+  if len(input_names) != 1:
+    raise ValueError("The sim2real exporter currently supports one flattened input")
   torch.onnx.export(
     onnx_model,
     (dummy_obs,),
     str(path),
     export_params=True,
     opset_version=18,
-    input_names=["policy"],
+    input_names=input_names,
     output_names=["action"],
     dynamic_axes={},
     dynamo=False,

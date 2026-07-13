@@ -57,9 +57,12 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert list(env_cfg.observations) == ["policy", "priv", "priv_critic"]
   assert list(env_cfg.observations["policy"].terms.keys())[0] == "boot_indicator_state_obs"
   assert env_cfg.commands["motion"].rewind.enabled is True
-  assert env_cfg.commands["motion"].rewind.failure_probability == 0.4
-  assert env_cfg.commands["motion"].adaptive_sampling.random_probability == 0.4
-  assert env_cfg.commands["motion"].adaptive_sampling.strategy == "branch"
+  assert env_cfg.commands["motion"].rewind.failure_probability == 0.8
+  assert env_cfg.commands["motion"].rewind.min_steps == 25
+  assert env_cfg.commands["motion"].rewind.max_steps == 75
+  assert env_cfg.commands["motion"].adaptive_sampling.random_probability is None
+  assert env_cfg.commands["motion"].adaptive_sampling.strategy == "mixture"
+  assert env_cfg.commands["motion"].sampling_mode == "uniform"
   assert "root_pos_tracking" in env_cfg.rewards
   assert "body_z_termination" in env_cfg.terminations
   assert env_cfg.commands["motion"].motion_type == "mujoco"
@@ -124,7 +127,7 @@ def test_sp_variant_supports_multimotion_command_override() -> None:
   assert env_cfg.commands["motion"].future_steps == 1
   assert env_cfg.commands["motion"].motion_type == "mujoco"
   assert env_cfg.commands["motion"].fk_from_joint_pos is True
-  assert env_cfg.commands["motion"].sampling_mode == "adaptive"
+  assert env_cfg.commands["motion"].sampling_mode == "uniform"
 
 
 def test_sp_rewind_is_yaml_switchable() -> None:
