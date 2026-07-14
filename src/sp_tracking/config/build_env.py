@@ -691,12 +691,19 @@ def _build_sensors(cfg: DictConfig):
 def _build_robot(cfg: DictConfig):
   asset = str(cfg.robot.get("asset", "tracking_bfm_g1"))
   if asset == "tracking_bfm_g1":
-    return get_g1_tracking_bfm_robot_cfg()
-  if asset == "sp_tracking_g1":
-    return get_g1_sp_tracking_robot_cfg()
-  if asset == "sp_xml_bfm_runtime_g1":
-    return get_g1_sp_xml_bfm_runtime_robot_cfg()
-  raise ValueError(f"Unsupported robot asset: {asset}")
+    robot_cfg = get_g1_tracking_bfm_robot_cfg()
+  elif asset == "sp_tracking_g1":
+    robot_cfg = get_g1_sp_tracking_robot_cfg()
+  elif asset == "sp_xml_bfm_runtime_g1":
+    robot_cfg = get_g1_sp_xml_bfm_runtime_robot_cfg()
+  else:
+    raise ValueError(f"Unsupported robot asset: {asset}")
+  joint_name_order = cfg.robot.get("joint_name_order")
+  if joint_name_order is not None:
+    # Policy-facing metadata only. It does not modify XML order, articulation,
+    # action dynamics or any simulator parameter.
+    robot_cfg.joint_name_order = _to_tuple(joint_name_order)
+  return robot_cfg
 
 
 def build_env_cfg(cfg: DictConfig | dict[str, Any]) -> ManagerBasedRlEnvCfg:

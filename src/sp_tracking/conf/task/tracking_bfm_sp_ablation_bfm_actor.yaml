@@ -3,12 +3,12 @@ defaults:
   - override obs: sp_actor_ablation
   - _self_
 
-# The ablations are BFM tasks first.  Only the SP XML/reference schema and the
-# data required to evaluate SP observations are added below.
+# The ablations are BFM tasks first.  HEFT observations are expressed through
+# semantic keypoints backed by BFM physical bodies and fixed local offsets.
 name: tracking_bfm_sp_ablation_bfm_actor
 variant:
-  environment_profile: bfm_runtime_sp_xml
-  reference_profile: sp_xml_compatibility
+  environment_profile: bfm_runtime_semantic_keypoints
+  reference_profile: bfm_physical_heft_semantics
   observation_profile: bfm_actor_sp_critic
   reward_profile: old_tracking
   termination_profile: old_tracking
@@ -27,18 +27,63 @@ agent_overrides:
     obs_normalization: true
     vecnorm_decay: 0.9999
 
-# Replace only the XML body topology/reference schema. Init state, collision,
-# articulation, viewer, randomization, action, reward, termination, and all
-# other runtime settings stay inherited from tracking_bfm. The SP XML retains
-# BFM's ``*_foot[1-7]_collision`` geom names, so its friction selector is valid.
+# Keep BFM's XML, articulation, anchor, motion format, reset, collision and
+# dynamics.  The command caches a union of physical bodies only.
 robot:
-  asset: sp_xml_bfm_runtime_g1
-  anchor_body_name: pelvis
-  motion_type: mujoco
+  asset: tracking_bfm_g1
   body_names: ${task.reference_views.combined.body_names}
+  # HEFT observation tensor order only; MuJoCo/XML and the BFM action dynamics
+  # remain unchanged.
+  joint_name_order:
+    - left_hip_pitch_joint
+    - right_hip_pitch_joint
+    - waist_yaw_joint
+    - left_hip_roll_joint
+    - right_hip_roll_joint
+    - waist_roll_joint
+    - left_hip_yaw_joint
+    - right_hip_yaw_joint
+    - waist_pitch_joint
+    - left_knee_joint
+    - right_knee_joint
+    - left_shoulder_pitch_joint
+    - right_shoulder_pitch_joint
+    - left_ankle_pitch_joint
+    - right_ankle_pitch_joint
+    - left_shoulder_roll_joint
+    - right_shoulder_roll_joint
+    - left_ankle_roll_joint
+    - right_ankle_roll_joint
+    - left_shoulder_yaw_joint
+    - right_shoulder_yaw_joint
+    - left_elbow_joint
+    - right_elbow_joint
+    - left_wrist_roll_joint
+    - right_wrist_roll_joint
+    - left_wrist_pitch_joint
+    - right_wrist_pitch_joint
+    - left_wrist_yaw_joint
+    - right_wrist_yaw_joint
 
-# BFM terms explicitly select the old torso-anchored view.  SP observations
-# consume the primary pelvis view from the same union reference cache.
+obs:
+  semantic_keypoints:
+    heft:
+      - {name: left_hip, body_name: left_hip_yaw_link}
+      - {name: left_knee, body_name: left_knee_link}
+      - {name: left_foot, body_name: left_ankle_roll_link}
+      - {name: right_hip, body_name: right_hip_yaw_link}
+      - {name: right_knee, body_name: right_knee_link}
+      - {name: right_foot, body_name: right_ankle_roll_link}
+      - {name: head, body_name: torso_link, local_pos: [0.01, 0.0, 0.41]}
+      - {name: left_shoulder, body_name: left_shoulder_yaw_link}
+      - {name: left_wrist, body_name: left_wrist_roll_link}
+      - {name: left_hand, body_name: left_wrist_yaw_link, local_pos: [0.116, 0.0, 0.0]}
+      - {name: right_shoulder, body_name: right_shoulder_yaw_link}
+      - {name: right_wrist, body_name: right_wrist_roll_link}
+      - {name: right_hand, body_name: right_wrist_yaw_link, local_pos: [0.116, 0.0, 0.0]}
+
+# BFM terms retain the old torso-anchored view. HEFT observations select a
+# pelvis root explicitly and resolve semantic points from physical parents.
 reference_views:
   old_tracking:
     anchor_body_name: torso_link
@@ -73,13 +118,12 @@ reference_views:
       - right_knee_link
       - right_ankle_roll_link
       - torso_link
-      - head_mimic
       - left_shoulder_yaw_link
       - left_wrist_roll_link
-      - left_hand_mimic
+      - left_wrist_yaw_link
       - right_shoulder_yaw_link
       - right_wrist_roll_link
-      - right_hand_mimic
+      - right_wrist_yaw_link
   combined:
     body_names:
       - pelvis
@@ -90,33 +134,26 @@ reference_views:
       - right_knee_link
       - right_ankle_roll_link
       - torso_link
-      - head_mimic
       - left_shoulder_yaw_link
       - left_wrist_roll_link
-      - left_hand_mimic
+      - left_wrist_yaw_link
       - right_shoulder_yaw_link
       - right_wrist_roll_link
-      - right_hand_mimic
+      - right_wrist_yaw_link
       - left_hip_roll_link
       - right_hip_roll_link
       - left_shoulder_roll_link
       - left_elbow_link
-      - left_wrist_yaw_link
       - right_shoulder_roll_link
       - right_elbow_link
-      - right_wrist_yaw_link
-
-# The BFM solver values remain inherited.  SP privileged observations require
-# the two-foot contact sensor to support a larger match buffer.
-sim:
-  contact_sensor_maxmatch: 128
 
 command:
   command:
-    # Required to interpret MuJoCo-format motion data on the SP articulation.
-    fk_from_joint_pos: true
-    recompute_joint_vel_from_joint_pos: true
-    motion_origin_recenter: true
+    # Preserve the raw BFM body/joint trajectories. Semantic keypoints are
+    # fixed transforms of these cached physical body frames, never joint FK.
+    fk_from_joint_pos: false
+    recompute_joint_vel_from_joint_pos: false
+    motion_origin_recenter: false
     # Reference-only contact state used by target_feet_contact_state_obs.
     feet_standing_body_names: [left_ankle_roll_link, right_ankle_roll_link]
     feet_standing:

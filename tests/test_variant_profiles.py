@@ -117,11 +117,11 @@ def test_ablation_observation_terms_are_reused_without_adapter() -> None:
       cfg.task.obs.observations.actor, resolve=True
     ) == expected_actor
     for group in ("policy", "priv"):
-      assert OmegaConf.to_container(
-        cfg.task.obs.observations[group].terms, resolve=True
-      ) == OmegaConf.to_container(
-        sp.task.obs.observations[group].terms, resolve=True
-      )
+      ablation_terms = cfg.task.obs.observations[group].terms
+      sp_terms = sp.task.obs.observations[group].terms
+      assert [(item.name, item.term) for item in ablation_terms] == [
+        (item.name, item.term) for item in sp_terms
+      ]
     assert tuple(cfg.task.obs.observations.policy.disabled_terms) == (
       "boot_indicator_state_obs",
     )
@@ -136,9 +136,14 @@ def test_ablation_observation_terms_are_reused_without_adapter() -> None:
       sp.task.obs.observations.priv_critic.terms, resolve=True
     )
     assert "adapter" not in OmegaConf.to_container(cfg.task, resolve=True)
+    assert cfg.task.reference_views.sp_tracking.anchor_body_name == "pelvis"
+    semantic_names = tuple(item.name for item in cfg.task.obs.semantic_keypoints.heft)
+    assert semantic_names == tuple(
+      item.name for item in sp.task.obs.semantic_keypoints.heft
+    )
 
 
-def test_ablation_runtime_matches_bfm_except_sp_xml_compatibility() -> None:
+def test_ablation_runtime_matches_bfm_with_semantic_keypoints_only() -> None:
   expected_events = {
     "push_robot",
     "base_com",
@@ -158,20 +163,25 @@ def test_ablation_runtime_matches_bfm_except_sp_xml_compatibility() -> None:
     ]
 
     assert robot.spec_fn.__module__.startswith(
-      "sp_tracking.assets.robots.g1_sp_tracking"
+      "sp_tracking.assets.robots.g1_tracking_bfm"
     )
     assert robot.init_state == baseline_robot.init_state
     assert robot.articulation == baseline_robot.articulation
     assert robot.collisions == baseline_robot.collisions
+    assert len(robot.joint_name_order) == 29
+    assert not hasattr(robot, "joint_symmetry_mapping")
+    assert not hasattr(robot, "spatial_symmetry_mapping")
     action = env.actions["joint_pos"]
     assert type(action).__name__ == "ObservationHistoryJointPositionActionCfg"
     assert action.observation_history_steps == 8
     assert action.scale == G1_ACTION_SCALE
     assert action.use_default_offset is True
     assert type(command).__name__ == "MultiMotionCommandCfg"
-    assert command.motion_type == "mujoco"
-    assert command.fk_from_joint_pos is True
-    assert command.recompute_joint_vel_from_joint_pos is True
+    assert command.anchor_body_name == "torso_link"
+    assert command.motion_type == "isaaclab"
+    assert command.fk_from_joint_pos is False
+    assert command.recompute_joint_vel_from_joint_pos is False
+    assert command.motion_origin_recenter is False
     assert command.sampling_mode == "adaptive"
     assert command.rewind.enabled is False
     assert tuple(command.feet_standing_body_names) == (
@@ -189,6 +199,7 @@ def test_ablation_runtime_matches_bfm_except_sp_xml_compatibility() -> None:
     assert "root_pos_tracking" not in env.rewards
     assert env.episode_length_s == 10.0
     assert env.viewer.body_name == "torso_link"
+    assert env.sim.contact_sensor_maxmatch == 64
     assert {sensor.name for sensor in env.scene.sensors} == {
       "contact_forces",
       "self_collision",
@@ -196,6 +207,11 @@ def test_ablation_runtime_matches_bfm_except_sp_xml_compatibility() -> None:
     assert tuple(command.body_names) == tuple(
       cfg.task.reference_views.combined.body_names
     )
+    serialized = str(OmegaConf.to_container(cfg.task, resolve=True))
+    assert "head_mimic" not in serialized
+    assert "hand_mimic" not in serialized
+    assert "toe_link" not in serialized
+    assert "sp_xml_bfm_runtime_g1" not in serialized
 
 
 def test_sp_xml_foot_friction_pattern_matches_all_foot_collision_geoms() -> None:

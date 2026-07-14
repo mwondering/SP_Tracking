@@ -67,8 +67,4 @@ algorithm:
   lr_schedule_min: 1.0e-7
   lr_schedule_max: 1.0e-3
   max_grad_norm: 1.0
-  symmetry_cfg:
-    data_augmentation_func: sp_tracking.tasks.tracking.rl.symmetry:heft_teacher_symmetry
-    use_data_augmentation: false
-    use_mirror_loss: true
-    mirror_loss_coeff: 0.2
+  symmetry_cfg: null

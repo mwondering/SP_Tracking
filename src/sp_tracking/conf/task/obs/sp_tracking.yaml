@@ -2,16 +2,32 @@
 # groups are visible to actor and critic; the SP pretrain preset exposes
 # ``policy + priv`` to the actor for the teacher-observation ablation and
 # ``policy + priv + priv_critic`` to the critic.
+semantic_keypoints:
+  heft:
+    - {name: left_hip, body_name: left_hip_yaw_link}
+    - {name: left_knee, body_name: left_knee_link}
+    - {name: left_foot, body_name: left_ankle_roll_link}
+    - {name: right_hip, body_name: right_hip_yaw_link}
+    - {name: right_knee, body_name: right_knee_link}
+    - {name: right_foot, body_name: right_ankle_roll_link}
+    - {name: head, body_name: head_mimic}
+    - {name: left_shoulder, body_name: left_shoulder_yaw_link}
+    - {name: left_wrist, body_name: left_wrist_roll_link}
+    - {name: left_hand, body_name: left_hand_mimic}
+    - {name: right_shoulder, body_name: right_shoulder_yaw_link}
+    - {name: right_wrist, body_name: right_wrist_roll_link}
+    - {name: right_hand, body_name: right_hand_mimic}
+
 observations:
   policy:
     concatenate_terms: true
     enable_corruption: true
     terms:
       - {name: boot_indicator_state_obs, term: boot_indicator_state_obs, params: {command_name: motion}}
-      - {name: command_obs, term: command_obs, params: {command_name: motion, horizon: student, noise_std: 0.1}}
+      - {name: command_obs, term: command_obs, params: {command_name: motion, horizon: student, noise_std: 0.1, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}"}}
       - {name: target_joint_pos_obs, term: target_joint_pos_obs, params: {command_name: motion, horizon: student, noise_std: 0.01}}
-      - {name: target_root_z_obs, term: target_root_z_obs, params: {command_name: motion, horizon: student}}
-      - {name: target_projected_gravity_b_obs, term: target_projected_gravity_b_obs, params: {command_name: motion, horizon: student}}
+      - {name: target_root_z_obs, term: target_root_z_obs, params: {command_name: motion, horizon: student, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}"}}
+      - {name: target_projected_gravity_b_obs, term: target_projected_gravity_b_obs, params: {command_name: motion, horizon: student, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}"}}
       - {name: root_angvel_b_history, term: root_angvel_b_history, params: {history_steps: [0, 1, 2, 3, 4, 8, 12, 16, 20], noise_std: 0.2}}
       - {name: projected_gravity_history, term: projected_gravity_history, params: {history_steps: [0, 1, 2, 3, 4, 8, 12, 16, 20], noise_std: 0.01, bias_noise_std: 0.03}}
       - {name: joint_pos_history, term: joint_pos_history, params: {history_steps: [0, 1, 2, 3, 4, 8, 12, 16, 20], noise_std: 0.01}}
@@ -23,18 +39,18 @@ observations:
     enable_corruption: false
     terms:
       - {name: target_joint_pos_obs, term: target_joint_pos_obs, params: {command_name: motion, horizon: teacher}}
-      - {name: target_root_z_obs, term: target_root_z_obs, params: {command_name: motion, horizon: teacher}}
-      - {name: target_projected_gravity_b_obs, term: target_projected_gravity_b_obs, params: {command_name: motion, horizon: teacher}}
-      - {name: target_pos_b_obs, term: target_pos_b_obs, params: {command_name: motion}}
-      - {name: target_rot_b_obs, term: target_rot_b_obs, params: {command_name: motion}}
-      - {name: target_linvel_b_obs, term: target_linvel_b_obs, params: {command_name: motion}}
-      - {name: target_angvel_b_obs, term: target_angvel_b_obs, params: {command_name: motion}}
-      - {name: current_keypoint_pos_b_obs, term: current_keypoint_pos_b_obs}
-      - {name: current_keypoint_rot_b_obs, term: current_keypoint_rot_b_obs}
-      - {name: current_keypoint_linvel_b_obs, term: current_keypoint_linvel_b_obs}
-      - {name: current_keypoint_angvel_b_obs, term: current_keypoint_angvel_b_obs}
-      - {name: target_keypoints_pos_b_obs, term: target_keypoints_pos_b_obs, params: {command_name: motion, required_steps: 12, include_diff: true}}
-      - {name: target_keypoints_rot_b_obs, term: target_keypoints_rot_b_obs, params: {command_name: motion, required_steps: 12, include_diff: true}}
+      - {name: target_root_z_obs, term: target_root_z_obs, params: {command_name: motion, horizon: teacher, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}"}}
+      - {name: target_projected_gravity_b_obs, term: target_projected_gravity_b_obs, params: {command_name: motion, horizon: teacher, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}"}}
+      - {name: target_pos_b_obs, term: target_pos_b_obs, params: {command_name: motion, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}"}}
+      - {name: target_rot_b_obs, term: target_rot_b_obs, params: {command_name: motion, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}"}}
+      - {name: target_linvel_b_obs, term: target_linvel_b_obs, params: {command_name: motion, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}"}}
+      - {name: target_angvel_b_obs, term: target_angvel_b_obs, params: {command_name: motion, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}"}}
+      - {name: current_keypoint_pos_b_obs, term: current_keypoint_pos_b_obs, params: {command_name: motion, keypoint_specs: "${task.obs.semantic_keypoints.heft}"}}
+      - {name: current_keypoint_rot_b_obs, term: current_keypoint_rot_b_obs, params: {command_name: motion, keypoint_specs: "${task.obs.semantic_keypoints.heft}"}}
+      - {name: current_keypoint_linvel_b_obs, term: current_keypoint_linvel_b_obs, params: {command_name: motion, keypoint_specs: "${task.obs.semantic_keypoints.heft}"}}
+      - {name: current_keypoint_angvel_b_obs, term: current_keypoint_angvel_b_obs, params: {command_name: motion, keypoint_specs: "${task.obs.semantic_keypoints.heft}"}}
+      - {name: target_keypoints_pos_b_obs, term: target_keypoints_pos_b_obs, params: {command_name: motion, required_steps: 12, include_diff: true, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}", keypoint_specs: "${task.obs.semantic_keypoints.heft}"}}
+      - {name: target_keypoints_rot_b_obs, term: target_keypoints_rot_b_obs, params: {command_name: motion, required_steps: 12, include_diff: true, root_body_name: "${oc.select:task.reference_views.sp_tracking.anchor_body_name,pelvis}", keypoint_specs: "${task.obs.semantic_keypoints.heft}"}}
       - {name: root_linvel_b_history, term: root_linvel_b_history, params: {history_steps: [0, 1, 2, 3, 4, 5, 6, 7, 8], noise_std: 0.0}}
       - {name: root_angvel_b_history, term: root_angvel_b_history, params: {history_steps: [0, 1, 2, 3, 4, 5, 6, 7, 8], noise_std: 0.0}}
       - {name: projected_gravity_history, term: projected_gravity_history, params: {history_steps: [0, 1, 2, 3, 4, 5, 6, 7, 8], noise_std: 0.0, bias_noise_std: 0.0}}

@@ -98,6 +98,7 @@ def test_sp_task_applies_one_stage_sp_tracking_agent_preset() -> None:
   assert prepared.agent.algorithm.clamp_rewards_min == 0.0
   assert prepared.agent.algorithm.optimizer == "muon"
   assert prepared.agent.algorithm.use_clipped_value_loss is False
+  assert prepared.agent.algorithm.symmetry_cfg is None
   assert prepared.agent.save_interval == 150
   assert prepared.agent.seed == 0
   assert prepared.agent.load_checkpoint == "checkpoint_.*.pt"

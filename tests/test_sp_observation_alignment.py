@@ -197,6 +197,37 @@ def test_target_pos_b_obs_subtracts_env_origin_from_current_root() -> None:
   assert torch.allclose(obs[:, :3], torch.tensor([[1.0, 0.0, 0.0]]))
 
 
+def test_explicit_observation_root_is_independent_from_command_anchor() -> None:
+  body_names = ("pelvis", "torso_link")
+  fields = {
+    "body_pos_w": torch.zeros((1, 30, 2, 3), dtype=torch.float32),
+    "body_quat_w": _identity_quat((1, 30, 2)),
+  }
+  fields["body_pos_w"][:, :, 0, 2] = 0.8
+  fields["body_pos_w"][:, :, 1, 2] = 1.2
+  command = _FakeCommand(fields, body_names)
+  command.motion_anchor_body_index = body_names.index("torso_link")
+  asset = _FakeAsset(
+    data=SimpleNamespace(
+      root_link_pos_w=torch.zeros((1, 3)),
+      root_link_quat_w=_identity_quat((1,)),
+    ),
+    body_names=body_names,
+    joint_count=1,
+  )
+  env = _make_env(asset=asset, command=command)
+
+  pelvis = sp.target_root_z_obs(
+    env, command_name="motion", horizon="student", root_body_name="pelvis"
+  )
+  command_anchor = sp.target_root_z_obs(
+    env, command_name="motion", horizon="student"
+  )
+
+  torch.testing.assert_close(pelvis, torch.full_like(pelvis, 0.8))
+  torch.testing.assert_close(command_anchor, torch.full_like(command_anchor, 1.2))
+
+
 def test_target_feet_contact_fallback_always_returns_two_feet() -> None:
   body_names = ("pelvis", *sp.SP_FEET_BODY_NAMES)
   body_pos_w = torch.zeros((1, 8, 3, 3), dtype=torch.float32)

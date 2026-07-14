@@ -36,6 +36,7 @@ def test_heft_teacher_models_use_privileged_encoder_and_vector_std() -> None:
   assert actor(obs).shape == (4, 3)
   assert critic(obs).shape == (4, 1)
   assert actor.as_onnx().input_names == ["policy_priv"]
+  assert not hasattr(actor, "std_symmetry_loss")
   torch.testing.assert_close(actor.distribution.std_param, torch.tensor(init_std))
 
   with torch.no_grad():

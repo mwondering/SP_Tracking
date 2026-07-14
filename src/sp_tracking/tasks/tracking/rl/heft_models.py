@@ -12,12 +12,6 @@ from rsl_rl.modules.distribution import GaussianDistribution
 from rsl_rl.utils import unpad_trajectories
 from tensordict import TensorDict
 
-from sp_tracking.assets.robots.g1_sp_tracking import (
-  G1_SP_JOINT_ORDER,
-  G1_SP_JOINT_SYMMETRY_MAP,
-)
-
-
 def _make_mlp(input_dim: int, hidden_dims: Sequence[int], output_dim: int) -> nn.Sequential:
   layers: list[nn.Module] = []
   current = int(input_dim)
@@ -132,16 +126,6 @@ class HeftTeacherActor(_HeftModelBase):
     else:
       self._std_upper = torch.full((output_dim,), cfg_init_std)
     self.apply(_orthogonal_small_)
-    self.register_buffer(
-      "_action_symmetry_perm",
-      torch.as_tensor(
-        [
-          G1_SP_JOINT_ORDER.index(G1_SP_JOINT_SYMMETRY_MAP[name][1])
-          for name in G1_SP_JOINT_ORDER
-        ],
-        dtype=torch.long,
-      ),
-    )
 
   def get_latent(self, obs: TensorDict, masks=None, hidden_state=None) -> torch.Tensor:
     del masks, hidden_state
@@ -188,10 +172,6 @@ class HeftTeacherActor(_HeftModelBase):
 
   def adamw_only_parameters(self):
     return self.mlp[-1].parameters()
-
-  def std_symmetry_loss(self) -> torch.Tensor:
-    std = self.distribution.std_param
-    return nn.functional.mse_loss(std, std[self._action_symmetry_perm])
 
   def as_onnx(self, verbose: bool = False) -> nn.Module:
     del verbose

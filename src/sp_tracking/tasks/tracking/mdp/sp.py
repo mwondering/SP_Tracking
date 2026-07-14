@@ -8,6 +8,7 @@ from mjlab.managers import RewardTermCfg
 from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.observation_manager import ObservationTermCfg
 from mjlab.sensor import ContactSensor
+from sp_tracking.tasks.tracking.mdp.keypoints import SemanticKeypointResolver
 from sp_tracking.tasks.tracking.mdp.multi_commands import MultiMotionCommand
 from mjlab.utils.lab_api.math import (
   axis_angle_from_quat,
@@ -241,18 +242,40 @@ def _root_motion(
   field_name: str,
   steps: tuple[int, ...],
   horizon: Literal["teacher", "student"] = "teacher",
+  root_body_name: str | None = None,
 ) -> torch.Tensor:
   cmd = _command(env, command_name)
   data = _gather_horizon(
     env, command_name, field_name, steps, horizon
   )
-  return data[:, :, cmd.motion_anchor_body_index]
+  root_index = cmd.motion_anchor_body_index
+  if root_body_name is not None:
+    root_index = tuple(_basename(name) for name in cmd.cfg.body_names).index(
+      _basename(root_body_name)
+    )
+  return data[:, :, root_index]
 
 
 def _root_motion_current(
-  env: "ManagerBasedRlEnv", command_name: str, field_name: str
+  env: "ManagerBasedRlEnv",
+  command_name: str,
+  field_name: str,
+  root_body_name: str | None = None,
 ) -> torch.Tensor:
-  return _root_motion(env, command_name, field_name, (0,))[:, 0]
+  return _root_motion(
+    env, command_name, field_name, (0,), root_body_name=root_body_name
+  )[:, 0]
+
+
+def _default_keypoint_specs() -> tuple[dict[str, Any], ...]:
+  return tuple(
+    {
+      "name": name,
+      "asset_body_name": name,
+      "reference_body_name": name,
+    }
+    for name in SP_KEYPOINT_BODY_NAMES
+  )
 
 
 def _rot6d(quat: torch.Tensor) -> torch.Tensor:
@@ -670,13 +693,18 @@ def command_obs(
   command_name: str,
   horizon: Literal["teacher", "student"] = "student",
   noise_std: float = 0.0,
+  root_body_name: str | None = None,
 ) -> torch.Tensor:
   steps = _steps(horizon)
   root_quat = _perturb_quaternion(
     env.scene["robot"].data.root_link_quat_w, noise_std
   ).unsqueeze(1)
-  future_quat = _root_motion(env, command_name, "body_quat_w", steps, horizon)
-  future_pos = _root_motion(env, command_name, "body_pos_w", steps, horizon)
+  future_quat = _root_motion(
+    env, command_name, "body_quat_w", steps, horizon, root_body_name
+  )
+  future_pos = _root_motion(
+    env, command_name, "body_pos_w", steps, horizon, root_body_name
+  )
   pos_diff = _quat_apply_inverse(
     future_quat[:, :1], future_pos[:, 1:] - future_pos[:, :1]
   )
@@ -714,9 +742,10 @@ def target_root_z_obs(
   env: "ManagerBasedRlEnv",
   command_name: str,
   horizon: Literal["teacher", "student"],
+  root_body_name: str | None = None,
 ) -> torch.Tensor:
   return _root_motion(
-    env, command_name, "body_pos_w", _steps(horizon), horizon
+    env, command_name, "body_pos_w", _steps(horizon), horizon, root_body_name
   )[..., 2]
 
 
@@ -724,9 +753,10 @@ def target_projected_gravity_b_obs(
   env: "ManagerBasedRlEnv",
   command_name: str,
   horizon: Literal["teacher", "student"],
+  root_body_name: str | None = None,
 ) -> torch.Tensor:
   quat = _root_motion(
-    env, command_name, "body_quat_w", _steps(horizon), horizon
+    env, command_name, "body_quat_w", _steps(horizon), horizon, root_body_name
   )
   return _projected_gravity(quat).reshape(env.num_envs, -1)
 
@@ -745,7 +775,11 @@ def prev_actions(env: "ManagerBasedRlEnv", steps: int) -> torch.Tensor:
   return torch.cat(repeated[:steps], dim=-1)
 
 
-def target_pos_b_obs(env: "ManagerBasedRlEnv", command_name: str) -> torch.Tensor:
+def target_pos_b_obs(
+  env: "ManagerBasedRlEnv",
+  command_name: str,
+  root_body_name: str | None = None,
+) -> torch.Tensor:
   env_origins = getattr(env.scene, "env_origins", None)
   root_pos_w = env.scene["robot"].data.root_link_pos_w
   if isinstance(env_origins, torch.Tensor):
@@ -754,27 +788,47 @@ def target_pos_b_obs(env: "ManagerBasedRlEnv", command_name: str) -> torch.Tenso
     )
   root_pos = root_pos_w.unsqueeze(1)
   root_quat = env.scene["robot"].data.root_link_quat_w.unsqueeze(1)
-  target_pos = _root_motion(env, command_name, "body_pos_w", TEACHER_STEPS)
+  target_pos = _root_motion(
+    env, command_name, "body_pos_w", TEACHER_STEPS, root_body_name=root_body_name
+  )
   return _quat_apply_inverse(root_quat, target_pos - root_pos).reshape(env.num_envs, -1)
 
 
-def target_rot_b_obs(env: "ManagerBasedRlEnv", command_name: str) -> torch.Tensor:
+def target_rot_b_obs(
+  env: "ManagerBasedRlEnv",
+  command_name: str,
+  root_body_name: str | None = None,
+) -> torch.Tensor:
   root_quat = env.scene["robot"].data.root_link_quat_w.unsqueeze(1)
-  target_quat = _root_motion(env, command_name, "body_quat_w", TEACHER_STEPS)
+  target_quat = _root_motion(
+    env, command_name, "body_quat_w", TEACHER_STEPS, root_body_name=root_body_name
+  )
   return _rot6d(_quat_in_frame(root_quat.expand_as(target_quat), target_quat)).reshape(
     env.num_envs, -1
   )
 
 
-def target_linvel_b_obs(env: "ManagerBasedRlEnv", command_name: str) -> torch.Tensor:
+def target_linvel_b_obs(
+  env: "ManagerBasedRlEnv",
+  command_name: str,
+  root_body_name: str | None = None,
+) -> torch.Tensor:
   root_quat = env.scene["robot"].data.root_link_quat_w.unsqueeze(1)
-  target = _root_motion(env, command_name, "body_lin_vel_w", TEACHER_STEPS)
+  target = _root_motion(
+    env, command_name, "body_lin_vel_w", TEACHER_STEPS, root_body_name=root_body_name
+  )
   return _quat_apply_inverse(root_quat, target).reshape(env.num_envs, -1)
 
 
-def target_angvel_b_obs(env: "ManagerBasedRlEnv", command_name: str) -> torch.Tensor:
+def target_angvel_b_obs(
+  env: "ManagerBasedRlEnv",
+  command_name: str,
+  root_body_name: str | None = None,
+) -> torch.Tensor:
   root_quat = env.scene["robot"].data.root_link_quat_w.unsqueeze(1)
-  target = _root_motion(env, command_name, "body_ang_vel_w", TEACHER_STEPS)
+  target = _root_motion(
+    env, command_name, "body_ang_vel_w", TEACHER_STEPS, root_body_name=root_body_name
+  )
   return _quat_apply_inverse(root_quat, target).reshape(env.num_envs, -1)
 
 
@@ -783,26 +837,36 @@ class _KeypointObservation:
     self.cfg = cfg
     self.env = env
     self.asset = env.scene["robot"]
-    self.asset_ids = _robot_body_indices(self.asset, SP_KEYPOINT_BODY_NAMES, env.device)
-
-  def _motion_ids(self, command_name: str) -> list[int]:
-    cmd = _command(self.env, command_name)
-    return _body_indices(tuple(cmd.cfg.body_names), SP_KEYPOINT_BODY_NAMES)
+    self.command_name = str(cfg.params.get("command_name", "motion"))
+    cmd = _command(env, self.command_name)
+    raw_specs = cfg.params.get("keypoint_specs", _default_keypoint_specs())
+    self.resolver = SemanticKeypointResolver(
+      self.asset, tuple(cmd.cfg.body_names), raw_specs
+    )
 
   def _current(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     root_pos = self.asset.data.root_link_pos_w
     root_quat = self.asset.data.root_link_quat_w
     root_lin = self.asset.data.root_link_lin_vel_w
     root_ang = self.asset.data.root_link_ang_vel_w
-    pos = self.asset.data.body_link_pos_w[:, self.asset_ids]
-    quat = self.asset.data.body_link_quat_w[:, self.asset_ids]
-    lin = self.asset.data.body_link_lin_vel_w[:, self.asset_ids]
-    ang = self.asset.data.body_link_ang_vel_w[:, self.asset_ids]
+    current = self.resolver.current(self.asset)
+    pos = current.pos_w
+    quat = current.quat_w
+    lin = current.lin_vel_w
+    ang = current.ang_vel_w
     pos_b = _quat_apply_inverse(root_quat.unsqueeze(1), pos - root_pos.unsqueeze(1))
     quat_b = _quat_in_frame(root_quat.unsqueeze(1).expand_as(quat), quat)
     lin_b = _quat_apply_inverse(root_quat.unsqueeze(1), lin - root_lin.unsqueeze(1))
     ang_b = _quat_apply_inverse(root_quat.unsqueeze(1), ang - root_ang.unsqueeze(1))
     return pos_b, quat_b, lin_b, ang_b
+
+  def _reference(self, command_name: str, steps: tuple[int, ...]):
+    return self.resolver.reference(
+      _gather(self.env, command_name, "body_pos_w", steps),
+      _gather(self.env, command_name, "body_quat_w", steps),
+      _gather(self.env, command_name, "body_lin_vel_w", steps),
+      _gather(self.env, command_name, "body_ang_vel_w", steps),
+    )
 
 
 class current_keypoint_pos_b_obs(_KeypointObservation):
@@ -832,12 +896,17 @@ class target_keypoints_pos_b_obs(_KeypointObservation):
     command_name: str,
     required_steps: int,
     include_diff: bool,
+    root_body_name: str | None = None,
+    **_: Any,
   ) -> torch.Tensor:
     steps = TEACHER_STEPS[:required_steps]
-    ids = self._motion_ids(command_name)
-    target_w = _gather(env, command_name, "body_pos_w", steps)[:, :, ids]
-    root_pos = _root_motion(env, command_name, "body_pos_w", steps)
-    root_quat = _root_motion(env, command_name, "body_quat_w", steps)
+    target_w = self._reference(command_name, steps).pos_w
+    root_pos = _root_motion(
+      env, command_name, "body_pos_w", steps, root_body_name=root_body_name
+    )
+    root_quat = _root_motion(
+      env, command_name, "body_quat_w", steps, root_body_name=root_body_name
+    )
     target_b = _quat_apply_inverse(
       root_quat.unsqueeze(2), target_w - root_pos.unsqueeze(2)
     )
@@ -859,11 +928,14 @@ class target_keypoints_rot_b_obs(_KeypointObservation):
     command_name: str,
     required_steps: int,
     include_diff: bool,
+    root_body_name: str | None = None,
+    **_: Any,
   ) -> torch.Tensor:
     steps = TEACHER_STEPS[:required_steps]
-    ids = self._motion_ids(command_name)
-    target_w = _gather(env, command_name, "body_quat_w", steps)[:, :, ids]
-    root_quat = _root_motion(env, command_name, "body_quat_w", steps)
+    target_w = self._reference(command_name, steps).quat_w
+    root_quat = _root_motion(
+      env, command_name, "body_quat_w", steps, root_body_name=root_body_name
+    )
     target_b = _quat_in_frame(root_quat.unsqueeze(2).expand_as(target_w), target_w)
     target_rot = _rot6d(target_b)
     if not include_diff:

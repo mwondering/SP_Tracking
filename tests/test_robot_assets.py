@@ -47,6 +47,29 @@ def test_tracking_bfm_body_names_exist_in_selected_robot_asset() -> None:
   assert set(env_cfg.commands["motion"].body_names) <= body_names
 
 
+def test_observation_ablations_use_only_bfm_physical_bodies() -> None:
+  for task in (
+    "tracking_bfm_sp_ablation_bfm_actor",
+    "tracking_bfm_sp_ablation_student_actor",
+    "tracking_bfm_sp_ablation_teacher_actor",
+  ):
+    cfg = _compose(f"task={task}")
+    env_cfg = build_env_cfg(cfg.task)
+    robot = env_cfg.scene.entities["robot"]
+    assert robot.spec_fn.__module__.startswith(
+      "sp_tracking.assets.robots.g1_tracking_bfm"
+    )
+    body_names = _compiled_body_names(env_cfg)
+    assert set(env_cfg.commands["motion"].body_names) <= body_names
+    assert not {
+      "head_mimic",
+      "left_hand_mimic",
+      "right_hand_mimic",
+      "left_ankle_roll_toe_link",
+      "right_ankle_roll_toe_link",
+    } & set(env_cfg.commands["motion"].body_names)
+
+
 def test_non_sp_tasks_keep_lowest_sim2real_torque_limits() -> None:
   for task in ("tracking_bfm",):
     cfg = _compose(f"task={task}")
