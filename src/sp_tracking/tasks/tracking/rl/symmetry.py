@@ -48,6 +48,7 @@ def _component(signs) -> _Transform:
 
 
 def _named_transform(names, mapping, component_signs) -> _Transform:
+  names = tuple(names)
   width = len(component_signs)
   perm = []
   signs = []
@@ -62,6 +63,26 @@ def _named_transform(names, mapping, component_signs) -> _Transform:
   return _Transform(torch.as_tensor(perm), torch.as_tensor(signs))
 
 
+def _event_output_transform(root, term_name: str, attributes: tuple[str, ...], mapping):
+  """Build a transform in the exact column order exposed by a DR event."""
+  event_manager = getattr(root, "event_manager", None)
+  if event_manager is None:
+    raise RuntimeError(
+      f"SP symmetry requires the {term_name!r} event to mirror priv_critic"
+    )
+  func = event_manager.get_term_cfg(term_name).func
+  transforms = []
+  for attribute in attributes:
+    names = tuple(getattr(func, attribute, ()))
+    if names:
+      transforms.append(_named_transform(names, mapping, (1.0,)))
+  if not transforms:
+    raise RuntimeError(
+      f"SP symmetry could not resolve any {term_name!r} observation columns"
+    )
+  return _cat(transforms)
+
+
 def _build(env):
   root = getattr(env, "unwrapped", env)
   asset = root.scene["robot"]
@@ -69,7 +90,6 @@ def _build(env):
   joint = _named_transform(
     joint_names, asset.cfg.joint_symmetry_mapping, (1.0,)
   )
-  joint_scalar = _Transform(joint.perm, torch.ones_like(joint.signs))
   cart = _component((1.0, -1.0, 1.0))
   angular = _component((-1.0, 1.0, -1.0))
   rot6d = _component((1.0, -1.0, 1.0, -1.0, 1.0, -1.0))
@@ -112,9 +132,17 @@ def _build(env):
       feet_cart, feet_scalar.repeat(3), feet_scalar,
     ]
   )
-  priv_critic = _cat(
-    [joint_scalar.repeat(3), _identity(3), joint, cart]
+  joint_map = asset.cfg.joint_symmetry_mapping
+  motor_dr = _event_output_transform(
+    root,
+    "motor_params_implicit",
+    ("kp_names", "kd_names", "arm_names", "fric_names"),
+    joint_map,
   )
+  joint_offset_dr = _event_output_transform(
+    root, "random_joint_offset", ("joint_names",), joint_map
+  )
+  priv_critic = _cat([motor_dr, _identity(3), joint_offset_dr, cart])
   action = joint
   return {"policy": policy, "priv": priv, "priv_critic": priv_critic}, action
 

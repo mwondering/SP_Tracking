@@ -29,7 +29,10 @@ from sp_tracking.assets.robots import (
   get_g1_tracking_bfm_robot_cfg,
 )
 from sp_tracking.tasks.tracking import mdp
-from sp_tracking.tasks.tracking.mdp.actions import SpTrackingJointPositionActionCfg
+from sp_tracking.tasks.tracking.mdp.actions import (
+  ObservationHistoryJointPositionActionCfg,
+  SpTrackingJointPositionActionCfg,
+)
 from sp_tracking.tasks.tracking.mdp import randomizations as sp_randomizations
 from sp_tracking.tasks.tracking.mdp import sp as sp_mdp
 from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
@@ -223,9 +226,14 @@ def _build_observations(cfg: DictConfig) -> dict[str, ObservationGroupCfg]:
   for group_name, group_cfg in obs_cfg.items():
     if not bool(group_cfg.get("enabled", True)):
       continue
+    disabled_terms = {
+      str(name) for name in group_cfg.get("disabled_terms", ())
+    }
     terms = OrderedDict()
     for item in group_cfg.terms:
       term_name = str(item.name)
+      if term_name in disabled_terms or not bool(item.get("enabled", True)):
+        continue
       term_key = str(item.term)
       terms[term_name] = ObservationTermCfg(
         func=OBS_TERMS[term_key],
@@ -508,11 +516,12 @@ def _build_action(cfg: DictConfig):
     else _to_container(cfg.action.scale)
   )
   action_type = str(cfg.action.get("type", "joint_position"))
-  cfg_cls = (
-    SpTrackingJointPositionActionCfg
-    if action_type == "sp_tracking"
-    else JointPositionActionCfg
-  )
+  if action_type == "sp_tracking":
+    cfg_cls = SpTrackingJointPositionActionCfg
+  elif action_type == "joint_position_with_mean_history":
+    cfg_cls = ObservationHistoryJointPositionActionCfg
+  else:
+    cfg_cls = JointPositionActionCfg
   extra_kwargs = {}
   if cfg_cls is SpTrackingJointPositionActionCfg:
     extra_kwargs = {
@@ -537,6 +546,12 @@ def _build_action(cfg: DictConfig):
         if cfg.action.get("joint_name_order") is not None
         else None
       ),
+    }
+  elif cfg_cls is ObservationHistoryJointPositionActionCfg:
+    extra_kwargs = {
+      "observation_history_steps": int(
+        cfg.action.get("observation_history_steps", 8)
+      )
     }
   return {
     "joint_pos": cfg_cls(
@@ -599,7 +614,14 @@ def _configured_contact_sensor_names(cfg: DictConfig) -> set[str]:
   for group_cfg in obs_cfg.values():
     if not bool(group_cfg.get("enabled", True)):
       continue
+    disabled_terms = {
+      str(name) for name in group_cfg.get("disabled_terms", ())
+    }
     for term_cfg in group_cfg.terms:
+      if str(term_cfg.name) in disabled_terms or not bool(
+        term_cfg.get("enabled", True)
+      ):
+        continue
       add_sensor_name(term_cfg)
 
   reward_cfg = cfg.rewards if "rewards" in cfg else cfg.reward.rewards

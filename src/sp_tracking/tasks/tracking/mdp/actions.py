@@ -12,6 +12,97 @@ if False:
 
 
 @dataclass(kw_only=True)
+class ObservationHistoryJointPositionActionCfg(JointPositionActionCfg):
+  """BFM joint-position action with observation-only policy-mean history.
+
+  Action processing and application are inherited unchanged from MJLab's
+  ``JointPositionAction``.  The extra state exists solely to reproduce HEFT's
+  ``prev_actions`` observation without enabling SP delay/smoothing/curriculum.
+  """
+
+  observation_history_steps: int = 8
+
+  def build(
+    self, env: "ManagerBasedRlEnv"
+  ) -> "ObservationHistoryJointPositionAction":
+    return ObservationHistoryJointPositionAction(self, env)
+
+
+class ObservationHistoryJointPositionAction(JointPositionAction):
+  cfg: ObservationHistoryJointPositionActionCfg
+
+  def __init__(
+    self,
+    cfg: ObservationHistoryJointPositionActionCfg,
+    env: "ManagerBasedRlEnv",
+  ):
+    super().__init__(cfg=cfg, env=env)
+    canonical_names = tuple(
+      getattr(getattr(self._entity, "cfg", None), "joint_name_order", ())
+    )
+    target_names = tuple(self._target_names)
+    if not canonical_names:
+      canonical_names = target_names
+    if set(canonical_names) != set(target_names) or len(canonical_names) != len(
+      target_names
+    ):
+      raise ValueError(
+        "Observation-history canonical joint order must contain every action "
+        f"target exactly once; targets={target_names}, order={canonical_names}"
+      )
+    self._observation_order = torch.as_tensor(
+      [target_names.index(name) for name in canonical_names],
+      dtype=torch.long,
+      device=self.device,
+    )
+    self._observation_history_steps = max(
+      int(cfg.observation_history_steps), 1
+    )
+    self._policy_mean_history = torch.zeros(
+      (
+        self.num_envs,
+        self._observation_history_steps,
+        self.action_dim,
+      ),
+      dtype=self._raw_actions.dtype,
+      device=self.device,
+    )
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    if env_ids is None:
+      env_ids = slice(None)
+    super().reset(env_ids)
+    self._policy_mean_history[env_ids] = 0.0
+
+  def record_policy_mean(self, mean_actions: torch.Tensor) -> None:
+    if mean_actions.shape != self._raw_actions.shape:
+      raise ValueError(
+        "Policy mean action shape does not match the BFM action interface: "
+        f"{tuple(mean_actions.shape)} != {tuple(self._raw_actions.shape)}"
+      )
+    canonical_mean = mean_actions.detach().index_select(
+      -1, self._observation_order
+    )
+    self._policy_mean_history = torch.roll(
+      self._policy_mean_history, shifts=1, dims=1
+    )
+    self._policy_mean_history[:, 0] = canonical_mean
+
+  def get_recent_action_obs(self, steps: int) -> torch.Tensor:
+    requested = max(int(steps), 0)
+    available = min(requested, self._observation_history_steps)
+    result = self._policy_mean_history[:, :available]
+    if requested <= available:
+      return result
+    padding = torch.zeros(
+      (self.num_envs, requested - available, self.action_dim),
+      dtype=result.dtype,
+      device=result.device,
+    )
+    return torch.cat((result, padding), dim=1)
+
+
+@dataclass(kw_only=True)
 class SpTrackingJointPositionActionCfg(JointPositionActionCfg):
   max_delay: int = 2
   delay_full_progress: float = 0.8

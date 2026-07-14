@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict
 from pathlib import Path
 
 from hydra import compose, initialize_config_module
+from mjlab.asset_zoo.robots import G1_ACTION_SCALE
 from omegaconf import OmegaConf
 
+from sp_tracking.assets.robots.g1_sp_tracking import get_g1_sp_tracking_spec
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.scripts.train import prepare_train_cfg
 
@@ -50,11 +53,10 @@ def test_supported_task_profile_matrix() -> None:
       "actor",
       "policy",
       "priv",
-      "priv_critic",
     )
     assert prepared.agent.obs_groups == {
       "actor": actor_groups,
-      "critic": ("policy", "priv", "priv_critic"),
+      "critic": ("policy", "priv"),
     }
 
 
@@ -96,10 +98,25 @@ def test_ablation_observation_terms_are_reused_without_adapter() -> None:
     assert OmegaConf.to_container(
       cfg.task.obs.observations.actor, resolve=True
     ) == expected_actor
-    for group in ("policy", "priv", "priv_critic"):
+    for group in ("policy", "priv"):
       assert OmegaConf.to_container(
-        cfg.task.obs.observations[group], resolve=True
-      ) == OmegaConf.to_container(sp.task.obs.observations[group], resolve=True)
+        cfg.task.obs.observations[group].terms, resolve=True
+      ) == OmegaConf.to_container(
+        sp.task.obs.observations[group].terms, resolve=True
+      )
+    assert tuple(cfg.task.obs.observations.policy.disabled_terms) == (
+      "boot_indicator_state_obs",
+    )
+    assert tuple(cfg.task.obs.observations.priv.disabled_terms) == (
+      "body_z_termination_obs",
+      "gravity_dir_termination_obs",
+    )
+    assert cfg.task.obs.observations.priv_critic.enabled is False
+    assert OmegaConf.to_container(
+      cfg.task.obs.observations.priv_critic.terms, resolve=True
+    ) == OmegaConf.to_container(
+      sp.task.obs.observations.priv_critic.terms, resolve=True
+    )
     assert "adapter" not in OmegaConf.to_container(cfg.task, resolve=True)
 
 
@@ -122,19 +139,28 @@ def test_ablation_runtime_matches_bfm_except_sp_xml_compatibility() -> None:
     assert robot.spec_fn.__module__.startswith(
       "sp_tracking.assets.robots.g1_sp_tracking"
     )
-    assert type(env.actions["joint_pos"]).__name__ == "JointPositionActionCfg"
+    action = env.actions["joint_pos"]
+    assert type(action).__name__ == "ObservationHistoryJointPositionActionCfg"
+    assert action.observation_history_steps == 8
+    assert action.scale == G1_ACTION_SCALE
+    assert action.use_default_offset is True
     assert type(command).__name__ == "MultiMotionCommandCfg"
     assert command.motion_type == "mujoco"
     assert command.fk_from_joint_pos is True
     assert command.recompute_joint_vel_from_joint_pos is True
     assert command.sampling_mode == "adaptive"
     assert command.rewind.enabled is False
-    assert command.feet_standing == {}
+    assert tuple(command.feet_standing_body_names) == (
+      "left_ankle_roll_link",
+      "right_ankle_roll_link",
+    )
+    assert command.feet_standing["z_enter"] == 0.18
     assert command.resample_on_motion_end is True
     assert set(env.events) == expected_events
     assert set(env.terminations) == expected_terminations
     assert env.curriculum == {}
-    assert env.metrics == {}
+    assert set(env.metrics) == {"substep_tracking_cache"}
+    assert env.metrics["substep_tracking_cache"].per_substep is True
     assert "motion_global_root_pos" in env.rewards
     assert "root_pos_tracking" not in env.rewards
     assert env.episode_length_s == 10.0
@@ -146,3 +172,19 @@ def test_ablation_runtime_matches_bfm_except_sp_xml_compatibility() -> None:
     assert tuple(command.body_names) == tuple(
       cfg.task.reference_views.combined.body_names
     )
+
+
+def test_sp_xml_foot_friction_pattern_matches_all_foot_collision_geoms() -> None:
+  spec = get_g1_sp_tracking_spec()
+  geom_names = tuple(geom.name for geom in spec.geoms)
+  expected = {
+    f"{side}_foot{index}_collision"
+    for side in ("left", "right")
+    for index in range(1, 8)
+  }
+
+  for task_name in (*ABLATION_TASKS, "tracking_bfm_sp"):
+    cfg = _compose(task_name)
+    pattern = str(cfg.task.robot.foot_geom_pattern)
+    matched = {name for name in geom_names if re.fullmatch(pattern, name)}
+    assert matched == expected

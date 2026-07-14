@@ -9,3 +9,15 @@ defaults:
 observations:
   critic:
     enabled: false
+  policy:
+    # HEFT's boot indicator only has meaning together with its boot-protection
+    # action/reset path, which the BFM-runtime ablations intentionally omit.
+    disabled_terms: [boot_indicator_state_obs]
+  priv:
+    # These terms include stateful HEFT termination buffers.  Keeping their
+    # always-zero BFM fallbacks would not be a valid observation ablation.
+    disabled_terms: [body_z_termination_obs, gravity_dir_termination_obs]
+  priv_critic:
+    # Every term in this partition exposes HEFT-specific DR state.  BFM uses a
+    # different randomization surface, so the compatibility values are constant.
+    enabled: false

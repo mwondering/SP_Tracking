@@ -160,7 +160,8 @@ def test_ablation_observations_add_only_required_contact_sensors() -> None:
     "contact_forces",
     "self_collision",
   ]
-  assert env_cfg.metrics == {}
+  assert set(env_cfg.metrics) == {"substep_tracking_cache"}
+  assert env_cfg.metrics["substep_tracking_cache"].per_substep is True
 
 
 def test_observation_nan_policy_is_hydra_configurable() -> None:

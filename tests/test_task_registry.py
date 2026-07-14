@@ -56,5 +56,5 @@ def test_registered_ablation_uses_bfm_runtime_and_sp_observations() -> None:
   assert rl_cfg.experiment_name == "g1_tracking"
   assert rl_cfg.obs_groups == {
     "actor": ("policy",),
-    "critic": ("policy", "priv", "priv_critic"),
+    "critic": ("policy", "priv"),
   }

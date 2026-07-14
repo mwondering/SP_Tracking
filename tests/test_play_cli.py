@@ -79,15 +79,15 @@ def test_prepare_play_cfg_requires_task_for_legacy_local_checkpoint(tmp_path: Pa
   [
     (
       "tracking_bfm_sp_ablation_bfm_actor",
-      ["actor", "policy", "priv", "priv_critic"],
+      ["actor", "policy", "priv"],
     ),
     (
       "tracking_bfm_sp_ablation_student_actor",
-      ["actor", "policy", "priv", "priv_critic"],
+      ["actor", "policy", "priv"],
     ),
     (
       "tracking_bfm_sp_ablation_teacher_actor",
-      ["actor", "policy", "priv", "priv_critic"],
+      ["actor", "policy", "priv"],
     ),
   ],
 )

@@ -19,17 +19,16 @@ variant:
 agent_overrides:
   obs_groups:
     actor: [actor]
-    critic: [policy, priv, priv_critic]
+    critic: [policy, priv]
 
 # Replace only the articulation/reference schema.  Viewer, randomization,
 # action, reward, termination, and all other runtime settings stay inherited
-# from tracking_bfm.  The foot geom pattern is an XML-name compatibility fix
-# for the unchanged BFM friction event.
+# from tracking_bfm.  The SP XML retains BFM's ``*_foot[1-7]_collision`` geom
+# names, so the inherited foot-friction selector remains valid.
 robot:
   asset: sp_tracking_g1
   anchor_body_name: pelvis
   motion_type: mujoco
-  foot_geom_pattern: ^(left|right)_ankle_roll_link$
   body_names: ${task.reference_views.combined.body_names}
 
 # BFM terms explicitly select the old torso-anchored view.  SP observations
@@ -112,6 +111,15 @@ command:
     fk_from_joint_pos: true
     recompute_joint_vel_from_joint_pos: true
     motion_origin_recenter: true
+    # Reference-only contact state used by target_feet_contact_state_obs.
+    feet_standing_body_names: [left_ankle_roll_link, right_ankle_roll_link]
+    feet_standing:
+      z_enter: 0.18
+      z_exit: 0.25
+      vxy_enter: 0.2
+      vxy_exit: 0.3
+      vz_enter: 0.15
+      vz_exit: 0.25
     # Additional history required by SP policy/privileged observation terms.
     reference_cache_steps:
       joint_pos: [-16, -12, -8, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12, 16, 20]
@@ -120,3 +128,18 @@ command:
       body_quat_w: [-16, -12, -8, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12, 16, 20]
       body_lin_vel_w: [-8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 20]
       body_ang_vel_w: [-8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 20]
+
+# Preserve the standard BFM action dynamics while recording the policy means
+# required by HEFT's eight-step prev_actions observation.
+action:
+  type: joint_position_with_mean_history
+  observation_history_steps: 8
+
+# Observation-only physics-substep sampling.  No BFM reward consumes this
+# cache, so enabling it does not change the BFM optimization objective.
+metrics:
+  substep_tracking_cache:
+    term: substep_tracking_cache
+    params: {sensor_name: contact_forces}
+    per_substep: true
+    reduce: last

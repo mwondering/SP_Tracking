@@ -46,6 +46,12 @@ SP_REQUIRED_BODY_NAMES = (
 )
 
 SP_KEYPOINT_BODY_NAMES = (
+  "left_hip_yaw_link",
+  "left_knee_link",
+  "left_ankle_roll_link",
+  "right_hip_yaw_link",
+  "right_knee_link",
+  "right_ankle_roll_link",
   "head_mimic",
   "left_shoulder_yaw_link",
   "left_wrist_roll_link",
@@ -53,12 +59,6 @@ SP_KEYPOINT_BODY_NAMES = (
   "right_shoulder_yaw_link",
   "right_wrist_roll_link",
   "right_hand_mimic",
-  "left_hip_yaw_link",
-  "left_knee_link",
-  "left_ankle_roll_link",
-  "right_hip_yaw_link",
-  "right_knee_link",
-  "right_ankle_roll_link",
 )
 
 SP_FEET_BODY_NAMES = ("left_ankle_roll_link", "right_ankle_roll_link")
@@ -536,7 +536,7 @@ def _target_feet_standing(
   if (
     steps == (0,)
     and isinstance(standing_state, torch.Tensor)
-    and standing_state.shape[0] == env.num_envs
+    and standing_state.shape == (env.num_envs, len(SP_FEET_BODY_NAMES))
   ):
     return standing_state
   feet_motion_ids = _body_indices(tuple(cmd.cfg.body_names), SP_FEET_BODY_NAMES)
@@ -1036,11 +1036,14 @@ def feet_contact_state(
 def target_feet_contact_state_obs(
   env: "ManagerBasedRlEnv", command_name: str
 ) -> torch.Tensor:
-  cmd = _command(env, command_name)
-  standing = getattr(cmd, "feet_standing", None)
-  if isinstance(standing, torch.Tensor) and standing.shape[0] == env.num_envs:
-    return standing.float()
-  return _target_feet_standing(env, command_name).float()
+  standing = _target_feet_standing(env, command_name).float()
+  expected = (env.num_envs, len(SP_FEET_BODY_NAMES))
+  if standing.shape != expected:
+    raise RuntimeError(
+      "target_feet_contact_state_obs must contain one value per SP foot; "
+      f"expected={expected}, got={tuple(standing.shape)}"
+    )
+  return standing
 
 
 def domain_motor_params_implicit(env: "ManagerBasedRlEnv") -> torch.Tensor:
@@ -1058,9 +1061,10 @@ def domain_random_joint_offset(env: "ManagerBasedRlEnv") -> torch.Tensor:
   fallback = torch.zeros(
     (env.num_envs, len(env.scene["robot"].joint_names)), device=env.device
   )
-  return _canonical_joint_tensor(
-    env, _event_observation(env, "random_joint_offset", fallback)
-  )
+  # The HEFT event exposes values in its resolved randomization order, which
+  # follows the articulation/XML joint order for the catch-all range used by
+  # this task.  Do not apply the policy-facing canonical permutation here.
+  return _event_observation(env, "random_joint_offset", fallback)
 
 
 def domain_perturb_gravity(env: "ManagerBasedRlEnv") -> torch.Tensor:

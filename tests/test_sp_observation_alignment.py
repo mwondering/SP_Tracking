@@ -10,6 +10,24 @@ import torch
 sp = importlib.import_module("sp_tracking.tasks.tracking.mdp.sp")
 
 
+def test_sp_keypoint_order_matches_heft_asset_order() -> None:
+  assert sp.SP_KEYPOINT_BODY_NAMES == (
+    "left_hip_yaw_link",
+    "left_knee_link",
+    "left_ankle_roll_link",
+    "right_hip_yaw_link",
+    "right_knee_link",
+    "right_ankle_roll_link",
+    "head_mimic",
+    "left_shoulder_yaw_link",
+    "left_wrist_roll_link",
+    "left_hand_mimic",
+    "right_shoulder_yaw_link",
+    "right_wrist_roll_link",
+    "right_hand_mimic",
+  )
+
+
 def test_rot6d_matches_reference_column_major_semantics():
   # A non-symmetric rotation distinguishes the source column-contiguous
   # encoding from the previous row-interleaved flattening.
@@ -177,6 +195,26 @@ def test_target_pos_b_obs_subtracts_env_origin_from_current_root() -> None:
   obs = sp.target_pos_b_obs(env, command_name="motion")
 
   assert torch.allclose(obs[:, :3], torch.tensor([[1.0, 0.0, 0.0]]))
+
+
+def test_target_feet_contact_fallback_always_returns_two_feet() -> None:
+  body_names = ("pelvis", *sp.SP_FEET_BODY_NAMES)
+  body_pos_w = torch.zeros((1, 8, 3, 3), dtype=torch.float32)
+  body_lin_vel_w = torch.zeros_like(body_pos_w)
+  body_pos_w[:, :, body_names.index("left_ankle_roll_link"), 2] = 0.1
+  body_pos_w[:, :, body_names.index("right_ankle_roll_link"), 2] = 0.3
+  command = _FakeCommand(
+    {"body_pos_w": body_pos_w, "body_lin_vel_w": body_lin_vel_w}, body_names
+  )
+  asset = _FakeAsset(
+    data=SimpleNamespace(), body_names=body_names, joint_count=1
+  )
+  env = _make_env(asset=asset, command=command)
+
+  obs = sp.target_feet_contact_state_obs(env, command_name="motion")
+
+  assert obs.shape == (1, 2)
+  assert torch.equal(obs, torch.tensor([[1.0, 0.0]]))
 
 
 def test_joint_pos_history_subtracts_action_offset_for_current_sample() -> None:

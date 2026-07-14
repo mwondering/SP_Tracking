@@ -33,7 +33,7 @@ robot:
   viewer_body_name: pelvis
   motion_type: mujoco
   self_collision_primary_pattern: pelvis
-  foot_geom_pattern: ^(left|right)_ankle_roll_link$
+  foot_geom_pattern: ^(left|right)_foot[1-7]_collision$
   base_com_body_names: [pelvis]
   body_names:
     - pelvis

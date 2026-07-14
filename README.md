@@ -120,13 +120,16 @@ the independent HEFT pretrain profile.
 | --- | --- | --- | --- |
 | `tracking_bfm` | BFM `actor` | BFM `critic` | BFM XML + complete BFM runtime |
 | `tracking_bfm_sp` | `policy + priv` | `policy + priv + priv_critic` | SP XML + HEFT pretrain runtime |
-| `tracking_bfm_sp_ablation_bfm_actor` | BFM `actor` | `policy + priv + priv_critic` | SP XML compatibility + complete BFM runtime |
-| `tracking_bfm_sp_ablation_student_actor` | SP student `policy` | `policy + priv + priv_critic` | SP XML compatibility + complete BFM runtime |
-| `tracking_bfm_sp_ablation_teacher_actor` | raw `policy + priv` | `policy + priv + priv_critic` | SP XML compatibility + complete BFM runtime |
+| `tracking_bfm_sp_ablation_bfm_actor` | BFM `actor` | `policy + priv` | SP XML compatibility + complete BFM runtime |
+| `tracking_bfm_sp_ablation_student_actor` | SP student `policy` | `policy + priv` | SP XML compatibility + complete BFM runtime |
+| `tracking_bfm_sp_ablation_teacher_actor` | raw `policy + priv` | `policy + priv` | SP XML compatibility + complete BFM runtime |
 
 All three ablations use the same BFM `MLPModel` hidden layers for actor and
 critic. Raw observation dimensions necessarily change the actor input layer;
 no adapter, privileged encoder, or parameter-count matching is applied.
+The ablations omit `priv_critic` because its four terms expose HEFT-specific
+domain-randomization state; under BFM randomization they would only be constant
+fallback values. The independent `tracking_bfm_sp` pretrain task keeps them.
 
 ## Checkpoints, Resume, and Deployment Export
 

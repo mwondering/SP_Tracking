@@ -2,7 +2,34 @@ from types import SimpleNamespace
 
 import torch
 
-from sp_tracking.tasks.tracking.mdp.actions import SpTrackingJointPositionAction
+from sp_tracking.tasks.tracking.mdp.actions import (
+  ObservationHistoryJointPositionAction,
+  SpTrackingJointPositionAction,
+)
+
+
+def test_bfm_action_observation_history_records_full_mean_sequence() -> None:
+  action = object.__new__(ObservationHistoryJointPositionAction)
+  action._raw_actions = torch.zeros((1, 3))
+  action._observation_order = torch.tensor([2, 0, 1])
+  action._observation_history_steps = 8
+  action._policy_mean_history = torch.zeros((1, 8, 3))
+  action._env = SimpleNamespace(num_envs=1)
+
+  for index in range(1, 10):
+    action.record_policy_mean(
+      torch.tensor([[index * 10.0 + 1.0, index * 10.0 + 2.0, index * 10.0 + 3.0]])
+    )
+
+  history = action.get_recent_action_obs(8)
+  assert history.shape == (1, 8, 3)
+  for history_index, source_index in enumerate(range(9, 1, -1)):
+    assert torch.equal(
+      history[0, history_index],
+      torch.tensor(
+        [source_index * 10.0 + 3.0, source_index * 10.0 + 1.0, source_index * 10.0 + 2.0]
+      ),
+    )
 
 
 def test_sp_tracking_action_torque_schedule_applies_configured_scale() -> None:

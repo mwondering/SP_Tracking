@@ -9,4 +9,4 @@ variant:
 agent_overrides:
   obs_groups:
     actor: [policy]
-    critic: [policy, priv, priv_critic]
+    critic: [policy, priv]
