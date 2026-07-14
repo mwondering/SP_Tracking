@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+from pathlib import Path
+
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
 
@@ -17,6 +20,16 @@ ABLATION_TASKS = {
 def _compose(task_name: str):
   with initialize_config_module(version_base=None, config_module="sp_tracking.conf"):
     return compose(config_name="train", overrides=[f"task={task_name}"])
+
+
+def test_ablation_base_inherits_tracking_bfm_directly() -> None:
+  config_path = (
+    Path(__file__).parents[1]
+    / "src/sp_tracking/conf/task/tracking_bfm_sp_ablation_bfm_actor.yaml"
+  )
+  source = OmegaConf.load(config_path)
+  assert source.defaults[0] == "tracking_bfm"
+  assert "tracking_bfm_sp" not in source.defaults
 
 
 def test_supported_task_profile_matrix() -> None:
@@ -63,6 +76,12 @@ def test_actor_observation_is_the_only_difference_between_ablation_agents() -> N
     assert agent.algorithm == first.algorithm
     assert agent.num_steps_per_env == first.num_steps_per_env == 24
     assert agent.seed == first.seed == 42
+
+    actual = asdict(agent)
+    expected = asdict(first)
+    actual.pop("obs_groups")
+    expected.pop("obs_groups")
+    assert actual == expected
 
 
 def test_ablation_observation_terms_are_reused_without_adapter() -> None:

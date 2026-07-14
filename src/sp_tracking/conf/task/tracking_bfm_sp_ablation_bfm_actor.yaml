@@ -1,17 +1,14 @@
 defaults:
-  - tracking_bfm_sp
-  - override command: multimotion
+  - tracking_bfm
   - override obs: sp_actor_ablation
-  - override reward: old_tracking
-  - override /agent@_global_.agent: tracking_bfm_ppo
   - _self_
 
-# BFM training/runtime on the SP XML.  This is the common base for the three
-# raw-observation ablations; children only change the actor observation groups.
+# The ablations are BFM tasks first.  Only the SP XML/reference schema and the
+# data required to evaluate SP observations are added below.
 name: tracking_bfm_sp_ablation_bfm_actor
 variant:
-  environment_profile: sp_xml_bfm_runtime
-  reference_profile: sp_tracking
+  environment_profile: bfm_runtime_sp_xml
+  reference_profile: sp_xml_compatibility
   observation_profile: bfm_actor_sp_critic
   reward_profile: old_tracking
   termination_profile: old_tracking
@@ -19,86 +16,103 @@ variant:
   sampling_profile: bfm_multimotion
   agent_profile: bfm_ppo
 
-num_envs: 1
-episode_length_s: 10.0
-seed: 42
-total_frames: null
-init_at_random_ep_len: true
-student_train: false
-
 agent_overrides:
   obs_groups:
     actor: [actor]
     critic: [policy, priv, priv_critic]
 
-# SP observations require the SP body/joint schema.  The old named view is
-# retained for the BFM actor, rewards, and terminations.
+# Replace only the articulation/reference schema.  Viewer, randomization,
+# action, reward, termination, and all other runtime settings stay inherited
+# from tracking_bfm.  The foot geom pattern is an XML-name compatibility fix
+# for the unchanged BFM friction event.
 robot:
+  asset: sp_tracking_g1
+  anchor_body_name: pelvis
+  motion_type: mujoco
+  foot_geom_pattern: ^(left|right)_ankle_roll_link$
   body_names: ${task.reference_views.combined.body_names}
-  base_com_body_names: [torso_link]
-  viewer_body_name: torso_link
-  foot_geom_pattern: ^(left|right)_foot[1-7]_collision$
-  termination_body_names: ${task.reference_views.old_tracking.termination_body_names}
 
-# Preserve BFM solver settings.  The larger contact match capacity is the only
-# sensor-side XML compatibility adjustment needed by the SP privileged terms.
+# BFM terms explicitly select the old torso-anchored view.  SP observations
+# consume the primary pelvis view from the same union reference cache.
+reference_views:
+  old_tracking:
+    anchor_body_name: torso_link
+    body_names:
+      - pelvis
+      - left_hip_roll_link
+      - left_knee_link
+      - left_ankle_roll_link
+      - right_hip_roll_link
+      - right_knee_link
+      - right_ankle_roll_link
+      - torso_link
+      - left_shoulder_roll_link
+      - left_elbow_link
+      - left_wrist_yaw_link
+      - right_shoulder_roll_link
+      - right_elbow_link
+      - right_wrist_yaw_link
+    termination_body_names:
+      - left_ankle_roll_link
+      - right_ankle_roll_link
+      - left_wrist_yaw_link
+      - right_wrist_yaw_link
+  sp_tracking:
+    anchor_body_name: pelvis
+    body_names:
+      - pelvis
+      - left_hip_yaw_link
+      - left_knee_link
+      - left_ankle_roll_link
+      - right_hip_yaw_link
+      - right_knee_link
+      - right_ankle_roll_link
+      - torso_link
+      - head_mimic
+      - left_shoulder_yaw_link
+      - left_wrist_roll_link
+      - left_hand_mimic
+      - right_shoulder_yaw_link
+      - right_wrist_roll_link
+      - right_hand_mimic
+  combined:
+    body_names:
+      - pelvis
+      - left_hip_yaw_link
+      - left_knee_link
+      - left_ankle_roll_link
+      - right_hip_yaw_link
+      - right_knee_link
+      - right_ankle_roll_link
+      - torso_link
+      - head_mimic
+      - left_shoulder_yaw_link
+      - left_wrist_roll_link
+      - left_hand_mimic
+      - right_shoulder_yaw_link
+      - right_wrist_roll_link
+      - right_hand_mimic
+      - left_hip_roll_link
+      - right_hip_roll_link
+      - left_shoulder_roll_link
+      - left_elbow_link
+      - left_wrist_yaw_link
+      - right_shoulder_roll_link
+      - right_elbow_link
+      - right_wrist_yaw_link
+
+# The BFM solver values remain inherited.  SP privileged observations require
+# the two-foot contact sensor to support a larger match buffer.
 sim:
-  timestep: 0.005
-  iterations: 10
-  ls_iterations: 20
-  nconmax: 128
-  njmax: 512
   contact_sensor_maxmatch: 128
 
 command:
   command:
-    # Required only to interpret the motion data with the SP XML.
+    # Required to interpret MuJoCo-format motion data on the SP articulation.
     fk_from_joint_pos: true
     recompute_joint_vel_from_joint_pos: true
     motion_origin_recenter: true
-    sliding_root_xy_reward: false
-    # Restore BFM command/reset/sampling behavior.
-    boot_indicator_max: 0
-    termination_warmup_steps: 0
-    feet_standing_body_names: []
-    # null is intentional: replacing the inherited SP mapping restores the
-    # empty BFM setting instead of recursively merging the two mappings.
-    feet_standing: null
-    resample_on_motion_end: true
-    sampling_mode: adaptive
-    motion_sampling_groups: []
-    adaptive_uniform_ratio: 0.1
-    adaptive_sampling:
-      strategy: mixture
-      random_probability: null
-    rewind:
-      enabled: false
-      failure_probability: 0.4
-      min_steps: 0
-      max_steps: 0
-    init_noise: {}
-    skip_initial_frames: 0
-    sample_tail_margin_steps: 0
-    student_motion_randomization: {}
-    pose_range:
-      x: [-0.05, 0.05]
-      y: [-0.05, 0.05]
-      z: [-0.01, 0.01]
-      roll: [-0.1, 0.1]
-      pitch: [-0.1, 0.1]
-      yaw: [-0.2, 0.2]
-    velocity_range:
-      x: [-0.5, 0.5]
-      y: [-0.5, 0.5]
-      z: [-0.2, 0.2]
-      roll: [-0.52, 0.52]
-      pitch: [-0.52, 0.52]
-      yaw: [-0.78, 0.78]
-    joint_position_range: [-0.1, 0.1]
-    reset_root_lift_height: 0.0
-    reset_min_body_z: null
-    reset_joint_vel_limit: null
-    # SP observation horizons need a wider cache, but do not alter sampling.
+    # Additional history required by SP policy/privileged observation terms.
     reference_cache_steps:
       joint_pos: [-16, -12, -8, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12, 16, 20]
       joint_vel: [0]
@@ -106,74 +120,3 @@ command:
       body_quat_w: [-16, -12, -8, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12, 16, 20]
       body_lin_vel_w: [-8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 20]
       body_ang_vel_w: [-8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 20]
-
-# Exact BFM action interface on the SP articulation.
-action:
-  type: joint_position
-  scale: g1_action_scale
-  use_default_offset: true
-  actuator_names: [".*"]
-
-# Exact BFM randomization surface.
-events:
-  push_robot:
-    enabled: true
-    interval_range_s: [1.0, 3.0]
-  base_com:
-    enabled: true
-    ranges:
-      0: [-0.075, 0.075]
-      1: [-0.075, 0.075]
-      2: [-0.075, 0.075]
-  base_mass:
-    enabled: true
-    body_names: [torso_link]
-    ranges: [-1.0, 1.0]
-  encoder_bias:
-    enabled: true
-    bias_range: [-0.01, 0.01]
-  foot_friction:
-    enabled: true
-    ranges: [0.3, 2.0]
-    shared_random: true
-  perturb_body_com: {enabled: false}
-  perturb_body_materials: {enabled: false}
-  motor_params_implicit: {enabled: false}
-  random_joint_offset: {enabled: false}
-  perturb_root_vel: {enabled: false}
-  perturb_body_wrench: {enabled: false}
-  perturb_gravity: {enabled: false}
-
-curriculum:
-  sp_tracking_progress:
-    enabled: false
-
-metrics:
-  substep_tracking_cache:
-    enabled: false
-
-terminations:
-  - name: time_out
-    term: time_out
-    time_out: true
-  - name: anchor_pos
-    term: bad_anchor_pos_z_only
-    params:
-      command_name: motion
-      threshold: 0.5
-      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
-  - name: anchor_ori
-    term: bad_anchor_ori
-    params:
-      command_name: motion
-      threshold: 0.8
-      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
-      asset_cfg:
-        entity_name: robot
-  - name: ee_body_pos
-    term: bad_motion_body_pos_z_only
-    params:
-      command_name: motion
-      threshold: 0.5
-      body_names: ${task.reference_views.old_tracking.termination_body_names}
-      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
