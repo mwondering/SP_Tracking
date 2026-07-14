@@ -50,6 +50,41 @@ def _anchor_pose(
   )
 
 
+def reference_joint_state_window(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  history_steps: int = 5,
+  future_steps: int = 5,
+) -> torch.Tensor:
+  """Return the wbteleop reference joint window without mutating command config.
+
+  The layout matches ``MotionCommand.command`` from the source tracking_bfm
+  task: all reference joint positions first, followed by all velocities.  A
+  5-step history and ``future_steps=5`` produce ten frames total (past five,
+  current, future four), or 580 values for the 29-DoF G1.
+  """
+  command = cast(MotionCommand, env.command_manager.get_term(command_name))
+  history_steps = int(history_steps)
+  future_steps = int(future_steps)
+  if history_steps < 0 or future_steps < 1:
+    raise ValueError(
+      "reference_joint_state_window requires history_steps >= 0 and "
+      "future_steps >= 1"
+    )
+  offsets = [*range(-history_steps, 0), 0, *range(1, future_steps)]
+  relative_steps = torch.tensor(
+    offsets, device=command.time_steps.device, dtype=torch.long
+  )
+  time_steps = command.time_steps.unsqueeze(1) + relative_steps.unsqueeze(0)
+  joint_pos = command._gather_motion_field(
+    "joint_pos", command.motion_idx, time_steps
+  ).reshape(env.num_envs, -1)
+  joint_vel = command._gather_motion_field(
+    "joint_vel", command.motion_idx, time_steps
+  ).reshape(env.num_envs, -1)
+  return torch.cat((joint_pos, joint_vel), dim=-1)
+
+
 def motion_anchor_pos_b(
   env: ManagerBasedRlEnv,
   command_name: str,

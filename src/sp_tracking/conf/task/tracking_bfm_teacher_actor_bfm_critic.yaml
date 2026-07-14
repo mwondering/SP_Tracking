@@ -1,0 +1,26 @@
+defaults:
+  - tracking_bfm_sp_ablation_teacher_actor
+  - _self_
+
+name: tracking_bfm_teacher_actor_bfm_critic
+variant:
+  observation_profile: sp_teacher_actor_bfm_critic
+
+# Keep the HEFT teacher actor observation, while restoring the complete
+# tracking_bfm critic observation and value network.
+obs:
+  observations:
+    critic:
+      enabled: true
+
+agent_overrides:
+  obs_groups:
+    actor: [policy, priv]
+    critic: [critic]
+  critic:
+    hidden_dims: [2048, 2048, 1024, 1024, 512, 256, 128]
+    activation: elu
+    obs_normalization: true
+    class_name: MLPModel
+    distribution_cfg: null
+

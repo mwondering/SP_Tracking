@@ -1,0 +1,71 @@
+defaults:
+  - tracking_bfm
+  - _self_
+
+name: tracking_bfm_wbteleop_actor_bfm_critic
+variant:
+  observation_profile: wbteleop_808_actor_bfm_critic
+
+# Reproduce the 808-D actor input used by the source tracking_bfm checkpoint:
+# 580-D reference q/qdot window + 228-D current tracking/robot state.  The
+# command itself stays at history=0/future=1 so the BFM critic remains 286-D.
+obs:
+  observations:
+    actor:
+      concatenate_terms: true
+      enable_corruption: true
+      terms:
+        - name: command
+          term: reference_joint_state_window
+          params:
+            command_name: motion
+            history_steps: 5
+            future_steps: 5
+        - name: motion_anchor_pos_b
+          term: motion_anchor_pos_b
+          params:
+            command_name: motion
+            anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
+          noise: [-0.25, 0.25]
+        - name: motion_anchor_ori_b
+          term: motion_anchor_ori_b
+          params:
+            command_name: motion
+            anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
+          noise: [-0.05, 0.05]
+        - name: body_pos
+          term: robot_body_pos_b
+          params:
+            command_name: motion
+            body_names: ${task.reference_views.old_tracking.body_names}
+            anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
+          noise: [-0.25, 0.25]
+        - name: body_ori
+          term: robot_body_ori_b
+          params:
+            command_name: motion
+            body_names: ${task.reference_views.old_tracking.body_names}
+            anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
+          noise: [-0.05, 0.05]
+        - name: base_lin_vel
+          term: builtin_sensor
+          params: {sensor_name: robot/imu_lin_vel}
+          noise: [-0.5, 0.5]
+        - name: base_ang_vel
+          term: builtin_sensor
+          params: {sensor_name: robot/imu_ang_vel}
+          noise: [-0.2, 0.2]
+        - name: joint_pos
+          term: joint_pos_rel
+          noise: [-0.01, 0.01]
+        - name: joint_vel
+          term: joint_vel_rel
+          noise: [-0.5, 0.5]
+        - name: actions
+          term: last_action
+
+agent_overrides:
+  obs_groups:
+    actor: [actor]
+    critic: [critic]
+

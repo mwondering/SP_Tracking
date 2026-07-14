@@ -221,11 +221,14 @@ uv build
 
 ## mjlab Task Entry Point
 
-Installing the package exposes five mjlab task IDs via the `mjlab.tasks` entry
+Installing the package exposes eight mjlab task IDs via the `mjlab.tasks` entry
 point:
 
-- `SPTracking-G1-BFM`
-- `SPTracking-G1-BFM-SP`
-- `SPTracking-G1-BFM-SP-Ablation-BFMActor`
-- `SPTracking-G1-BFM-SP-Ablation-StudentActor`
-- `SPTracking-G1-BFM-SP-Ablation-TeacherActor`
+- `SPTracking-G1-BFM-BFMActor-BFMCritic`
+- `SPTracking-G1-HEFT-TeacherActor-HEFTCritic`
+- `SPTracking-G1-BFM-BFMActor-HEFTCritic`
+- `SPTracking-G1-BFM-StudentActor-HEFTCritic`
+- `SPTracking-G1-BFM-TeacherActor-HEFTCritic`
+- `SPTracking-G1-BFM-StudentActor-BFMCritic`
+- `SPTracking-G1-BFM-TeacherActor-BFMCritic`
+- `SPTracking-G1-BFM-WBTeleopActor-BFMCritic`

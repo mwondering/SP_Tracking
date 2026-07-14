@@ -48,6 +48,7 @@ from sp_tracking.tasks.tracking.mdp.multi_commands import (
 
 OBS_TERMS = {
   "generated_commands": mdp.generated_commands,
+  "reference_joint_state_window": mdp.reference_joint_state_window,
   "motion_anchor_pos_b": mdp.motion_anchor_pos_b,
   "motion_anchor_ori_b": mdp.motion_anchor_ori_b,
   "robot_body_pos_b": mdp.robot_body_pos_b,

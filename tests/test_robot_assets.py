@@ -52,6 +52,9 @@ def test_observation_ablations_use_only_bfm_physical_bodies() -> None:
     "tracking_bfm_sp_ablation_bfm_actor",
     "tracking_bfm_sp_ablation_student_actor",
     "tracking_bfm_sp_ablation_teacher_actor",
+    "tracking_bfm_student_actor_bfm_critic",
+    "tracking_bfm_teacher_actor_bfm_critic",
+    "tracking_bfm_wbteleop_actor_bfm_critic",
   ):
     cfg = _compose(f"task={task}")
     env_cfg = build_env_cfg(cfg.task)

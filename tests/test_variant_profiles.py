@@ -18,6 +18,11 @@ ABLATION_TASKS = {
   "tracking_bfm_sp_ablation_teacher_actor": ("policy", "priv"),
 }
 
+BFM_CRITIC_BASELINES = {
+  "tracking_bfm_student_actor_bfm_critic": ("policy",),
+  "tracking_bfm_teacher_actor_bfm_critic": ("policy", "priv"),
+}
+
 
 def _compose(task_name: str):
   with initialize_config_module(version_base=None, config_module="sp_tracking.conf"):
@@ -104,6 +109,50 @@ def test_actor_observation_is_the_only_difference_between_ablation_agents() -> N
   )
 
 
+def test_student_and_teacher_actor_baselines_restore_bfm_critic() -> None:
+  bfm = prepare_train_cfg(_compose("tracking_bfm"))
+
+  for task_name, actor_groups in BFM_CRITIC_BASELINES.items():
+    prepared = prepare_train_cfg(_compose(task_name))
+    assert tuple(prepared.env.observations) == (
+      "actor",
+      "critic",
+      "policy",
+      "priv",
+    )
+    assert prepared.agent.obs_groups == {
+      "actor": actor_groups,
+      "critic": ("critic",),
+    }
+    assert prepared.agent.critic == bfm.agent.critic
+    assert prepared.agent.algorithm == bfm.agent.algorithm
+    assert prepared.agent.num_steps_per_env == bfm.agent.num_steps_per_env
+    assert prepared.agent.seed == bfm.agent.seed
+
+
+def test_bfm_critic_baselines_only_change_actor_observation_from_parent() -> None:
+  parent_by_baseline = {
+    "tracking_bfm_student_actor_bfm_critic": (
+      "tracking_bfm_sp_ablation_student_actor"
+    ),
+    "tracking_bfm_teacher_actor_bfm_critic": (
+      "tracking_bfm_sp_ablation_teacher_actor"
+    ),
+  }
+
+  for baseline_name, parent_name in parent_by_baseline.items():
+    baseline = _compose(baseline_name)
+    parent = _compose(parent_name)
+    for group in ("policy", "priv"):
+      assert OmegaConf.to_container(
+        baseline.task.obs.observations[group], resolve=True
+      ) == OmegaConf.to_container(
+        parent.task.obs.observations[group], resolve=True
+      )
+    assert baseline.task.obs.observations.critic.enabled is True
+    assert parent.task.obs.observations.critic.enabled is False
+
+
 def test_ablation_observation_terms_are_reused_without_adapter() -> None:
   bfm = _compose("tracking_bfm")
   sp = _compose("tracking_bfm_sp")
@@ -111,7 +160,7 @@ def test_ablation_observation_terms_are_reused_without_adapter() -> None:
     bfm.task.obs.observations.actor, resolve=True
   )
 
-  for task_name in ABLATION_TASKS:
+  for task_name in (*ABLATION_TASKS, *BFM_CRITIC_BASELINES):
     cfg = _compose(task_name)
     assert OmegaConf.to_container(
       cfg.task.obs.observations.actor, resolve=True
@@ -153,7 +202,7 @@ def test_ablation_runtime_matches_bfm_with_semantic_keypoints_only() -> None:
   }
   expected_terminations = {"time_out", "anchor_pos", "anchor_ori", "ee_body_pos"}
 
-  for task_name in ABLATION_TASKS:
+  for task_name in (*ABLATION_TASKS, *BFM_CRITIC_BASELINES):
     cfg = _compose(task_name)
     env = build_env_cfg(cfg.task)
     command = env.commands["motion"]
