@@ -20,13 +20,19 @@ agent_overrides:
   obs_groups:
     actor: [actor]
     critic: [policy, priv]
+  critic:
+    class_name: sp_tracking.tasks.tracking.rl.heft_models:HeftTeacherCritic
+    hidden_dims: [1024, 512, 512]
+    activation: mish
+    obs_normalization: true
+    vecnorm_decay: 0.9999
 
-# Replace only the articulation/reference schema.  Viewer, randomization,
-# action, reward, termination, and all other runtime settings stay inherited
-# from tracking_bfm.  The SP XML retains BFM's ``*_foot[1-7]_collision`` geom
-# names, so the inherited foot-friction selector remains valid.
+# Replace only the XML body topology/reference schema. Init state, collision,
+# articulation, viewer, randomization, action, reward, termination, and all
+# other runtime settings stay inherited from tracking_bfm. The SP XML retains
+# BFM's ``*_foot[1-7]_collision`` geom names, so its friction selector is valid.
 robot:
-  asset: sp_tracking_g1
+  asset: sp_xml_bfm_runtime_g1
   anchor_body_name: pelvis
   motion_type: mujoco
   body_names: ${task.reference_views.combined.body_names}

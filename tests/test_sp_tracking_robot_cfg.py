@@ -3,6 +3,7 @@ import pytest
 from sp_tracking.assets.robots.g1_sp_tracking import (
   G1_SP_JOINT_ORDER,
   G1_SP_TRACKING_ARTICULATION,
+  get_g1_sp_xml_bfm_runtime_robot_cfg,
   get_g1_sp_tracking_robot_cfg,
 )
 from sp_tracking.assets.robots.g1_tracking_bfm import (
@@ -37,6 +38,19 @@ def test_sp_tracking_articulation_is_isolated_from_tracking_bfm() -> None:
 
   assert sp_robot.articulation is G1_SP_TRACKING_ARTICULATION
   assert baseline_robot.articulation is not G1_SP_TRACKING_ARTICULATION
+
+
+def test_sp_xml_bfm_runtime_robot_changes_only_xml_and_sp_metadata() -> None:
+  hybrid = get_g1_sp_xml_bfm_runtime_robot_cfg()
+  baseline = get_g1_tracking_bfm_robot_cfg()
+
+  assert hybrid.spec_fn.__module__.startswith(
+    "sp_tracking.assets.robots.g1_sp_tracking"
+  )
+  assert hybrid.init_state == baseline.init_state
+  assert hybrid.articulation == baseline.articulation
+  assert hybrid.collisions == baseline.collisions
+  assert hybrid.joint_name_order == G1_SP_JOINT_ORDER
 
 
 def test_sp_tracking_wrapper_matches_reference_initial_state_and_collision() -> None:

@@ -310,7 +310,7 @@ events:
         - torso_link
       com_range: [-0.03, 0.03]
   perturb_body_materials:
-    enabled: true
+    enabled: false
     term: perturb_body_materials
     mode: startup
     params:

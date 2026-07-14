@@ -10,3 +10,7 @@ agent_overrides:
   obs_groups:
     actor: [policy]
     critic: [policy, priv]
+  # Match the BFM actor's ~8.62M trainable MLP parameters despite the wider
+  # raw student observation by adjusting only the input-facing hidden layer.
+  actor:
+    hidden_dims: [1266, 2048, 1024, 1024, 512, 256, 128]

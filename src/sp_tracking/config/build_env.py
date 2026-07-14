@@ -25,6 +25,7 @@ from mjlab.utils.noise import UniformNoiseCfg
 from mjlab.viewer import ViewerConfig
 
 from sp_tracking.assets.robots import (
+  get_g1_sp_xml_bfm_runtime_robot_cfg,
   get_g1_sp_tracking_robot_cfg,
   get_g1_tracking_bfm_robot_cfg,
 )
@@ -693,6 +694,8 @@ def _build_robot(cfg: DictConfig):
     return get_g1_tracking_bfm_robot_cfg()
   if asset == "sp_tracking_g1":
     return get_g1_sp_tracking_robot_cfg()
+  if asset == "sp_xml_bfm_runtime_g1":
+    return get_g1_sp_xml_bfm_runtime_robot_cfg()
   raise ValueError(f"Unsupported robot asset: {asset}")
 
 

@@ -9,8 +9,11 @@ from mjlab.actuator import BuiltinPositionActuatorCfg
 
 from mjlab.asset_zoo.robots.unitree_g1.g1_constants import (
   FULL_COLLISION,
+  KNEES_BENT_KEYFRAME,
 )
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
+
+from sp_tracking.assets.robots.safety import get_safe_g1_articulation
 
 
 G1_SP_TRACKING_XML = Path(__file__).with_name("g1.xml")
@@ -202,6 +205,22 @@ def get_g1_sp_tracking_robot_cfg() -> EntityCfg:
   # These attributes are intentionally attached for compatibility with the
   # original wrapper.  EntityCfg is not slotted, and mjlab preserves them on
   # the asset configuration for downstream consumers.
+  cfg.joint_symmetry_mapping = G1_SP_JOINT_SYMMETRY_MAP
+  cfg.spatial_symmetry_mapping = G1_SP_SPATIAL_SYMMETRY_MAP
+  cfg.joint_name_order = G1_SP_JOINT_ORDER
+  return cfg
+
+
+def get_g1_sp_xml_bfm_runtime_robot_cfg() -> EntityCfg:
+  """Use the SP body topology with every non-XML robot setting from BFM."""
+  cfg = EntityCfg(
+    init_state=KNEES_BENT_KEYFRAME,
+    collisions=(FULL_COLLISION,),
+    spec_fn=get_g1_sp_tracking_spec,
+    articulation=get_safe_g1_articulation(),
+  )
+  # SP observation terms need these ordering/symmetry metadata, but they do
+  # not affect the BFM actuator, reset, collision, reward, or action runtime.
   cfg.joint_symmetry_mapping = G1_SP_JOINT_SYMMETRY_MAP
   cfg.spatial_symmetry_mapping = G1_SP_SPATIAL_SYMMETRY_MAP
   cfg.joint_name_order = G1_SP_JOINT_ORDER

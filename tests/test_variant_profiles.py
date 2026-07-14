@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict
 from pathlib import Path
 
 from hydra import compose, initialize_config_module
@@ -69,21 +68,40 @@ def test_actor_observation_is_the_only_difference_between_ablation_agents() -> N
   for item in prepared.values():
     agent = item.agent
     assert agent.actor.class_name == "MLPModel"
-    assert agent.critic.class_name == "MLPModel"
+    assert agent.critic.class_name.endswith(":HeftTeacherCritic")
     assert agent.algorithm.class_name == "PPO"
-    assert agent.actor.hidden_dims == first.actor.hidden_dims
     assert agent.critic.hidden_dims == first.critic.hidden_dims
     assert agent.actor.activation == first.actor.activation == "elu"
-    assert agent.critic.activation == first.critic.activation == "elu"
+    assert agent.critic.activation == first.critic.activation == "mish"
+    assert agent.critic.hidden_dims == (1024, 512, 512)
+    assert agent.critic.vecnorm_decay == 0.9999
     assert agent.algorithm == first.algorithm
     assert agent.num_steps_per_env == first.num_steps_per_env == 24
     assert agent.seed == first.seed == 42
 
-    actual = asdict(agent)
-    expected = asdict(first)
-    actual.pop("obs_groups")
-    expected.pop("obs_groups")
-    assert actual == expected
+  actor_dims = {
+    "tracking_bfm_sp_ablation_bfm_actor": 286,
+    "tracking_bfm_sp_ablation_student_actor": 1728,
+    "tracking_bfm_sp_ablation_teacher_actor": 6330,
+  }
+
+  def parameter_count(input_dim: int, hidden_dims: tuple[int, ...]) -> int:
+    dims = (input_dim, *hidden_dims, 29)
+    return sum(
+      in_dim * out_dim + out_dim
+      for in_dim, out_dim in zip(dims, dims[1:], strict=False)
+    )
+
+  counts = {
+    name: parameter_count(actor_dims[name], item.agent.actor.hidden_dims)
+    for name, item in prepared.items()
+  }
+  baseline_count = counts["tracking_bfm_sp_ablation_bfm_actor"]
+  assert baseline_count == 8_624_669
+  assert all(
+    abs(count - baseline_count) / baseline_count < 0.001
+    for count in counts.values()
+  )
 
 
 def test_ablation_observation_terms_are_reused_without_adapter() -> None:
@@ -135,10 +153,16 @@ def test_ablation_runtime_matches_bfm_except_sp_xml_compatibility() -> None:
     env = build_env_cfg(cfg.task)
     command = env.commands["motion"]
     robot = env.scene.entities["robot"]
+    baseline_robot = build_env_cfg(_compose("tracking_bfm").task).scene.entities[
+      "robot"
+    ]
 
     assert robot.spec_fn.__module__.startswith(
       "sp_tracking.assets.robots.g1_sp_tracking"
     )
+    assert robot.init_state == baseline_robot.init_state
+    assert robot.articulation == baseline_robot.articulation
+    assert robot.collisions == baseline_robot.collisions
     action = env.actions["joint_pos"]
     assert type(action).__name__ == "ObservationHistoryJointPositionActionCfg"
     assert action.observation_history_steps == 8

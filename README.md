@@ -35,9 +35,9 @@ scripts/train_tracking_bfm.sh /path/to/motions task.num_envs=2048 agent.max_iter
   mjlab manager/rsl-rl dataclass configs.
 - `src/sp_tracking/conf`: the single Hydra config source used by `sp-train`,
   tests, and the mjlab task entry point.
-- `src/sp_tracking/assets/robots`: two packaged G1 assets selected by task:
-  `tracking_bfm_g1` for `tracking_bfm` and `sp_tracking_g1` for
-  `tracking_bfm_sp`.
+- `src/sp_tracking/assets/robots`: packaged G1 assets selected by task. The
+  ablations use the SP XML/body topology with BFM init, collision, and actuator
+  settings; `tracking_bfm_sp` retains the complete HEFT robot configuration.
 - `scripts/train_tracking_bfm.sh`: repo-local launch script for the default
   training run.
 - `scripts/play_tracking_bfm.sh`: repo-local play script for local or W&B
@@ -124,9 +124,11 @@ the independent HEFT pretrain profile.
 | `tracking_bfm_sp_ablation_student_actor` | SP student `policy` | `policy + priv` | SP XML compatibility + complete BFM runtime |
 | `tracking_bfm_sp_ablation_teacher_actor` | raw `policy + priv` | `policy + priv` | SP XML compatibility + complete BFM runtime |
 
-All three ablations use the same BFM `MLPModel` hidden layers for actor and
-critic. Raw observation dimensions necessarily change the actor input layer;
-no adapter, privileged encoder, or parameter-count matching is applied.
+All three ablations use a raw-observation BFM `MLPModel` actor with no adapter
+or privileged encoder. Only the input-facing hidden width is adjusted so the
+three actor parameter counts remain within 0.03% of the 8.62M-parameter BFM
+baseline. Their critic is the same `HeftTeacherCritic` with hidden dimensions
+`[1024, 512, 512]`, Mish activation, and `vecnorm_decay=0.9999`.
 The ablations omit `priv_critic` because its four terms expose HEFT-specific
 domain-randomization state; under BFM randomization they would only be constant
 fallback values. The independent `tracking_bfm_sp` pretrain task keeps them.
