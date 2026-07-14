@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from sp_tracking.config.build_agent import build_agent_cfg, serialize_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
 from sp_tracking.tasks.tracking.rl.checkpoints import resolve_local_checkpoint_path
+from sp_tracking.tasks.tracking.task_catalog import TASK_SPECS
 
 
 @dataclass
@@ -26,6 +28,37 @@ class PreparedTrainCfg:
   env: ManagerBasedRlEnvCfg
   agent: RslRlOnPolicyRunnerCfg
   raw: DictConfig
+
+
+TASK_NAME_BY_ID = {spec.task_id: spec.name for spec in TASK_SPECS}
+
+
+def normalize_task_id_argv(argv: list[str]) -> list[str]:
+  """Translate public mjlab task IDs into Hydra task-group overrides."""
+  normalized = list(argv)
+  for index, argument in enumerate(normalized[1:], start=1):
+    override_kind: str | None = None
+    task_value = argument
+    if argument.startswith("task="):
+      override_kind = "task"
+      task_value = argument.removeprefix("task=")
+    elif argument.startswith("task_id="):
+      override_kind = "task_id"
+      task_value = argument.removeprefix("task_id=")
+    elif argument in TASK_NAME_BY_ID:
+      override_kind = "positional"
+
+    if override_kind is None:
+      continue
+    task_name = TASK_NAME_BY_ID.get(task_value)
+    if task_name is not None:
+      normalized[index] = f"task={task_name}"
+    elif override_kind == "task_id":
+      available = ", ".join(TASK_NAME_BY_ID)
+      raise ValueError(
+        f"Unknown task ID '{task_value}'. Available task IDs: {available}"
+      )
+  return normalized
 
 
 def _get_world_size() -> int:
@@ -199,8 +232,13 @@ def _asdict_dataclass(obj: Any) -> dict[str, Any]:
 
 
 @hydra.main(config_path="../conf", config_name="train", version_base=None)
-def main(cfg: DictConfig) -> None:
+def _hydra_main(cfg: DictConfig) -> None:
   run_train(cfg)
+
+
+def main() -> None:
+  sys.argv[:] = normalize_task_id_argv(sys.argv)
+  _hydra_main()
 
 
 if __name__ == "__main__":

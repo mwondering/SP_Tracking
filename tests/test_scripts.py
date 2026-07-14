@@ -10,7 +10,8 @@ def test_tracking_bfm_training_script_contract() -> None:
 
   contents = script.read_text()
   assert "uv run sp-train" in contents
-  assert "task=tracking_bfm" in contents
+  assert 'TASK_ID="${SP_TRACKING_TASK_ID:-SPTracking-G1-BFM-BFMActor-BFMCritic}"' in contents
+  assert 'cmd+=("task_id=${TASK_ID}")' in contents
   assert "launch_script_path=" in contents
   assert "agent.max_iterations=" in contents
   assert "agent.logger=wandb" in contents
@@ -33,7 +34,8 @@ def test_tracking_bfm_multigpu_script_uses_torchrun() -> None:
   assert "--nproc_per_node" in contents
   assert "-m sp_tracking.scripts.train" in contents
   assert "CUDA_VISIBLE_DEVICES" in contents
-  assert "task=tracking_bfm" in contents
+  assert 'TASK_ID="${SP_TRACKING_TASK_ID:-SPTracking-G1-BFM-BFMActor-BFMCritic}"' in contents
+  assert 'cmd+=("task_id=${TASK_ID}")' in contents
   assert "launch_script_path=" in contents
   assert '"$@"' in contents
 

@@ -12,6 +12,7 @@ from sp_tracking.scripts.train import (
   _resolve_runtime_device,
   _serialize_checkpoint_cfg,
   _save_resolved_cfg,
+  normalize_task_id_argv,
   prepare_train_cfg,
 )
 from sp_tracking.tasks.tracking.rl.runner import _upload_launch_script_artifact
@@ -20,6 +21,26 @@ from sp_tracking.tasks.tracking.rl.runner import _upload_launch_script_artifact
 def _compose(*overrides: str):
   with initialize_config_module(version_base=None, config_module="sp_tracking.conf"):
     return compose(config_name="train", overrides=list(overrides))
+
+
+def test_train_cli_accepts_public_task_id_in_all_supported_forms() -> None:
+  task_id = "SPTracking-G1-BFM-BFMActor-BFMCritic"
+  expected = ["sp-train", "task=tracking_bfm", "agent.seed=7"]
+
+  assert normalize_task_id_argv(
+    ["sp-train", f"task={task_id}", "agent.seed=7"]
+  ) == expected
+  assert normalize_task_id_argv(
+    ["sp-train", f"task_id={task_id}", "agent.seed=7"]
+  ) == expected
+  assert normalize_task_id_argv(
+    ["sp-train", task_id, "agent.seed=7"]
+  ) == expected
+
+
+def test_train_cli_keeps_hydra_task_name_compatible() -> None:
+  argv = ["sp-train", "task=tracking_bfm_sp"]
+  assert normalize_task_id_argv(argv) == argv
 
 
 def test_prepare_train_cfg_applies_motion_path_override() -> None:

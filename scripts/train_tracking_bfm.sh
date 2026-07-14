@@ -8,15 +8,17 @@ LAUNCH_SCRIPT_PATH="${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")"
 usage() {
   cat >&2 <<'USAGE'
 Usage:
-  scripts/train_tracking_bfm.sh [motion_path] [hydra_overrides...]
+  scripts/train_tracking_bfm.sh [task_id] [motion_path] [hydra_overrides...]
   SP_TRACKING_MOTION_PATH=<motion_path> scripts/train_tracking_bfm.sh [hydra_overrides...]
 
 Environment:
+  SP_TRACKING_TASK_ID=<id>          Public task ID passed to the training entrypoint.
   SP_TRACKING_HISTORY_STEPS=0       Command history horizon; old h100 baseline default.
   SP_TRACKING_FUTURE_STEPS=1        Command future horizon; old h100 baseline default.
 
 Examples:
   scripts/train_tracking_bfm.sh
+  scripts/train_tracking_bfm.sh SPTracking-G1-BFM-BFMActor-BFMCritic
   scripts/train_tracking_bfm.sh /path/to/motions
   scripts/train_tracking_bfm.sh /path/to/motions task.num_envs=2048 agent.max_iterations=50000
 USAGE
@@ -25,6 +27,12 @@ USAGE
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
+fi
+
+TASK_ID="${SP_TRACKING_TASK_ID:-SPTracking-G1-BFM-BFMActor-BFMCritic}"
+if [[ "${1:-}" == SPTracking-* ]]; then
+  TASK_ID="$1"
+  shift
 fi
 
 MOTION_PATH="${SP_TRACKING_MOTION_PATH:-/home/lenovo/DATASETS/Data10k_full}"
@@ -42,9 +50,16 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-${REPO_ROOT}/.cache/matplotlib}"
 mkdir -p "${MPLCONFIGDIR}"
 
+HAS_TASK_OVERRIDE=false
+for argument in "$@"; do
+  if [[ "${argument}" == task=* || "${argument}" == task_id=* ]]; then
+    HAS_TASK_OVERRIDE=true
+    break
+  fi
+done
+
 cmd=(
   uv run sp-train
-  task=tracking_bfm_sp
   "motion_path=${MOTION_PATH}"
   "launch_script_path=${LAUNCH_SCRIPT_PATH}"
   "task.num_envs=${SP_TRACKING_NUM_ENVS:-16}"
@@ -58,6 +73,10 @@ cmd=(
   "agent.save_interval=${SP_TRACKING_SAVE_INTERVAL:-1000}"
   "log_root=${SP_TRACKING_LOG_ROOT:-logs/rsl_rl}"
 )
+
+if [[ "${HAS_TASK_OVERRIDE}" == false ]]; then
+  cmd+=("task_id=${TASK_ID}")
+fi
 
 RUN_NAME="${SP_TRACKING_RUN_NAME:-trydebug}"
 if [[ -n "${RUN_NAME}" ]]; then
