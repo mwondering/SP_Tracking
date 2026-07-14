@@ -4,7 +4,7 @@ defaults:
   - _self_
 
 # The ablations are BFM tasks first.  HEFT observations are expressed through
-# semantic keypoints backed by BFM physical bodies and fixed local offsets.
+# semantic keypoints backed by composed transforms of BFM physical bodies.
 name: tracking_bfm_sp_ablation_bfm_actor
 variant:
   environment_profile: bfm_runtime_semantic_keypoints
@@ -77,10 +77,21 @@ obs:
       - {name: head, body_name: torso_link, local_pos: [0.01, 0.0, 0.41]}
       - {name: left_shoulder, body_name: left_shoulder_yaw_link}
       - {name: left_wrist, body_name: left_wrist_roll_link}
-      - {name: left_hand, body_name: left_wrist_yaw_link, local_pos: [0.116, 0.0, 0.0]}
+      # The BFM wrist-pitch -> wrist-yaw link is 5 mm shorter than the SP XML.
+      # Keep the 116 mm hand offset after yaw, and add the missing link length
+      # in the pre-yaw wrist-pitch frame so pose and velocity match exactly.
+      - name: left_hand
+        body_name: left_wrist_yaw_link
+        local_pos: [0.116, 0.0, 0.0]
+        correction_body_name: left_wrist_pitch_link
+        correction_local_pos: [0.005, 0.0, 0.0]
       - {name: right_shoulder, body_name: right_shoulder_yaw_link}
       - {name: right_wrist, body_name: right_wrist_roll_link}
-      - {name: right_hand, body_name: right_wrist_yaw_link, local_pos: [0.116, 0.0, 0.0]}
+      - name: right_hand
+        body_name: right_wrist_yaw_link
+        local_pos: [0.116, 0.0, 0.0]
+        correction_body_name: right_wrist_pitch_link
+        correction_local_pos: [0.005, 0.0, 0.0]
 
 # Every reward and observation view uses the pelvis anchor. HEFT semantic
 # points continue to resolve from their physical parent bodies.
@@ -146,11 +157,15 @@ reference_views:
       - left_elbow_link
       - right_shoulder_roll_link
       - right_elbow_link
+      # Internal parents for the pre-yaw hand keypoint corrections. Appending
+      # them preserves every existing combined-body index.
+      - left_wrist_pitch_link
+      - right_wrist_pitch_link
 
 command:
   command:
     # Preserve the raw BFM body/joint trajectories. Semantic keypoints are
-    # fixed transforms of these cached physical body frames, never joint FK.
+    # composed fixed transforms of cached physical body frames, never joint FK.
     fk_from_joint_pos: false
     recompute_joint_vel_from_joint_pos: false
     motion_origin_recenter: false

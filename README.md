@@ -37,8 +37,8 @@ scripts/train_tracking_bfm.sh /path/to/motions task.num_envs=2048 agent.max_iter
   tests, and the mjlab task entry point.
 - `src/sp_tracking/assets/robots`: packaged G1 assets selected by task. The
   BFM-runtime comparisons use the BFM XML and express HEFT keypoints through
-  physical BFM bodies plus fixed local offsets; `tracking_bfm_sp` retains the
-  complete HEFT robot configuration.
+  physical BFM body-frame transforms; `tracking_bfm_sp` retains the complete
+  HEFT robot configuration.
 - `scripts/train_tracking_bfm.sh`: repo-local launch script for the default
   training run.
 - `scripts/play_tracking_bfm.sh`: repo-local play script for local or W&B

@@ -1,8 +1,10 @@
-"""Semantic keypoints backed by physical body frames and fixed local offsets.
+"""Semantic keypoints backed by physical body frames and local transforms.
 
 The tracking tasks use semantic points such as ``head`` and ``left_hand``.
 Those points do not need dedicated MuJoCo bodies: a physical parent body plus
-a rigid local transform is sufficient for pose and velocity observations.
+a rigid local transform is sufficient for pose and velocity observations.  An
+optional additive position correction can be expressed in a second body frame
+when two robot descriptions place a joint origin at different locations.
 """
 
 from __future__ import annotations
@@ -24,6 +26,10 @@ class KeypointSpec:
   reference_local_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
   asset_local_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
   reference_local_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+  asset_correction_body_name: str | None = None
+  reference_correction_body_name: str | None = None
+  asset_correction_local_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+  reference_correction_local_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,14 @@ def parse_keypoint_specs(
       raise ValueError(f"Keypoint {name!r} must define asset/reference body names")
     common_pos = data.get("local_pos", (0.0, 0.0, 0.0))
     common_quat = data.get("local_quat", (1.0, 0.0, 0.0, 0.0))
+    common_correction_body = data.get("correction_body_name")
+    asset_correction_body = data.get(
+      "asset_correction_body_name", common_correction_body
+    )
+    reference_correction_body = data.get(
+      "reference_correction_body_name", common_correction_body
+    )
+    common_correction_pos = data.get("correction_local_pos", (0.0, 0.0, 0.0))
     specs.append(
       KeypointSpec(
         name=name,
@@ -81,6 +95,24 @@ def parse_keypoint_specs(
           4,
           field="reference_local_quat",
         ),
+        asset_correction_body_name=(
+          str(asset_correction_body) if asset_correction_body is not None else None
+        ),
+        reference_correction_body_name=(
+          str(reference_correction_body)
+          if reference_correction_body is not None
+          else None
+        ),
+        asset_correction_local_pos=_tuple(
+          data.get("asset_correction_local_pos", common_correction_pos),
+          3,
+          field="asset_correction_local_pos",
+        ),
+        reference_correction_local_pos=_tuple(
+          data.get("reference_correction_local_pos", common_correction_pos),
+          3,
+          field="reference_correction_local_pos",
+        ),
       )
     )
   names = [spec.name for spec in specs]
@@ -98,15 +130,24 @@ def _rigid_points(
   parent_ang_vel_w: torch.Tensor,
   local_pos: torch.Tensor,
   local_quat: torch.Tensor,
+  correction_quat_w: torch.Tensor,
+  correction_ang_vel_w: torch.Tensor,
+  correction_local_pos: torch.Tensor,
 ) -> KeypointKinematics:
   while local_pos.ndim < parent_pos_w.ndim:
     local_pos = local_pos.unsqueeze(0)
     local_quat = local_quat.unsqueeze(0)
+    correction_local_pos = correction_local_pos.unsqueeze(0)
   offset_w = quat_apply(parent_quat_w, local_pos.expand_as(parent_pos_w))
-  pos_w = parent_pos_w + offset_w
+  correction_w = quat_apply(
+    correction_quat_w, correction_local_pos.expand_as(parent_pos_w)
+  )
+  pos_w = parent_pos_w + offset_w + correction_w
   quat_w = quat_mul(parent_quat_w, local_quat.expand_as(parent_quat_w))
-  lin_vel_w = parent_lin_vel_w + torch.linalg.cross(
-    parent_ang_vel_w, offset_w, dim=-1
+  lin_vel_w = (
+    parent_lin_vel_w
+    + torch.linalg.cross(parent_ang_vel_w, offset_w, dim=-1)
+    + torch.linalg.cross(correction_ang_vel_w, correction_w, dim=-1)
   )
   return KeypointKinematics(pos_w, quat_w, lin_vel_w, parent_ang_vel_w)
 
@@ -128,6 +169,18 @@ class SemanticKeypointResolver:
       for spec in self.specs
       if spec.reference_body_name not in reference_names
     ]
+    missing_asset.extend(
+      spec.asset_correction_body_name
+      for spec in self.specs
+      if spec.asset_correction_body_name is not None
+      and spec.asset_correction_body_name not in asset_names
+    )
+    missing_reference.extend(
+      spec.reference_correction_body_name
+      for spec in self.specs
+      if spec.reference_correction_body_name is not None
+      and spec.reference_correction_body_name not in reference_names
+    )
     if missing_asset or missing_reference:
       raise ValueError(
         "Semantic keypoint parent bodies are missing: "
@@ -141,6 +194,24 @@ class SemanticKeypointResolver:
     )
     self.reference_ids = torch.as_tensor(
       [reference_names.index(spec.reference_body_name) for spec in self.specs],
+      device=device,
+      dtype=torch.long,
+    )
+    self.asset_correction_ids = torch.as_tensor(
+      [
+        asset_names.index(spec.asset_correction_body_name or spec.asset_body_name)
+        for spec in self.specs
+      ],
+      device=device,
+      dtype=torch.long,
+    )
+    self.reference_correction_ids = torch.as_tensor(
+      [
+        reference_names.index(
+          spec.reference_correction_body_name or spec.reference_body_name
+        )
+        for spec in self.specs
+      ],
       device=device,
       dtype=torch.long,
     )
@@ -164,6 +235,16 @@ class SemanticKeypointResolver:
       device=device,
       dtype=torch.float32,
     )
+    self.asset_correction_local_pos = torch.tensor(
+      [spec.asset_correction_local_pos for spec in self.specs],
+      device=device,
+      dtype=torch.float32,
+    )
+    self.reference_correction_local_pos = torch.tensor(
+      [spec.reference_correction_local_pos for spec in self.specs],
+      device=device,
+      dtype=torch.float32,
+    )
 
   @property
   def names(self) -> tuple[str, ...]:
@@ -171,6 +252,7 @@ class SemanticKeypointResolver:
 
   def current(self, asset) -> KeypointKinematics:
     ids = self.asset_ids
+    correction_ids = self.asset_correction_ids
     return _rigid_points(
       asset.data.body_link_pos_w[:, ids],
       asset.data.body_link_quat_w[:, ids],
@@ -178,6 +260,9 @@ class SemanticKeypointResolver:
       asset.data.body_link_ang_vel_w[:, ids],
       self.asset_local_pos,
       self.asset_local_quat,
+      asset.data.body_link_quat_w[:, correction_ids],
+      asset.data.body_link_ang_vel_w[:, correction_ids],
+      self.asset_correction_local_pos,
     )
 
   def reference(
@@ -188,6 +273,7 @@ class SemanticKeypointResolver:
     body_ang_vel_w: torch.Tensor,
   ) -> KeypointKinematics:
     ids = self.reference_ids.to(body_pos_w.device)
+    correction_ids = self.reference_correction_ids.to(body_pos_w.device)
     return _rigid_points(
       body_pos_w.index_select(-2, ids),
       body_quat_w.index_select(-2, ids),
@@ -195,4 +281,7 @@ class SemanticKeypointResolver:
       body_ang_vel_w.index_select(-2, ids),
       self.reference_local_pos.to(body_pos_w),
       self.reference_local_quat.to(body_quat_w),
+      body_quat_w.index_select(-2, correction_ids),
+      body_ang_vel_w.index_select(-2, correction_ids),
+      self.reference_correction_local_pos.to(body_pos_w),
     )
