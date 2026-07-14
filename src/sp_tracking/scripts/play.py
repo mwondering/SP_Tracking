@@ -17,31 +17,12 @@ from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 from sp_tracking.config.build_agent import serialize_agent_cfg
 from sp_tracking.scripts.train import prepare_train_cfg
 from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
+from sp_tracking.tasks.tracking.task_catalog import TASK_BY_NAME, TaskName
 
 
 TASK_OVERRIDES = {
-  "tracking_bfm": [],
-  "tracking_bfm_largedataset": ["task=tracking_bfm_largedataset"],
-  "tracking_bfm_sp": ["task=tracking_bfm_sp"],
-  "tracking_bfm_sp_old_obs_old_reward_bfm_agent": [
-    "task=tracking_bfm_sp_old_obs_old_reward_bfm_agent"
-  ],
-  "tracking_bfm_sp_old_reward": ["task=tracking_bfm_sp_old_reward"],
-  "tracking_bfm_sp_bfm_agent_old_reward": [
-    "task=tracking_bfm_sp_bfm_agent_old_reward"
-  ],
-  "tracking_bfm_sp_bfm_agent_old_obs": ["task=tracking_bfm_sp_bfm_agent_old_obs"],
+  name: list(spec.hydra_overrides) for name, spec in TASK_BY_NAME.items()
 }
-
-TaskName = Literal[
-  "tracking_bfm",
-  "tracking_bfm_largedataset",
-  "tracking_bfm_sp",
-  "tracking_bfm_sp_old_obs_old_reward_bfm_agent",
-  "tracking_bfm_sp_old_reward",
-  "tracking_bfm_sp_bfm_agent_old_reward",
-  "tracking_bfm_sp_bfm_agent_old_obs",
-]
 
 
 @dataclass(frozen=True)

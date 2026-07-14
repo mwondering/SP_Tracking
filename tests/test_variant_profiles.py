@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from hydra import compose, initialize_config_module
+from omegaconf import OmegaConf
 
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.scripts.train import prepare_train_cfg
+
+
+ABLATION_TASKS = {
+  "tracking_bfm_sp_ablation_bfm_actor": ("actor",),
+  "tracking_bfm_sp_ablation_student_actor": ("policy",),
+  "tracking_bfm_sp_ablation_teacher_actor": ("policy", "priv"),
+}
 
 
 def _compose(task_name: str):
@@ -11,149 +19,111 @@ def _compose(task_name: str):
     return compose(config_name="train", overrides=[f"task={task_name}"])
 
 
-def test_named_variants_form_a_supported_profile_matrix() -> None:
-  expectations = {
-    "tracking_bfm": {
-      "environment": "bfm",
-      "reference": "bfm",
-      "obs_groups": ("actor", "critic"),
-      "reward": "motion_global_root_pos",
-      "agent_groups": {"actor": ("actor",), "critic": ("critic",)},
-      "sp_environment": False,
-      "runtime": "bfm",
-    },
-    "tracking_bfm_sp": {
-      "environment": "sp_tracking",
-      "reference": "sp_tracking",
-      "obs_groups": ("policy", "priv", "priv_critic"),
-      "reward": "root_pos_tracking",
-      "agent_groups": {
-        "actor": ("policy", "priv"),
-        "critic": ("policy", "priv", "priv_critic"),
-      },
-      "sp_environment": True,
-      "runtime": "sp",
-    },
-    "tracking_bfm_sp_old_obs_old_reward_bfm_agent": {
-      "environment": "sp_tracking",
-      "reference": "sp_tracking",
-      "obs_groups": ("actor", "critic"),
-      "reward": "motion_global_root_pos",
-      "agent_groups": {"actor": ("actor",), "critic": ("critic",)},
-      "sp_environment": True,
-      "runtime": "sp",
-    },
-    "tracking_bfm_sp_old_reward": {
-      "environment": "sp_tracking",
-      "reference": "sp_tracking",
-      "obs_groups": ("policy", "priv", "priv_critic"),
-      "reward": "motion_global_root_pos",
-      "agent_groups": {
-        "actor": ("policy",),
-        "critic": ("policy", "priv", "priv_critic"),
-      },
-      "sp_environment": True,
-      "runtime": "bfm",
-    },
-    "tracking_bfm_sp_bfm_agent_old_reward": {
-      "environment": "sp_tracking",
-      "reference": "sp_tracking",
-      "obs_groups": ("policy", "priv", "priv_critic"),
-      "reward": "motion_global_root_pos",
-      "agent_groups": {
-        "actor": ("policy",),
-        "critic": ("policy", "priv", "priv_critic"),
-      },
-      "sp_environment": True,
-      "runtime": "sp",
-    },
-    "tracking_bfm_sp_bfm_agent_old_obs": {
-      "environment": "sp_tracking",
-      "reference": "sp_tracking",
-      "obs_groups": ("actor", "critic"),
-      "reward": "root_pos_tracking",
-      "agent_groups": {"actor": ("actor",), "critic": ("critic",)},
-      "sp_environment": True,
-      "runtime": "bfm",
-    },
+def test_supported_task_profile_matrix() -> None:
+  bfm = prepare_train_cfg(_compose("tracking_bfm"))
+  sp = prepare_train_cfg(_compose("tracking_bfm_sp"))
+
+  assert tuple(bfm.env.observations) == ("actor", "critic")
+  assert bfm.agent.obs_groups == {"actor": ("actor",), "critic": ("critic",)}
+  assert tuple(sp.env.observations) == ("policy", "priv", "priv_critic")
+  assert sp.agent.obs_groups == {
+    "actor": ("policy", "priv"),
+    "critic": ("policy", "priv", "priv_critic"),
   }
 
-  for task_name, expected in expectations.items():
+  for task_name, actor_groups in ABLATION_TASKS.items():
+    prepared = prepare_train_cfg(_compose(task_name))
+    assert tuple(prepared.env.observations) == (
+      "actor",
+      "policy",
+      "priv",
+      "priv_critic",
+    )
+    assert prepared.agent.obs_groups == {
+      "actor": actor_groups,
+      "critic": ("policy", "priv", "priv_critic"),
+    }
+
+
+def test_actor_observation_is_the_only_difference_between_ablation_agents() -> None:
+  prepared = {
+    name: prepare_train_cfg(_compose(name)) for name in ABLATION_TASKS
+  }
+  first = prepared["tracking_bfm_sp_ablation_bfm_actor"].agent
+
+  for item in prepared.values():
+    agent = item.agent
+    assert agent.actor.class_name == "MLPModel"
+    assert agent.critic.class_name == "MLPModel"
+    assert agent.algorithm.class_name == "PPO"
+    assert agent.actor.hidden_dims == first.actor.hidden_dims
+    assert agent.critic.hidden_dims == first.critic.hidden_dims
+    assert agent.actor.activation == first.actor.activation == "elu"
+    assert agent.critic.activation == first.critic.activation == "elu"
+    assert agent.algorithm == first.algorithm
+    assert agent.num_steps_per_env == first.num_steps_per_env == 24
+    assert agent.seed == first.seed == 42
+
+
+def test_ablation_observation_terms_are_reused_without_adapter() -> None:
+  bfm = _compose("tracking_bfm")
+  sp = _compose("tracking_bfm_sp")
+  expected_actor = OmegaConf.to_container(
+    bfm.task.obs.observations.actor, resolve=True
+  )
+
+  for task_name in ABLATION_TASKS:
     cfg = _compose(task_name)
-    prepared = prepare_train_cfg(cfg)
-    env_cfg = build_env_cfg(cfg.task)
+    assert OmegaConf.to_container(
+      cfg.task.obs.observations.actor, resolve=True
+    ) == expected_actor
+    for group in ("policy", "priv", "priv_critic"):
+      assert OmegaConf.to_container(
+        cfg.task.obs.observations[group], resolve=True
+      ) == OmegaConf.to_container(sp.task.obs.observations[group], resolve=True)
+    assert "adapter" not in OmegaConf.to_container(cfg.task, resolve=True)
 
-    assert cfg.task.variant.environment_profile == expected["environment"]
-    assert cfg.task.variant.reference_profile == expected["reference"]
-    assert tuple(env_cfg.observations) == expected["obs_groups"]
-    assert expected["reward"] in env_cfg.rewards
-    assert prepared.agent.obs_groups == expected["agent_groups"]
 
-    if expected["sp_environment"]:
-      robot = env_cfg.scene.entities["robot"]
-      assert robot.spec_fn.__module__.startswith(
-        "sp_tracking.assets.robots.g1_sp_tracking"
-      )
-      command = env_cfg.commands["motion"]
-      assert command.motion_type == "mujoco"
-      assert command.fk_from_joint_pos is True
-      assert command.recompute_joint_vel_from_joint_pos is True
-      assert "substep_tracking_cache" in env_cfg.metrics
-      assert "contact_forces" in {sensor.name for sensor in env_cfg.scene.sensors}
-      uses_old_view = (
-        expected["obs_groups"] == ("actor", "critic")
-        or expected["reward"] == "motion_global_root_pos"
-      )
-      if uses_old_view:
-        assert tuple(command.body_names) == tuple(
-          cfg.task.reference_views.combined.body_names
-        )
-        if expected["reward"] == "motion_global_root_pos":
-          reward_params = env_cfg.rewards["motion_body_pos"].params
-          assert tuple(reward_params["body_names"]) == tuple(
-            cfg.task.reference_views.old_tracking.body_names
-          )
-          assert (
-            reward_params["anchor_body_name"]
-            == cfg.task.reference_views.old_tracking.anchor_body_name
-          )
-      if expected["runtime"] == "sp":
-        assert type(env_cfg.actions["joint_pos"]).__name__ == "SpTrackingJointPositionActionCfg"
-        assert type(command).__name__ == "LargeDatasetMultiMotionCommandCfg"
-        assert command.adaptive_sampling.strategy == "mixture"
-        assert command.sampling_mode == "uniform"
-        assert command.rewind.enabled is True
-        assert "sp_tracking_progress" in env_cfg.curriculum
-        assert {"body_z_termination", "gravity_dir_termination"} <= set(
-          env_cfg.terminations
-        )
-      else:
-        assert type(env_cfg.actions["joint_pos"]).__name__ == "JointPositionActionCfg"
-        assert type(command).__name__ == "MultiMotionCommandCfg"
-        assert command.adaptive_sampling.strategy == "mixture"
-        assert command.adaptive_sampling.random_probability is None
-        assert command.rewind.enabled is False
-        assert command.resample_on_motion_end is True
-        assert env_cfg.curriculum == {}
-        assert set(env_cfg.events) == {
-          "push_robot",
-          "base_com",
-          "base_mass",
-          "encoder_bias",
-          "foot_friction",
-        }
-        assert set(env_cfg.terminations) == {
-          "time_out",
-          "anchor_pos",
-          "anchor_ori",
-          "ee_body_pos",
-        }
-        if expected["obs_groups"] == ("actor", "critic"):
-          body_params = env_cfg.observations["actor"].terms["body_pos"].params
-          assert tuple(body_params["body_names"]) == tuple(
-            cfg.task.reference_views.old_tracking.body_names
-          )
-          assert (
-            body_params["anchor_body_name"]
-            == cfg.task.reference_views.old_tracking.anchor_body_name
-          )
+def test_ablation_runtime_matches_bfm_except_sp_xml_compatibility() -> None:
+  expected_events = {
+    "push_robot",
+    "base_com",
+    "base_mass",
+    "encoder_bias",
+    "foot_friction",
+  }
+  expected_terminations = {"time_out", "anchor_pos", "anchor_ori", "ee_body_pos"}
+
+  for task_name in ABLATION_TASKS:
+    cfg = _compose(task_name)
+    env = build_env_cfg(cfg.task)
+    command = env.commands["motion"]
+    robot = env.scene.entities["robot"]
+
+    assert robot.spec_fn.__module__.startswith(
+      "sp_tracking.assets.robots.g1_sp_tracking"
+    )
+    assert type(env.actions["joint_pos"]).__name__ == "JointPositionActionCfg"
+    assert type(command).__name__ == "MultiMotionCommandCfg"
+    assert command.motion_type == "mujoco"
+    assert command.fk_from_joint_pos is True
+    assert command.recompute_joint_vel_from_joint_pos is True
+    assert command.sampling_mode == "adaptive"
+    assert command.rewind.enabled is False
+    assert command.feet_standing == {}
+    assert command.resample_on_motion_end is True
+    assert set(env.events) == expected_events
+    assert set(env.terminations) == expected_terminations
+    assert env.curriculum == {}
+    assert env.metrics == {}
+    assert "motion_global_root_pos" in env.rewards
+    assert "root_pos_tracking" not in env.rewards
+    assert env.episode_length_s == 10.0
+    assert env.viewer.body_name == "torso_link"
+    assert {sensor.name for sensor in env.scene.sensors} == {
+      "contact_forces",
+      "self_collision",
+    }
+    assert tuple(command.body_names) == tuple(
+      cfg.task.reference_views.combined.body_names
+    )

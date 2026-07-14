@@ -77,8 +77,18 @@ def test_prepare_play_cfg_requires_task_for_legacy_local_checkpoint(tmp_path: Pa
 @pytest.mark.parametrize(
   ("task", "obs_groups"),
   [
-    ("tracking_bfm_sp_old_reward", ["policy", "priv", "priv_critic"]),
-    ("tracking_bfm_sp_bfm_agent_old_obs", ["actor", "critic"]),
+    (
+      "tracking_bfm_sp_ablation_bfm_actor",
+      ["actor", "policy", "priv", "priv_critic"],
+    ),
+    (
+      "tracking_bfm_sp_ablation_student_actor",
+      ["actor", "policy", "priv", "priv_critic"],
+    ),
+    (
+      "tracking_bfm_sp_ablation_teacher_actor",
+      ["actor", "policy", "priv", "priv_critic"],
+    ),
   ],
 )
 def test_prepare_play_cfg_supports_new_variant_for_legacy_checkpoint(

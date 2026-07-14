@@ -221,6 +221,8 @@ def _build_observations(cfg: DictConfig) -> dict[str, ObservationGroupCfg]:
   obs_cfg = cfg.observations if "observations" in cfg else cfg.obs.observations
   groups = OrderedDict()
   for group_name, group_cfg in obs_cfg.items():
+    if not bool(group_cfg.get("enabled", True)):
+      continue
     terms = OrderedDict()
     for item in group_cfg.terms:
       term_name = str(item.name)
@@ -595,6 +597,8 @@ def _configured_contact_sensor_names(cfg: DictConfig) -> set[str]:
 
   obs_cfg = cfg.observations if "observations" in cfg else cfg.obs.observations
   for group_cfg in obs_cfg.values():
+    if not bool(group_cfg.get("enabled", True)):
+      continue
     for term_cfg in group_cfg.terms:
       add_sensor_name(term_cfg)
 

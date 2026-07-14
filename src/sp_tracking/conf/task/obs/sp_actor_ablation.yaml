@@ -1,0 +1,11 @@
+# Compose the exact BFM actor observation with all SP observation partitions.
+# The legacy BFM critic group is disabled because every ablation uses the SP
+# critic information set while retaining the BFM MLP architecture.
+defaults:
+  - old_tracking
+  - sp_tracking
+  - _self_
+
+observations:
+  critic:
+    enabled: false

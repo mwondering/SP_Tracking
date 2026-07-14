@@ -86,12 +86,6 @@ uv sync
 uv run sp-train motion_path=/path/to/motions task.num_envs=4096
 ```
 
-Use the SP large-dataset/observation/reward variant:
-
-```bash
-uv run sp-train task=tracking_bfm_sp motion_path=/path/to/motions
-```
-
 The SP profile is a teacher-only HEFT-style pretrain: the actor consumes
 `policy + priv`, encodes `priv` to 256 dimensions, and trains with the matching
 teacher network, optimizer, schedules, symmetry and motion randomization. Start
@@ -105,44 +99,34 @@ The resulting checkpoint is self-describing and can be passed directly to
 `sp-play`. This profile intentionally does not implement the student/adapt
 stage. The original `tracking_bfm` task and its MLP/PPO preset are unchanged.
 
-Use the old BFM LargeDataset-equivalent task:
+The three observation ablations use the SP XML only for body/joint/reference
+compatibility. They otherwise retain the complete BFM runtime: BFM MLPs,
+PPO/Adam, action, rewards, terminations, events, curriculum, sampler, reset,
+seed, and training budget. Run them with:
 
 ```bash
-uv run sp-train task=tracking_bfm_largedataset motion_path=/path/to/motions
+uv run sp-train task=tracking_bfm_sp_ablation_bfm_actor motion_path=/path/to/motions
+uv run sp-train task=tracking_bfm_sp_ablation_student_actor motion_path=/path/to/motions
+uv run sp-train task=tracking_bfm_sp_ablation_teacher_actor motion_path=/path/to/motions
 ```
 
 The default `tracking_bfm` task keeps the old BFM tracking observation, reward,
-termination, and `multi_commands.py` loader defaults.
-`tracking_bfm_largedataset` keeps the same old BFM surface and only switches the
-loader to `multi_command_largedataset.py`. `tracking_bfm_sp` switches to the
-SP asset bundle plus SP observation/reward/termination sets for ablations and
-debugging. Every task whose name starts with `tracking_bfm_sp` uses the SP XML
-and SP reference profile, never the BFM XML. The task table below is the
-authority for the independently selected runtime modules (agent/action,
-sampling, termination, curriculum, and rewards).
+termination, and `multi_commands.py` loader defaults. `tracking_bfm_sp` remains
+the independent HEFT pretrain profile.
 
 ## Tasks
 
-| Task | Environment / reference | Obs / reward / agent | Termination / curriculum / sampling |
+| Task | Actor observation | Critic observation | Runtime |
 | --- | --- | --- | --- |
-| `tracking_bfm` | BFM XML + BFM reference | old / old / BFM PPO | old / none / BFM multi-motion |
-| `tracking_bfm_largedataset` | BFM XML + BFM reference | old / old / BFM PPO | old / none / BFM large-dataset |
-| `tracking_bfm_sp` | SP XML + SP reference | SP / SP / SP PPO | SP / SP / SP large-dataset |
-| `tracking_bfm_sp_old_obs_old_reward_bfm_agent` | SP XML + SP reference | old / old / BFM PPO | SP / SP / SP large-dataset |
-| `tracking_bfm_sp_old_reward` | SP XML + SP reference | SP / old / BFM PPO | old / none / BFM multi-motion |
-| `tracking_bfm_sp_bfm_agent_old_reward` | SP XML + SP reference | SP / old / BFM PPO | SP / SP / SP large-dataset |
-| `tracking_bfm_sp_bfm_agent_old_obs` | SP XML + SP reference | old / SP / BFM PPO | old / none / BFM multi-motion |
+| `tracking_bfm` | BFM `actor` | BFM `critic` | BFM XML + complete BFM runtime |
+| `tracking_bfm_sp` | `policy + priv` | `policy + priv + priv_critic` | SP XML + HEFT pretrain runtime |
+| `tracking_bfm_sp_ablation_bfm_actor` | BFM `actor` | `policy + priv + priv_critic` | SP XML compatibility + complete BFM runtime |
+| `tracking_bfm_sp_ablation_student_actor` | SP student `policy` | `policy + priv + priv_critic` | SP XML compatibility + complete BFM runtime |
+| `tracking_bfm_sp_ablation_teacher_actor` | raw `policy + priv` | `policy + priv + priv_critic` | SP XML compatibility + complete BFM runtime |
 
-These tasks are configured under `src/sp_tracking/conf/task`. Shared PPO defaults
-live in `src/sp_tracking/conf/agent/tracking_bfm_ppo.yaml`.
-
-The two single-module bridge tasks intentionally retain SP XML/reference FK
-preprocessing, but otherwise restore the BFM runtime. In particular,
-`tracking_bfm_sp_old_reward` changes only the observation module to SP, while
-`tracking_bfm_sp_bfm_agent_old_obs` changes only the reward module to SP. The
-legacy observation/reward terms select their own torso-anchored 14-body view,
-so the old actor/critic interface remains 286-dimensional even when the SP
-reward view is also present in the reference cache.
+All three ablations use the same BFM `MLPModel` hidden layers for actor and
+critic. Raw observation dimensions necessarily change the actor input layer;
+no adapter, privileged encoder, or parameter-count matching is applied.
 
 ## Checkpoints, Resume, and Deployment Export
 
@@ -232,8 +216,11 @@ uv build
 
 ## mjlab Task Entry Point
 
-Installing the package exposes two mjlab task IDs via the `mjlab.tasks` entry
+Installing the package exposes five mjlab task IDs via the `mjlab.tasks` entry
 point:
 
 - `SPTracking-G1-BFM`
 - `SPTracking-G1-BFM-SP`
+- `SPTracking-G1-BFM-SP-Ablation-BFMActor`
+- `SPTracking-G1-BFM-SP-Ablation-StudentActor`
+- `SPTracking-G1-BFM-SP-Ablation-TeacherActor`

@@ -1,0 +1,12 @@
+defaults:
+  - tracking_bfm_sp_ablation_bfm_actor
+  - _self_
+
+name: tracking_bfm_sp_ablation_student_actor
+variant:
+  observation_profile: sp_student_actor_sp_critic
+
+agent_overrides:
+  obs_groups:
+    actor: [policy]
+    critic: [policy, priv, priv_critic]

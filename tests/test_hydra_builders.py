@@ -151,17 +151,16 @@ def test_sp_observation_module_adds_its_contact_sensor_in_a_mixed_ablation() -> 
   ]
 
 
-def test_sp_substep_metric_adds_contact_sensor_without_sp_obs_or_reward() -> None:
-  cfg = _compose("task=tracking_bfm_sp_old_obs_old_reward_bfm_agent")
+def test_ablation_observations_add_only_required_contact_sensors() -> None:
+  cfg = _compose("task=tracking_bfm_sp_ablation_bfm_actor")
 
   env_cfg = build_env_cfg(cfg.task)
 
-  # This variant retains the SP per-substep cache, which reads foot contact at
-  # every physics substep even though its active obs/reward modules are old.
   assert [sensor.name for sensor in env_cfg.scene.sensors] == [
     "contact_forces",
     "self_collision",
   ]
+  assert env_cfg.metrics == {}
 
 
 def test_observation_nan_policy_is_hydra_configurable() -> None:
@@ -196,71 +195,6 @@ def test_tracking_bfm_keeps_original_events_and_action() -> None:
   assert "base_mass" in env_cfg.events
   assert "motor_params_implicit" not in env_cfg.events
   assert env_cfg.curriculum == {}
-
-
-def test_tracking_bfm_largedataset_matches_old_tracking_task() -> None:
-  cfg = _compose(
-    "task=tracking_bfm_largedataset",
-    "++task.command.command.motion_manifest_file=/tmp/manifest.txt",
-    "++task.command.command.adaptive_bin_snapshot_interval_iterations=1",
-    "++task.command.command.adaptive_bin_snapshot_num_buckets=123",
-  )
-
-  env_cfg = build_env_cfg(cfg.task)
-  motion_cmd = env_cfg.commands["motion"]
-
-  assert isinstance(motion_cmd, LargeDatasetMotionCommandCfg)
-  assert motion_cmd.history_steps == 0
-  assert motion_cmd.future_steps == 1
-  assert motion_cmd.motion_type == "isaaclab"
-  assert motion_cmd.fk_from_joint_pos is False
-  assert motion_cmd.reset_root_lift_height == 0.0
-  assert motion_cmd.reset_min_body_z is None
-  assert motion_cmd.reset_joint_vel_limit is None
-  assert motion_cmd.motion_manifest_file == "/tmp/manifest.txt"
-  assert motion_cmd.motion_scan_backend == "auto"
-  assert motion_cmd.motion_scan_workers == 0
-  assert motion_cmd.motion_scan_fd_executable == "fd"
-  assert motion_cmd.adaptive_bin_snapshot_interval_iterations == 1
-  assert motion_cmd.adaptive_bin_snapshot_num_buckets == 123
-  assert list(env_cfg.observations["actor"].terms.keys()) == [
-    "command",
-    "motion_anchor_pos_b",
-    "motion_anchor_ori_b",
-    "body_pos",
-    "body_ori",
-    "base_lin_vel",
-    "base_ang_vel",
-    "joint_pos",
-    "joint_vel",
-    "actions",
-  ]
-  assert "motion_global_root_pos" in env_cfg.rewards
-  assert "anchor_pos" in env_cfg.terminations
-  robot = env_cfg.scene.entities["robot"]
-  assert robot.spec_fn.__module__.startswith("sp_tracking.assets.robots.g1_tracking_bfm")
-
-
-def test_tracking_bfm_largedataset_scan_config_is_hydra_configurable() -> None:
-  cfg = _compose(
-    "task=tracking_bfm_largedataset",
-    "++task.command.command.motion_scan_backend=python",
-    "++task.command.command.motion_scan_workers=32",
-    "++task.command.command.motion_scan_fd_executable=fdfind",
-    "++task.command.command.motion_metadata_read_workers=24",
-    "++task.command.command.motion_metadata_read_backend=process",
-    "++task.command.command.motion_metadata_read_chunksize=128",
-  )
-
-  env_cfg = build_env_cfg(cfg.task)
-  motion_cmd = env_cfg.commands["motion"]
-
-  assert motion_cmd.motion_scan_backend == "python"
-  assert motion_cmd.motion_scan_workers == 32
-  assert motion_cmd.motion_scan_fd_executable == "fdfind"
-  assert motion_cmd.motion_metadata_read_workers == 24
-  assert motion_cmd.motion_metadata_read_backend == "process"
-  assert motion_cmd.motion_metadata_read_chunksize == 128
 
 
 def test_tracking_bfm_command_adaptive_window_is_hydra_configurable() -> None:

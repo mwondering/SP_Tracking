@@ -9,17 +9,20 @@ from mjlab.tasks.registry import list_tasks, register_mjlab_task
 from sp_tracking.config.build_agent import build_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
+from sp_tracking.tasks.tracking.task_catalog import TASK_BY_NAME, TASK_SPECS
 
 
-TRACKING_BFM_TASK_ID = "SPTracking-G1-BFM"
-TRACKING_BFM_LARGEDATASET_TASK_ID = "SPTracking-G1-BFM-LargeDataset"
-TRACKING_BFM_SP_TASK_ID = "SPTracking-G1-BFM-SP"
-TRACKING_BFM_SP_OLD_OBS_OLD_REWARD_BFM_AGENT_TASK_ID = (
-  "SPTracking-G1-SP-OldObsOldReward-BFMAgent"
-)
-TRACKING_BFM_SP_OLD_REWARD_TASK_ID = "SPTracking-G1-SP-OldReward"
-TRACKING_BFM_SP_BFM_AGENT_OLD_REWARD_TASK_ID = "SPTracking-G1-SP-BFMAgent-OldReward"
-TRACKING_BFM_SP_BFM_AGENT_OLD_OBS_TASK_ID = "SPTracking-G1-SP-BFMAgent-OldObs"
+TRACKING_BFM_TASK_ID = TASK_BY_NAME["tracking_bfm"].task_id
+TRACKING_BFM_SP_TASK_ID = TASK_BY_NAME["tracking_bfm_sp"].task_id
+TRACKING_BFM_SP_ABLATION_BFM_ACTOR_TASK_ID = TASK_BY_NAME[
+  "tracking_bfm_sp_ablation_bfm_actor"
+].task_id
+TRACKING_BFM_SP_ABLATION_STUDENT_ACTOR_TASK_ID = TASK_BY_NAME[
+  "tracking_bfm_sp_ablation_student_actor"
+].task_id
+TRACKING_BFM_SP_ABLATION_TEACHER_ACTOR_TASK_ID = TASK_BY_NAME[
+  "tracking_bfm_sp_ablation_teacher_actor"
+].task_id
 
 
 def _compose_train(overrides: list[str] | None = None) -> DictConfig:
@@ -44,36 +47,14 @@ def _register_task(task_id: str, overrides: list[str] | None = None) -> None:
   )
 
 
-_register_task(TRACKING_BFM_TASK_ID)
-_register_task(
-  TRACKING_BFM_LARGEDATASET_TASK_ID,
-  ["task=tracking_bfm_largedataset"],
-)
-_register_task(TRACKING_BFM_SP_TASK_ID, ["task=tracking_bfm_sp"])
-_register_task(
-  TRACKING_BFM_SP_OLD_OBS_OLD_REWARD_BFM_AGENT_TASK_ID,
-  ["task=tracking_bfm_sp_old_obs_old_reward_bfm_agent"],
-)
-_register_task(
-  TRACKING_BFM_SP_OLD_REWARD_TASK_ID,
-  ["task=tracking_bfm_sp_old_reward"],
-)
-_register_task(
-  TRACKING_BFM_SP_BFM_AGENT_OLD_REWARD_TASK_ID,
-  ["task=tracking_bfm_sp_bfm_agent_old_reward"],
-)
-_register_task(
-  TRACKING_BFM_SP_BFM_AGENT_OLD_OBS_TASK_ID,
-  ["task=tracking_bfm_sp_bfm_agent_old_obs"],
-)
+for task_spec in TASK_SPECS:
+  _register_task(task_spec.task_id, list(task_spec.hydra_overrides))
 
 
 __all__ = [
   "TRACKING_BFM_TASK_ID",
-  "TRACKING_BFM_LARGEDATASET_TASK_ID",
   "TRACKING_BFM_SP_TASK_ID",
-  "TRACKING_BFM_SP_OLD_OBS_OLD_REWARD_BFM_AGENT_TASK_ID",
-  "TRACKING_BFM_SP_OLD_REWARD_TASK_ID",
-  "TRACKING_BFM_SP_BFM_AGENT_OLD_REWARD_TASK_ID",
-  "TRACKING_BFM_SP_BFM_AGENT_OLD_OBS_TASK_ID",
+  "TRACKING_BFM_SP_ABLATION_BFM_ACTOR_TASK_ID",
+  "TRACKING_BFM_SP_ABLATION_STUDENT_ACTOR_TASK_ID",
+  "TRACKING_BFM_SP_ABLATION_TEACHER_ACTOR_TASK_ID",
 ]
