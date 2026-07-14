@@ -13,14 +13,17 @@ if False:
 
 @dataclass(kw_only=True)
 class ObservationHistoryJointPositionActionCfg(JointPositionActionCfg):
-  """BFM joint-position action with observation-only policy-mean history.
+  """BFM joint-position action with optional policy order and mean history.
 
   Action processing and application are inherited unchanged from MJLab's
-  ``JointPositionAction``.  The extra state exists solely to reproduce HEFT's
-  ``prev_actions`` observation without enabling SP delay/smoothing/curriculum.
+  ``JointPositionAction``.  ``joint_name_order`` only permutes the policy-facing
+  vector together with its target IDs, scales, and offsets; it does not change
+  which physical joint receives each command.  The extra history reproduces
+  HEFT's ``prev_actions`` without enabling SP delay/smoothing/curriculum.
   """
 
   observation_history_steps: int = 8
+  joint_name_order: tuple[str, ...] | None = None
 
   def build(
     self, env: "ManagerBasedRlEnv"
@@ -37,6 +40,7 @@ class ObservationHistoryJointPositionAction(JointPositionAction):
     env: "ManagerBasedRlEnv",
   ):
     super().__init__(cfg=cfg, env=env)
+    self._apply_policy_joint_name_order(cfg.joint_name_order)
     canonical_names = tuple(
       getattr(getattr(self._entity, "cfg", None), "joint_name_order", ())
     )
@@ -67,6 +71,34 @@ class ObservationHistoryJointPositionAction(JointPositionAction):
       dtype=self._raw_actions.dtype,
       device=self.device,
     )
+
+  def _apply_policy_joint_name_order(
+    self, ordered_names: tuple[str, ...] | None
+  ) -> None:
+    if ordered_names is None:
+      return
+    ordered_names = tuple(ordered_names)
+    target_names = tuple(self._target_names)
+    if set(ordered_names) != set(target_names) or len(ordered_names) != len(
+      target_names
+    ):
+      raise ValueError(
+        "joint_name_order must contain every BFM action target exactly once; "
+        f"targets={target_names}, order={ordered_names}"
+      )
+    permutation = torch.as_tensor(
+      [target_names.index(name) for name in ordered_names],
+      dtype=torch.long,
+      device=self.device,
+    )
+    self._target_ids = self._target_ids.index_select(0, permutation)
+    self._target_names = list(ordered_names)
+    for name in ("_raw_actions", "_processed_actions", "_offset", "_scale"):
+      value = getattr(self, name)
+      if isinstance(value, torch.Tensor):
+        setattr(self, name, value.index_select(-1, permutation))
+    if hasattr(self, "_clip"):
+      self._clip = self._clip.index_select(1, permutation)
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     if env_ids is None:

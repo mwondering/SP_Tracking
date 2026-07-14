@@ -133,9 +133,13 @@ profile.
 | `tracking_bfm_wbteleop_actor_heft_critic` | deployable WBTeleop `actor` (886-D) | `policy + priv` | BFM XML/runtime + HEFT observation support |
 
 All three ablations use a raw-observation BFM `MLPModel` actor with no adapter
-or privileged encoder. Only the input-facing hidden width is adjusted so the
-three actor parameter counts remain within 0.03% of the 8.62M-parameter BFM
-baseline. Their critic is the same `HeftTeacherCritic` with hidden dimensions
+or privileged encoder. The BFM and teacher actors retain parameter-matched
+input widths; the student actor deliberately uses a 2048-wide first layer so
+its wider observation is not prematurely compressed. Its policy-facing action
+vector is also placed in the same HEFT canonical joint order as its target,
+joint-history, and previous-action observations, while physical BFM joint
+targets and dynamics remain unchanged. Their critic is the same
+`HeftTeacherCritic` with hidden dimensions
 `[1024, 512, 512]`, Mish activation, and `vecnorm_decay=0.9999`.
 The ablations omit `priv_critic` because its four terms expose HEFT-specific
 domain-randomization state; under BFM randomization they would only be constant

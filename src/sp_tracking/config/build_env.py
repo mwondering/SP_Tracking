@@ -557,7 +557,12 @@ def _build_action(cfg: DictConfig):
     extra_kwargs = {
       "observation_history_steps": int(
         cfg.action.get("observation_history_steps", 8)
-      )
+      ),
+      "joint_name_order": (
+        _to_tuple(cfg.action.joint_name_order)
+        if cfg.action.get("joint_name_order") is not None
+        else None
+      ),
     }
   return {
     "joint_pos": cfg_cls(

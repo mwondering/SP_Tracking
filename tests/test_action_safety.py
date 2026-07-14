@@ -32,6 +32,26 @@ def test_bfm_action_observation_history_records_full_mean_sequence() -> None:
     )
 
 
+def test_bfm_action_policy_order_reorders_targets_scale_and_offset_together() -> None:
+  action = object.__new__(ObservationHistoryJointPositionAction)
+  action._env = SimpleNamespace(device="cpu")
+  action._target_names = ["left", "middle", "right"]
+  action._target_ids = torch.tensor([4, 7, 9])
+  action._raw_actions = torch.tensor([[1.0, 2.0, 3.0]])
+  action._processed_actions = torch.tensor([[11.0, 12.0, 13.0]])
+  action._offset = torch.tensor([[21.0, 22.0, 23.0]])
+  action._scale = torch.tensor([[31.0, 32.0, 33.0]])
+
+  action._apply_policy_joint_name_order(("right", "left", "middle"))
+
+  assert action._target_names == ["right", "left", "middle"]
+  assert torch.equal(action._target_ids, torch.tensor([9, 4, 7]))
+  assert torch.equal(action._raw_actions, torch.tensor([[3.0, 1.0, 2.0]]))
+  assert torch.equal(action._processed_actions, torch.tensor([[13.0, 11.0, 12.0]]))
+  assert torch.equal(action._offset, torch.tensor([[23.0, 21.0, 22.0]]))
+  assert torch.equal(action._scale, torch.tensor([[33.0, 31.0, 32.0]]))
+
+
 def test_sp_tracking_action_torque_schedule_applies_configured_scale() -> None:
   action = object.__new__(SpTrackingJointPositionAction)
   action.cfg = type(

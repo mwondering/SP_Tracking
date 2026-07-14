@@ -182,7 +182,7 @@ def test_every_catalog_task_matches_declared_semantics() -> None:
     assert prepared.env.commands["motion"].anchor_body_name == "pelvis"
 
 
-def test_actor_observation_is_the_only_difference_between_ablation_agents() -> None:
+def test_ablation_actor_and_critic_network_profiles() -> None:
   prepared = {
     name: prepare_train_cfg(_compose(name)) for name in ABLATION_TASKS
   }
@@ -221,10 +221,35 @@ def test_actor_observation_is_the_only_difference_between_ablation_agents() -> N
   }
   baseline_count = counts["tracking_bfm_sp_ablation_bfm_actor"]
   assert baseline_count == 8_624_669
-  assert all(
-    abs(count - baseline_count) / baseline_count < 0.001
-    for count in counts.values()
+  assert counts["tracking_bfm_sp_ablation_student_actor"] == 11_577_885
+  assert counts["tracking_bfm_sp_ablation_teacher_actor"] == 8_626_998
+  assert prepared[
+    "tracking_bfm_sp_ablation_student_actor"
+  ].agent.actor.hidden_dims[0] == 2048
+  assert abs(
+    counts["tracking_bfm_sp_ablation_teacher_actor"] - baseline_count
+  ) / baseline_count < 0.001
+
+
+def test_student_actor_joint_observations_and_actions_share_heft_order() -> None:
+  student_tasks = (
+    "tracking_bfm_sp_ablation_student_actor",
+    "tracking_bfm_student_actor_bfm_critic",
   )
+  for task_name in student_tasks:
+    cfg = _compose(task_name)
+    prepared = prepare_train_cfg(cfg)
+    action = prepared.env.actions["joint_pos"]
+    assert tuple(action.joint_name_order) == tuple(cfg.task.robot.joint_name_order)
+    assert action.observation_history_steps == 8
+
+  for task_name in (
+    "tracking_bfm_sp_ablation_bfm_actor",
+    "tracking_bfm_sp_ablation_teacher_actor",
+    *WBTELEOP_TASKS,
+  ):
+    action = prepare_train_cfg(_compose(task_name)).env.actions["joint_pos"]
+    assert getattr(action, "joint_name_order", None) is None
 
 
 def test_student_and_teacher_actor_baselines_restore_bfm_critic() -> None:

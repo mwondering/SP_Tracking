@@ -10,7 +10,13 @@ agent_overrides:
   obs_groups:
     actor: [policy]
     critic: [policy, priv]
-  # Match the BFM actor's ~8.62M trainable MLP parameters despite the wider
-  # raw student observation by adjusting only the input-facing hidden layer.
+  # Use the same 2048-wide input projection as the WBTeleop/BFM actor instead
+  # of compressing the 1728-D student observation to 1266 dimensions.
   actor:
-    hidden_dims: [1266, 2048, 1024, 1024, 512, 256, 128]
+    hidden_dims: [2048, 2048, 1024, 1024, 512, 256, 128]
+
+# Align the policy output, target joints, joint histories, and prev_actions in
+# the same HEFT canonical order.  Target IDs/scales are permuted with the
+# policy vector, so the underlying BFM joint-position dynamics are unchanged.
+action:
+  joint_name_order: ${task.robot.joint_name_order}
