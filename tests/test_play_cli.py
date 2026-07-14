@@ -101,6 +101,10 @@ def test_prepare_play_cfg_requires_task_for_legacy_local_checkpoint(tmp_path: Pa
       "tracking_bfm_wbteleop_actor_bfm_critic",
       ["actor", "critic"],
     ),
+    (
+      "tracking_bfm_wbteleop_actor_heft_critic",
+      ["actor", "policy", "priv"],
+    ),
   ],
 )
 def test_prepare_play_cfg_supports_new_variant_for_legacy_checkpoint(

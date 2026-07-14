@@ -60,7 +60,7 @@ def test_reference_joint_state_window_matches_source_580_layout() -> None:
   assert all(torch.equal(call[2], expected_steps) for call in command.calls)
 
 
-def test_wbteleop_baseline_is_deployable_886_actor_with_original_bfm_critic() -> None:
+def test_wbteleop_tasks_use_deployable_886_actor() -> None:
   task_name = "tracking_bfm_wbteleop_actor_bfm_critic"
   cfg = _compose(task_name)
   bfm = prepare_train_cfg(_compose("tracking_bfm"))
@@ -112,3 +112,12 @@ def test_wbteleop_baseline_is_deployable_886_actor_with_original_bfm_critic() ->
   assert prepared.agent.critic == bfm.agent.critic
   assert prepared.agent.actor == bfm.agent.actor
   assert tuple(prepared.env.observations) == ("actor", "critic")
+
+  heft_cfg = _compose("tracking_bfm_wbteleop_actor_heft_critic")
+  heft_prepared = prepare_train_cfg(heft_cfg)
+  heft_env = build_env_cfg(heft_cfg.task)
+  assert tuple(heft_env.observations["actor"].terms) == tuple(actor_terms)
+  assert heft_prepared.agent.obs_groups == {
+    "actor": ("actor",),
+    "critic": ("policy", "priv"),
+  }

@@ -22,6 +22,7 @@ def test_tracking_entrypoint_registers_default_tasks() -> None:
   assert registry.TRACKING_BFM_STUDENT_ACTOR_BFM_CRITIC_TASK_ID in tasks
   assert registry.TRACKING_BFM_TEACHER_ACTOR_BFM_CRITIC_TASK_ID in tasks
   assert registry.TRACKING_BFM_WBTELEOP_ACTOR_BFM_CRITIC_TASK_ID in tasks
+  assert registry.TRACKING_BFM_WBTELEOP_ACTOR_HEFT_CRITIC_TASK_ID in tasks
 
 
 def test_task_ids_describe_runtime_actor_and_critic_semantics() -> None:
@@ -50,6 +51,9 @@ def test_task_ids_describe_runtime_actor_and_critic_semantics() -> None:
   )
   assert registry.TRACKING_BFM_WBTELEOP_ACTOR_BFM_CRITIC_TASK_ID == (
     "SPTracking-G1-BFM-WBTeleopActor-BFMCritic"
+  )
+  assert registry.TRACKING_BFM_WBTELEOP_ACTOR_HEFT_CRITIC_TASK_ID == (
+    "SPTracking-G1-BFM-WBTeleopActor-HEFTCritic"
   )
 
 
@@ -105,3 +109,22 @@ def test_registered_student_baseline_uses_original_bfm_critic() -> None:
   }
   assert rl_cfg.critic.class_name == "MLPModel"
   assert rl_cfg.critic.hidden_dims == (2048, 2048, 1024, 1024, 512, 256, 128)
+
+
+def test_registered_wbteleop_comparison_uses_heft_critic() -> None:
+  import sp_tracking.tasks.tracking.registry as registry
+
+  env_cfg = load_env_cfg(
+    registry.TRACKING_BFM_WBTELEOP_ACTOR_HEFT_CRITIC_TASK_ID
+  )
+  rl_cfg = load_rl_cfg(
+    registry.TRACKING_BFM_WBTELEOP_ACTOR_HEFT_CRITIC_TASK_ID
+  )
+
+  assert tuple(env_cfg.observations) == ("actor", "policy", "priv")
+  assert rl_cfg.obs_groups == {
+    "actor": ("actor",),
+    "critic": ("policy", "priv"),
+  }
+  assert rl_cfg.critic.class_name.endswith(":HeftTeacherCritic")
+  assert rl_cfg.critic.hidden_dims == (1024, 512, 512)

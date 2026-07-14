@@ -36,8 +36,9 @@ scripts/train_tracking_bfm.sh /path/to/motions task.num_envs=2048 agent.max_iter
 - `src/sp_tracking/conf`: the single Hydra config source used by `sp-train`,
   tests, and the mjlab task entry point.
 - `src/sp_tracking/assets/robots`: packaged G1 assets selected by task. The
-  ablations use the SP XML/body topology with BFM init, collision, and actuator
-  settings; `tracking_bfm_sp` retains the complete HEFT robot configuration.
+  BFM-runtime comparisons use the BFM XML and express HEFT keypoints through
+  physical BFM bodies plus fixed local offsets; `tracking_bfm_sp` retains the
+  complete HEFT robot configuration.
 - `scripts/train_tracking_bfm.sh`: repo-local launch script for the default
   training run.
 - `scripts/play_tracking_bfm.sh`: repo-local play script for local or W&B
@@ -100,10 +101,11 @@ The resulting checkpoint is self-describing and can be passed directly to
 stage. The original `tracking_bfm` dynamics and MLP/PPO preset are retained;
 all task observation and reward views now use a pelvis anchor.
 
-The three observation ablations use the SP XML only for body/joint/reference
-compatibility. They otherwise retain the complete BFM runtime: BFM MLPs,
-PPO/Adam, action, rewards, terminations, events, curriculum, sampler, reset,
-seed, and training budget. Run them with:
+The three observation ablations use the BFM XML and add only the reference
+caches, semantic keypoint views, contact sensing, and policy-mean history needed
+to construct HEFT observations. They retain the BFM MLP actor family, PPO/Adam,
+applied joint-position dynamics, rewards, terminations, events, curriculum,
+sampler, reset, seed, and training budget. Run them with:
 
 ```bash
 uv run sp-train task=tracking_bfm_sp_ablation_bfm_actor motion_path=/path/to/motions
@@ -122,9 +124,13 @@ profile.
 | --- | --- | --- | --- |
 | `tracking_bfm` | BFM `actor` | BFM `critic` | BFM XML + complete BFM runtime |
 | `tracking_bfm_sp` | `policy + priv` | `policy + priv + priv_critic` | SP XML + HEFT pretrain runtime |
-| `tracking_bfm_sp_ablation_bfm_actor` | BFM `actor` | `policy + priv` | SP XML compatibility + complete BFM runtime |
-| `tracking_bfm_sp_ablation_student_actor` | SP student `policy` | `policy + priv` | SP XML compatibility + complete BFM runtime |
-| `tracking_bfm_sp_ablation_teacher_actor` | raw `policy + priv` | `policy + priv` | SP XML compatibility + complete BFM runtime |
+| `tracking_bfm_sp_ablation_bfm_actor` | BFM `actor` | `policy + priv` | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_sp_ablation_student_actor` | HEFT student `policy` | `policy + priv` | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_sp_ablation_teacher_actor` | raw `policy + priv` | `policy + priv` | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_student_actor_bfm_critic` | HEFT student `policy` | BFM `critic` | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_teacher_actor_bfm_critic` | raw `policy + priv` | BFM `critic` | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_wbteleop_actor_bfm_critic` | deployable WBTeleop `actor` (886-D) | BFM `critic` | BFM XML + complete BFM runtime |
+| `tracking_bfm_wbteleop_actor_heft_critic` | deployable WBTeleop `actor` (886-D) | `policy + priv` | BFM XML/runtime + HEFT observation support |
 
 All three ablations use a raw-observation BFM `MLPModel` actor with no adapter
 or privileged encoder. Only the input-facing hidden width is adjusted so the
@@ -134,6 +140,16 @@ baseline. Their critic is the same `HeftTeacherCritic` with hidden dimensions
 The ablations omit `priv_critic` because its four terms expose HEFT-specific
 domain-randomization state; under BFM randomization they would only be constant
 fallback values. The independent `tracking_bfm_sp` pretrain task keeps them.
+
+The two WBTeleop tasks share the exact same actor term order, history lengths,
+BFM PPO, reward, termination, and joint-position action mapping. Their actor is
+58-D current reference joint state, 180-D reference limb pose history, 3-D
+reference angular velocity, 180-D measured limb pose history, and five-frame
+deployable proprioception (gravity, gyro, joint position/velocity, last action),
+for 886 dimensions total. It contains no `base_lin_vel` or global tracking-error
+term. The HEFT-critic variant additionally builds `policy + priv`; the extra
+cache, contact sensor, and action-mean history are observation support and do
+not enter the actor or BFM reward.
 
 ## Checkpoints, Resume, and Deployment Export
 
@@ -223,7 +239,7 @@ uv build
 
 ## mjlab Task Entry Point
 
-Installing the package exposes eight mjlab task IDs via the `mjlab.tasks` entry
+Installing the package exposes nine mjlab task IDs via the `mjlab.tasks` entry
 point:
 
 - `SPTracking-G1-BFM-BFMActor-BFMCritic`
@@ -234,3 +250,4 @@ point:
 - `SPTracking-G1-BFM-StudentActor-BFMCritic`
 - `SPTracking-G1-BFM-TeacherActor-BFMCritic`
 - `SPTracking-G1-BFM-WBTeleopActor-BFMCritic`
+- `SPTracking-G1-BFM-WBTeleopActor-HEFTCritic`

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from sp_tracking.tasks.tracking.task_catalog import TASK_SPECS
+
 
 def test_tracking_bfm_training_script_contract() -> None:
   root = Path(__file__).resolve().parents[1]
@@ -55,3 +57,6 @@ def test_tracking_bfm_play_script_contract() -> None:
   assert "--motion-file" in contents
   assert "--motion-path" in contents
   assert "--dry-run" in contents
+  assert "tracking_bfm_largedataset" not in contents
+  for spec in TASK_SPECS:
+    assert spec.name in contents

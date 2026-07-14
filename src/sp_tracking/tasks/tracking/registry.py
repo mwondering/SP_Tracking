@@ -32,6 +32,9 @@ TRACKING_BFM_TEACHER_ACTOR_BFM_CRITIC_TASK_ID = TASK_BY_NAME[
 TRACKING_BFM_WBTELEOP_ACTOR_BFM_CRITIC_TASK_ID = TASK_BY_NAME[
   "tracking_bfm_wbteleop_actor_bfm_critic"
 ].task_id
+TRACKING_BFM_WBTELEOP_ACTOR_HEFT_CRITIC_TASK_ID = TASK_BY_NAME[
+  "tracking_bfm_wbteleop_actor_heft_critic"
+].task_id
 
 
 def _compose_train(overrides: list[str] | None = None) -> DictConfig:
@@ -69,4 +72,5 @@ __all__ = [
   "TRACKING_BFM_STUDENT_ACTOR_BFM_CRITIC_TASK_ID",
   "TRACKING_BFM_TEACHER_ACTOR_BFM_CRITIC_TASK_ID",
   "TRACKING_BFM_WBTELEOP_ACTOR_BFM_CRITIC_TASK_ID",
+  "TRACKING_BFM_WBTELEOP_ACTOR_HEFT_CRITIC_TASK_ID",
 ]

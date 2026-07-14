@@ -10,6 +10,7 @@ from omegaconf import OmegaConf
 from sp_tracking.assets.robots.g1_sp_tracking import get_g1_sp_tracking_spec
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.scripts.train import prepare_train_cfg
+from sp_tracking.tasks.tracking.task_catalog import TASK_SPECS
 
 
 ABLATION_TASKS = {
@@ -21,6 +22,95 @@ ABLATION_TASKS = {
 BFM_CRITIC_BASELINES = {
   "tracking_bfm_student_actor_bfm_critic": ("policy",),
   "tracking_bfm_teacher_actor_bfm_critic": ("policy", "priv"),
+}
+
+WBTELEOP_TASKS = (
+  "tracking_bfm_wbteleop_actor_bfm_critic",
+  "tracking_bfm_wbteleop_actor_heft_critic",
+)
+
+EXPECTED_TASK_SEMANTICS = {
+  "tracking_bfm": (
+    ("actor", "critic"),
+    ("actor",),
+    ("critic",),
+    "MLPModel",
+    "MLPModel",
+    "JointPositionActionCfg",
+    "old_tracking",
+  ),
+  "tracking_bfm_sp": (
+    ("policy", "priv", "priv_critic"),
+    ("policy", "priv"),
+    ("policy", "priv", "priv_critic"),
+    "sp_tracking.tasks.tracking.rl.heft_models:HeftTeacherActor",
+    "sp_tracking.tasks.tracking.rl.heft_models:HeftTeacherCritic",
+    "SpTrackingJointPositionActionCfg",
+    "sp_tracking",
+  ),
+  "tracking_bfm_sp_ablation_bfm_actor": (
+    ("actor", "policy", "priv"),
+    ("actor",),
+    ("policy", "priv"),
+    "MLPModel",
+    "sp_tracking.tasks.tracking.rl.heft_models:HeftTeacherCritic",
+    "ObservationHistoryJointPositionActionCfg",
+    "old_tracking",
+  ),
+  "tracking_bfm_sp_ablation_student_actor": (
+    ("actor", "policy", "priv"),
+    ("policy",),
+    ("policy", "priv"),
+    "MLPModel",
+    "sp_tracking.tasks.tracking.rl.heft_models:HeftTeacherCritic",
+    "ObservationHistoryJointPositionActionCfg",
+    "old_tracking",
+  ),
+  "tracking_bfm_sp_ablation_teacher_actor": (
+    ("actor", "policy", "priv"),
+    ("policy", "priv"),
+    ("policy", "priv"),
+    "MLPModel",
+    "sp_tracking.tasks.tracking.rl.heft_models:HeftTeacherCritic",
+    "ObservationHistoryJointPositionActionCfg",
+    "old_tracking",
+  ),
+  "tracking_bfm_student_actor_bfm_critic": (
+    ("actor", "critic", "policy", "priv"),
+    ("policy",),
+    ("critic",),
+    "MLPModel",
+    "MLPModel",
+    "ObservationHistoryJointPositionActionCfg",
+    "old_tracking",
+  ),
+  "tracking_bfm_teacher_actor_bfm_critic": (
+    ("actor", "critic", "policy", "priv"),
+    ("policy", "priv"),
+    ("critic",),
+    "MLPModel",
+    "MLPModel",
+    "ObservationHistoryJointPositionActionCfg",
+    "old_tracking",
+  ),
+  "tracking_bfm_wbteleop_actor_bfm_critic": (
+    ("actor", "critic"),
+    ("actor",),
+    ("critic",),
+    "MLPModel",
+    "MLPModel",
+    "JointPositionActionCfg",
+    "old_tracking",
+  ),
+  "tracking_bfm_wbteleop_actor_heft_critic": (
+    ("actor", "policy", "priv"),
+    ("actor",),
+    ("policy", "priv"),
+    "MLPModel",
+    "sp_tracking.tasks.tracking.rl.heft_models:HeftTeacherCritic",
+    "ObservationHistoryJointPositionActionCfg",
+    "old_tracking",
+  ),
 }
 
 
@@ -62,6 +152,34 @@ def test_supported_task_profile_matrix() -> None:
       "actor": actor_groups,
       "critic": ("policy", "priv"),
     }
+
+
+def test_every_catalog_task_matches_declared_semantics() -> None:
+  assert {spec.name for spec in TASK_SPECS} == set(EXPECTED_TASK_SEMANTICS)
+
+  for task_name, expected in EXPECTED_TASK_SEMANTICS.items():
+    (
+      env_groups,
+      actor_groups,
+      critic_groups,
+      actor_class,
+      critic_class,
+      action_class,
+      reward_profile,
+    ) = expected
+    prepared = prepare_train_cfg(_compose(task_name))
+    variant = prepared.raw.task.variant
+
+    assert tuple(prepared.env.observations) == env_groups
+    assert prepared.agent.obs_groups == {
+      "actor": actor_groups,
+      "critic": critic_groups,
+    }
+    assert prepared.agent.actor.class_name == actor_class
+    assert prepared.agent.critic.class_name == critic_class
+    assert type(prepared.env.actions["joint_pos"]).__name__ == action_class
+    assert variant.reward_profile == reward_profile
+    assert prepared.env.commands["motion"].anchor_body_name == "pelvis"
 
 
 def test_actor_observation_is_the_only_difference_between_ablation_agents() -> None:
@@ -151,6 +269,48 @@ def test_bfm_critic_baselines_only_change_actor_observation_from_parent() -> Non
       )
     assert baseline.task.obs.observations.critic.enabled is True
     assert parent.task.obs.observations.critic.enabled is False
+
+
+def test_wbteleop_critic_pair_has_identical_actor_and_bfm_objective() -> None:
+  bfm_critic = _compose(WBTELEOP_TASKS[0])
+  heft_critic = _compose(WBTELEOP_TASKS[1])
+
+  assert OmegaConf.to_container(
+    bfm_critic.task.obs.observations.actor, resolve=True
+  ) == OmegaConf.to_container(
+    heft_critic.task.obs.observations.actor, resolve=True
+  )
+  for section in ("reward", "terminations", "events"):
+    assert OmegaConf.to_container(
+      bfm_critic.task[section], resolve=True
+    ) == OmegaConf.to_container(
+      heft_critic.task[section], resolve=True
+    )
+
+  bfm_prepared = prepare_train_cfg(bfm_critic)
+  heft_prepared = prepare_train_cfg(heft_critic)
+  assert bfm_prepared.agent.actor == heft_prepared.agent.actor
+  assert bfm_prepared.agent.algorithm == heft_prepared.agent.algorithm
+  assert bfm_prepared.agent.obs_groups == {
+    "actor": ("actor",),
+    "critic": ("critic",),
+  }
+  assert heft_prepared.agent.obs_groups == {
+    "actor": ("actor",),
+    "critic": ("policy", "priv"),
+  }
+  assert heft_prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")
+  assert heft_prepared.agent.critic.hidden_dims == (1024, 512, 512)
+  assert heft_prepared.agent.critic.activation == "mish"
+  assert heft_prepared.agent.critic.vecnorm_decay == 0.9999
+
+  bfm_action = bfm_prepared.env.actions["joint_pos"]
+  heft_action = heft_prepared.env.actions["joint_pos"]
+  assert type(bfm_action).__name__ == "JointPositionActionCfg"
+  assert type(heft_action).__name__ == "ObservationHistoryJointPositionActionCfg"
+  assert heft_action.observation_history_steps == 8
+  assert heft_action.scale == bfm_action.scale
+  assert heft_action.use_default_offset == bfm_action.use_default_offset
 
 
 def test_ablation_observation_terms_are_reused_without_adapter() -> None:
@@ -269,7 +429,7 @@ def test_all_task_reward_and_observation_anchors_use_pelvis() -> None:
     "tracking_bfm_sp",
     *ABLATION_TASKS,
     *BFM_CRITIC_BASELINES,
-    "tracking_bfm_wbteleop_actor_bfm_critic",
+    *WBTELEOP_TASKS,
   )
   for task_name in task_names:
     cfg = _compose(task_name)

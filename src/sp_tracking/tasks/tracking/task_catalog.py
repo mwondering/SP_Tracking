@@ -15,6 +15,7 @@ TaskName = Literal[
   "tracking_bfm_student_actor_bfm_critic",
   "tracking_bfm_teacher_actor_bfm_critic",
   "tracking_bfm_wbteleop_actor_bfm_critic",
+  "tracking_bfm_wbteleop_actor_heft_critic",
 ]
 
 
@@ -65,6 +66,11 @@ TASK_SPECS = (
     "tracking_bfm_wbteleop_actor_bfm_critic",
     "SPTracking-G1-BFM-WBTeleopActor-BFMCritic",
     ("task=tracking_bfm_wbteleop_actor_bfm_critic",),
+  ),
+  TaskSpec(
+    "tracking_bfm_wbteleop_actor_heft_critic",
+    "SPTracking-G1-BFM-WBTeleopActor-HEFTCritic",
+    ("task=tracking_bfm_wbteleop_actor_heft_critic",),
   ),
 )
 

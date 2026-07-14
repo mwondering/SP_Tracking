@@ -10,7 +10,7 @@ Usage:
   scripts/play_tracking_bfm.sh --checkpoint-file PATH [--motion-file PATH|--motion-path PATH] [options]
 
 Options:
-  --task tracking_bfm|tracking_bfm_largedataset|tracking_bfm_sp  # legacy checkpoint only
+  --task TASK_NAME  # legacy checkpoint only; see README task table
   --checkpoint-file PATH
   --motion-file PATH
   --motion-path PATH
@@ -48,7 +48,15 @@ done
 
 if [[ -n "${TASK}" ]]; then
   case "${TASK}" in
-    tracking_bfm|tracking_bfm_largedataset|tracking_bfm_sp) ;;
+    tracking_bfm|\
+    tracking_bfm_sp|\
+    tracking_bfm_sp_ablation_bfm_actor|\
+    tracking_bfm_sp_ablation_student_actor|\
+    tracking_bfm_sp_ablation_teacher_actor|\
+    tracking_bfm_student_actor_bfm_critic|\
+    tracking_bfm_teacher_actor_bfm_critic|\
+    tracking_bfm_wbteleop_actor_bfm_critic|\
+    tracking_bfm_wbteleop_actor_heft_critic) ;;
     *) echo "Invalid task: ${TASK}" >&2; exit 2 ;;
   esac
 fi

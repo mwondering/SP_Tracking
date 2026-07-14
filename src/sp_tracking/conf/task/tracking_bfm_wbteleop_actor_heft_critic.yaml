@@ -1,0 +1,17 @@
+defaults:
+  - tracking_bfm_sp_ablation_bfm_actor
+  - override obs: wbteleop_heft_critic
+  - _self_
+
+name: tracking_bfm_wbteleop_actor_heft_critic
+variant:
+  observation_profile: wbteleop_886_actor_heft_critic
+
+# The actor, BFM PPO/objective, and applied joint-position dynamics are
+# identical to the deployable 886-D WBTeleop baseline.  The inherited
+# observation-only reference cache, contact sensing, and policy-mean history
+# exist only to construct policy+priv for HeftTeacherCritic.
+agent_overrides:
+  obs_groups:
+    actor: [actor]
+    critic: [policy, priv]
