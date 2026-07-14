@@ -97,7 +97,8 @@ uv run sp-train task=tracking_bfm_sp motion_path=/path/to/motions
 
 The resulting checkpoint is self-describing and can be passed directly to
 `sp-play`. This profile intentionally does not implement the student/adapt
-stage. The original `tracking_bfm` task and its MLP/PPO preset are unchanged.
+stage. The original `tracking_bfm` dynamics and MLP/PPO preset are retained;
+all task observation and reward views now use a pelvis anchor.
 
 The three observation ablations use the SP XML only for body/joint/reference
 compatibility. They otherwise retain the complete BFM runtime: BFM MLPs,
@@ -110,9 +111,10 @@ uv run sp-train task=tracking_bfm_sp_ablation_student_actor motion_path=/path/to
 uv run sp-train task=tracking_bfm_sp_ablation_teacher_actor motion_path=/path/to/motions
 ```
 
-The default `tracking_bfm` task keeps the old BFM tracking observation, reward,
-termination, and `multi_commands.py` loader defaults. `tracking_bfm_sp` remains
-the independent HEFT pretrain profile.
+The default `tracking_bfm` task keeps the BFM tracking term set, termination,
+and `multi_commands.py` loader behavior, with its observation/reward anchor
+standardized to pelvis. `tracking_bfm_sp` remains the independent HEFT pretrain
+profile.
 
 ## Tasks
 

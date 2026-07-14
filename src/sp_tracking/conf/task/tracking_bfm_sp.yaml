@@ -75,7 +75,7 @@ reference_views:
       - right_wrist_roll_link
       - right_hand_mimic
   old_tracking:
-    anchor_body_name: torso_link
+    anchor_body_name: pelvis
     body_names:
       - pelvis
       - left_hip_roll_link

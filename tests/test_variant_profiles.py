@@ -226,7 +226,7 @@ def test_ablation_runtime_matches_bfm_with_semantic_keypoints_only() -> None:
     assert action.scale == G1_ACTION_SCALE
     assert action.use_default_offset is True
     assert type(command).__name__ == "MultiMotionCommandCfg"
-    assert command.anchor_body_name == "torso_link"
+    assert command.anchor_body_name == "pelvis"
     assert command.motion_type == "isaaclab"
     assert command.fk_from_joint_pos is False
     assert command.recompute_joint_vel_from_joint_pos is False
@@ -261,6 +261,37 @@ def test_ablation_runtime_matches_bfm_with_semantic_keypoints_only() -> None:
     assert "hand_mimic" not in serialized
     assert "toe_link" not in serialized
     assert "sp_xml_bfm_runtime_g1" not in serialized
+
+
+def test_all_task_reward_and_observation_anchors_use_pelvis() -> None:
+  task_names = (
+    "tracking_bfm",
+    "tracking_bfm_sp",
+    *ABLATION_TASKS,
+    *BFM_CRITIC_BASELINES,
+    "tracking_bfm_wbteleop_actor_bfm_critic",
+  )
+  for task_name in task_names:
+    cfg = _compose(task_name)
+    env = build_env_cfg(cfg.task)
+    assert cfg.task.robot.anchor_body_name == "pelvis"
+    assert env.commands["motion"].anchor_body_name == "pelvis"
+
+    for view in cfg.task.reference_views.values():
+      if "anchor_body_name" in view:
+        assert view.anchor_body_name == "pelvis"
+
+    for reward_cfg in env.rewards.values():
+      anchor = reward_cfg.params.get("anchor_body_name")
+      if anchor is not None:
+        assert anchor == "pelvis"
+
+    for group_cfg in env.observations.values():
+      for term_cfg in group_cfg.terms.values():
+        for param_name in ("anchor_body_name", "root_body_name"):
+          anchor = term_cfg.params.get(param_name)
+          if anchor is not None:
+            assert anchor == "pelvis"
 
 
 def test_sp_xml_foot_friction_pattern_matches_all_foot_collision_geoms() -> None:

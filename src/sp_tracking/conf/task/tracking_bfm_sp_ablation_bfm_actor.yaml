@@ -82,11 +82,11 @@ obs:
       - {name: right_wrist, body_name: right_wrist_roll_link}
       - {name: right_hand, body_name: right_wrist_yaw_link, local_pos: [0.116, 0.0, 0.0]}
 
-# BFM terms retain the old torso-anchored view. HEFT observations select a
-# pelvis root explicitly and resolve semantic points from physical parents.
+# Every reward and observation view uses the pelvis anchor. HEFT semantic
+# points continue to resolve from their physical parent bodies.
 reference_views:
   old_tracking:
-    anchor_body_name: torso_link
+    anchor_body_name: pelvis
     body_names:
       - pelvis
       - left_hip_roll_link

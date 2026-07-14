@@ -23,7 +23,7 @@ robot:
   name: g1
   asset: tracking_bfm_g1
   entity_name: robot
-  anchor_body_name: torso_link
+  anchor_body_name: pelvis
   viewer_body_name: torso_link
   self_collision_primary_pattern: pelvis
   foot_geom_pattern: ^(left|right)_foot[1-7]_collision$

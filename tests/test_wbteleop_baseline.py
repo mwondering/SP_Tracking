@@ -8,7 +8,10 @@ from hydra import compose, initialize_config_module
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.scripts.train import prepare_train_cfg
 from sp_tracking.tasks.tracking.mdp.observations import (
+  motion_ref_ang_vel,
+  ref_limb_ee_pose_b,
   reference_joint_state_window,
+  robot_limb_ee_pose_b,
 )
 
 
@@ -57,7 +60,7 @@ def test_reference_joint_state_window_matches_source_580_layout() -> None:
   assert all(torch.equal(call[2], expected_steps) for call in command.calls)
 
 
-def test_wbteleop_baseline_is_808_actor_with_original_bfm_critic() -> None:
+def test_wbteleop_baseline_is_deployable_886_actor_with_original_bfm_critic() -> None:
   task_name = "tracking_bfm_wbteleop_actor_bfm_critic"
   cfg = _compose(task_name)
   bfm = prepare_train_cfg(_compose("tracking_bfm"))
@@ -67,25 +70,37 @@ def test_wbteleop_baseline_is_808_actor_with_original_bfm_critic() -> None:
   actor_terms = env.observations["actor"].terms
   assert tuple(actor_terms) == (
     "command",
-    "motion_anchor_pos_b",
-    "motion_anchor_ori_b",
-    "body_pos",
-    "body_ori",
-    "base_lin_vel",
+    "ref_limb_ee_pose_b",
+    "motion_ref_ang_vel",
+    "robot_limb_ee_pose_b",
+    "projected_gravity",
     "base_ang_vel",
     "joint_pos",
     "joint_vel",
     "actions",
   )
-  assert actor_terms["command"].func is reference_joint_state_window
-  assert actor_terms["command"].params == {
-    "command_name": "motion",
-    "history_steps": 5,
-    "future_steps": 5,
-  }
-  # 580 reference q/qdot + 3 anchor pos + 6 anchor rot + 14*(3+6)
-  # body pose + 2*3 base velocity + 3*29 joint/action state.
-  assert 580 + 3 + 6 + 14 * 9 + 6 + 3 * 29 == 808
+  assert actor_terms["ref_limb_ee_pose_b"].func is ref_limb_ee_pose_b
+  assert actor_terms["robot_limb_ee_pose_b"].func is robot_limb_ee_pose_b
+  assert actor_terms["motion_ref_ang_vel"].func is motion_ref_ang_vel
+  assert actor_terms["ref_limb_ee_pose_b"].params["anchor_body_name"] == "pelvis"
+  assert actor_terms["robot_limb_ee_pose_b"].params["anchor_body_name"] == "pelvis"
+  for term_name in (
+    "ref_limb_ee_pose_b",
+    "robot_limb_ee_pose_b",
+    "projected_gravity",
+    "base_ang_vel",
+    "joint_pos",
+    "joint_vel",
+    "actions",
+  ):
+    assert actor_terms[term_name].history_length == 5
+  assert "base_lin_vel" not in actor_terms
+  assert "motion_anchor_pos_b" not in actor_terms
+  assert "motion_anchor_ori_b" not in actor_terms
+
+  # 58 current reference q/qdot + two 5-frame, four-limb SE(3) views
+  # + reference angular velocity + five-frame deployable proprioception.
+  assert 58 + 2 * (5 * 4 * 9) + 3 + 5 * (3 + 3 + 3 * 29) == 886
 
   command = env.commands["motion"]
   assert command.history_steps == 0
@@ -97,4 +112,3 @@ def test_wbteleop_baseline_is_808_actor_with_original_bfm_critic() -> None:
   assert prepared.agent.critic == bfm.agent.critic
   assert prepared.agent.actor == bfm.agent.actor
   assert tuple(prepared.env.observations) == ("actor", "critic")
-

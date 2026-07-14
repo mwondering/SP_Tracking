@@ -63,9 +63,8 @@ def _relative_reference_body_poses(
   """Match command-relative poses for an optional named reference view.
 
   ``MultiMotionCommand`` stores its default relative body poses using the
-  primary command anchor.  Legacy BFM terms may instead select a torso view
-  while SP reset/reward terms retain a pelvis primary anchor, so recompute the
-  exact yaw-aligned construction for that alternate view here.
+  primary command anchor.  A term may select a different named reference view,
+  so recompute the exact yaw-aligned construction for that alternate view here.
   """
   if anchor_body_name is None:
     return (
