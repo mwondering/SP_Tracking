@@ -151,6 +151,7 @@ class SparseTrackSplitLrPPO(PPO):
     mean_entropy = 0
     mean_rnd_loss = 0 if self.rnd else None
     mean_symmetry_loss = 0 if self.symmetry else None
+    mean_auxiliary_losses: dict[str, float] = {}
 
     if self.actor.is_recurrent or self.critic.is_recurrent:
       generator = self.storage.recurrent_mini_batch_generator(
@@ -279,6 +280,17 @@ class SparseTrackSplitLrPPO(PPO):
         - self.entropy_coef * entropy.mean()
       )
 
+      auxiliary_loss_fn = getattr(self, "_auxiliary_loss", None)
+      if callable(auxiliary_loss_fn):
+        auxiliary_loss, auxiliary_metrics = auxiliary_loss_fn(
+          batch.observations[:original_batch_size]
+        )
+        loss = loss + auxiliary_loss
+        for name, metric in auxiliary_metrics.items():
+          mean_auxiliary_losses[name] = (
+            mean_auxiliary_losses.get(name, 0.0) + float(metric.detach().item())
+          )
+
       std_symmetry_loss = None
       get_std_symmetry_loss = getattr(self.actor, "std_symmetry_loss", None)
       if callable(get_std_symmetry_loss):
@@ -347,6 +359,8 @@ class SparseTrackSplitLrPPO(PPO):
       loss_dict["symmetry_std"] = float(
         self.actor.std_symmetry_loss().detach().item()
       )
+    for name, total in mean_auxiliary_losses.items():
+      loss_dict[name] = total / num_updates
 
     self.storage.clear()
     return loss_dict
@@ -369,6 +383,41 @@ class SparseTrackSplitLrPPO(PPO):
           all_grads[offset : offset + numel].view_as(param.grad.data)
         )
         offset += numel
+
+
+class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
+  """PPO plus explicit SPV3 root-state estimator supervision."""
+
+  def __init__(
+    self,
+    *args,
+    estimator_root_height_loss_coef: float = 1.0,
+    estimator_root_lin_vel_loss_coef: float = 1.0,
+    **kwargs,
+  ) -> None:
+    super().__init__(*args, **kwargs)
+    self.estimator_root_height_loss_coef = float(
+      estimator_root_height_loss_coef
+    )
+    self.estimator_root_lin_vel_loss_coef = float(
+      estimator_root_lin_vel_loss_coef
+    )
+
+  def _auxiliary_loss(
+    self, observations
+  ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    estimator_losses = getattr(self.actor, "estimator_losses", None)
+    if not callable(estimator_losses):
+      raise TypeError("SPV3EstimatorPPO requires an actor with estimator_losses()")
+    height_mse, lin_vel_mse = estimator_losses(observations)
+    loss = (
+      self.estimator_root_height_loss_coef * height_mse
+      + self.estimator_root_lin_vel_loss_coef * lin_vel_mse
+    )
+    return loss, {
+      "estimator_root_height_mse": height_mse,
+      "estimator_root_lin_vel_mse": lin_vel_mse,
+    }
 
 
 def _schedule_value(schedule, progress: float) -> float:

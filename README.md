@@ -133,6 +133,7 @@ profile.
 | `tracking_bfm_wbteleop_actor_heft_critic` | deployable WBTeleop `actor` (886-D) | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
 | `tracking_bfm_spv1_actor_heft_critic_heft_reward` | heading-invariant SPV1 `actor` (1786-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
 | `tracking_bfm_spv2_actor_heft_critic_heft_reward` | Compact SPV2: 5-frame history, +4 future, HEFT root rotation (1056-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
+| `tracking_bfm_spv3_actor_heft_critic_heft_reward` | SPV3: SPV2 + supervised MLP root-state estimator (6546-D deploy input, 1064-D policy input) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
 
 Every BFM-XML task above except the already-HEFT-reward SPV tasks also has an
 additive HEFT-reward variant. Append `_heft_reward` to its Hydra task name, for
@@ -206,6 +207,17 @@ reference pelvis height and reference-local pelvis linear velocity, and changes
 the root-orientation command to HEFT's noisy robot-to-reference 6D rotation.
 The resulting actor is 1056-D; it contains relative yaw but no robot global
 position.
+
+SPV3 retains the SPV2 policy contract and extends the six deployable
+proprioceptive streams to a shared 50-frame window. A configurable MLP
+estimator maps that 6100-D history to pelvis height and three-dimensional root
+linear velocity in the current robot frame. The policy reuses only the newest
+five frames, then adds the four estimates and their current reference errors,
+giving a 1064-D internal policy input. Simulation ground truth is stored only
+in the rollout supervision group; it is excluded from actor/critic inputs and
+ONNX export. PPO gradients are stopped at the estimator output, so the
+estimator is trained exclusively by the separately logged height and linear
+velocity MSE losses.
 
 ## Checkpoints, Resume, and Deployment Export
 

@@ -1,0 +1,113 @@
+observations:
+  # SPV3 replaces SPV2's concatenated actor group with two deployable groups.
+  # The custom actor reconstructs the original five-frame proprioception from
+  # the newest part of estimator_history, so no history is duplicated.
+  actor:
+    enabled: false
+
+  actor_core:
+    concatenate_terms: true
+    enable_corruption: true
+    terms:
+      # Reference commands: root position uses +1..+4; all state commands use
+      # current through +4, exactly as in SPV2.
+      - name: root_pos_command
+        term: spv2_root_pos_command
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+      - name: root_ori_command
+        term: spv2_root_ori_command
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+          noise_std: 0.1
+      - name: ref_root_height
+        term: spv2_ref_root_height
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+      - name: ref_root_lin_vel
+        term: spv2_ref_root_lin_vel
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+      - name: ref_joint_pos
+        term: spv2_ref_joint_pos
+        params: {command_name: motion}
+      - name: ref_joint_vel
+        term: spv2_ref_joint_vel
+        params: {command_name: motion}
+      - name: ref_projected_gravity
+        term: spv2_ref_projected_gravity
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+      - name: ref_base_ang_vel
+        term: spv2_ref_base_ang_vel
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+
+      # Existing SPV2 current reference-minus-measurement errors.  Their noisy
+      # current samples are shared with estimator_history below.
+      - name: joint_pos_error
+        term: spv1_joint_pos_error
+        params: {command_name: motion, biased: true, noise_std: 0.01}
+      - name: joint_vel_error
+        term: spv1_joint_vel_error
+        params: {command_name: motion, noise_std: 0.5}
+      - name: projected_gravity_error
+        term: spv1_projected_gravity_error
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+          noise_std: 0.05
+      - name: base_ang_vel_error
+        term: spv1_base_ang_vel_error
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+          sensor_name: robot/imu_ang_vel
+          noise_std: 0.2
+
+  estimator_history:
+    concatenate_terms: true
+    enable_corruption: true
+    terms:
+      # Each term is flattened oldest -> newest.  Torque remains the measured
+      # four-substep average supplied by the SPV1 sensor cache.
+      - name: joint_pos
+        term: spv1_joint_pos
+        params: {command_name: motion, biased: true, noise_std: 0.01}
+        history_length: 50
+      - name: joint_vel
+        term: spv1_joint_vel
+        params: {command_name: motion, noise_std: 0.5}
+        history_length: 50
+      - name: projected_gravity
+        term: spv1_projected_gravity
+        params: {command_name: motion, noise_std: 0.05}
+        history_length: 50
+      - name: base_ang_vel
+        term: spv1_base_ang_vel
+        params:
+          {command_name: motion, sensor_name: robot/imu_ang_vel, noise_std: 0.2}
+        history_length: 50
+      - name: last_action
+        term: last_action
+        history_length: 50
+      - name: joint_torque
+        term: spv1_joint_torque
+        history_length: 50
+
+  # Simulation-only targets.  This group is stored in rollouts for the MSE
+  # loss but is absent from actor/critic obs_groups and deployment exports.
+  estimator_target:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: root_height
+        term: spv3_root_height_gt
+      - name: root_lin_vel_b
+        term: spv3_root_lin_vel_b_gt

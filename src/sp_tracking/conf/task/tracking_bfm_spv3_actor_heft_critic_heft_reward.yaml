@@ -1,0 +1,30 @@
+defaults:
+  - tracking_bfm_spv2_actor_heft_critic_heft_reward
+  - override obs: spv3_heft_critic
+  - _self_
+
+name: tracking_bfm_spv3_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv3_estimator_actor_heft_critic
+
+# The policy retains SPV2's newest-five-frame and +4 future contract.  Its MLP
+# estimator additionally consumes 50 frames of deployable proprioception.
+agent_overrides:
+  obs_groups:
+    actor: [actor_core, estimator_history]
+    critic: [policy, priv]
+  actor:
+    class_name: sp_tracking.tasks.tracking.rl.spv3_models:SPV3EstimatorActor
+    estimator_hidden_dims: [512, 256, 128]
+    estimator_activation: elu
+    actor_core_group: actor_core
+    estimator_history_group: estimator_history
+    estimator_target_group: estimator_target
+    estimator_history_length: 50
+    policy_history_length: 5
+  algorithm:
+    class_name: sp_tracking.tasks.tracking.rl.ppo:SPV3EstimatorPPO
+    actor_learning_rate: 0.001
+    critic_learning_rate: 0.001
+    estimator_root_height_loss_coef: 1.0
+    estimator_root_lin_vel_loss_coef: 1.0

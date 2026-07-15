@@ -376,3 +376,53 @@ def test_spv2_has_compact_actor_and_heft_critic_contract() -> None:
     env.scene.entities["robot"].spec_fn
     is spv1_env.scene.entities["robot"].spec_fn
   )
+
+
+def test_spv3_has_estimator_history_targets_and_heft_critic_contract() -> None:
+  cfg = _compose("tracking_bfm_spv3_actor_heft_critic_heft_reward")
+  prepared = prepare_train_cfg(cfg)
+  env = build_env_cfg(cfg.task)
+
+  assert tuple(env.observations) == (
+    "policy",
+    "priv",
+    "actor_core",
+    "estimator_history",
+    "estimator_target",
+  )
+  assert tuple(env.observations["actor_core"].terms) == (
+    "root_pos_command",
+    "root_ori_command",
+    "ref_root_height",
+    "ref_root_lin_vel",
+    "ref_joint_pos",
+    "ref_joint_vel",
+    "ref_projected_gravity",
+    "ref_base_ang_vel",
+    "joint_pos_error",
+    "joint_vel_error",
+    "projected_gravity_error",
+    "base_ang_vel_error",
+  )
+  history = env.observations["estimator_history"]
+  assert tuple(history.terms) == (
+    "joint_pos",
+    "joint_vel",
+    "projected_gravity",
+    "base_ang_vel",
+    "last_action",
+    "joint_torque",
+  )
+  assert all(term.history_length == 50 for term in history.terms.values())
+  assert tuple(env.observations["estimator_target"].terms) == (
+    "root_height",
+    "root_lin_vel_b",
+  )
+  assert prepared.agent.obs_groups == {
+    "actor": ("actor_core", "estimator_history"),
+    "critic": ("policy", "priv"),
+  }
+  assert prepared.agent.actor.class_name.endswith(":SPV3EstimatorActor")
+  assert prepared.agent.actor.estimator_hidden_dims == (512, 256, 128)
+  assert prepared.agent.algorithm.class_name.endswith(":SPV3EstimatorPPO")
+  assert prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")

@@ -50,6 +50,23 @@ class HeftTeacherCriticCfg(RslRlModelCfg):
   vecnorm_decay: float = 0.9999
 
 
+@dataclass
+class SPV3EstimatorActorCfg(RslRlModelCfg):
+  estimator_hidden_dims: tuple[int, ...] = (512, 256, 128)
+  estimator_activation: str = "elu"
+  actor_core_group: str = "actor_core"
+  estimator_history_group: str = "estimator_history"
+  estimator_target_group: str = "estimator_target"
+  estimator_history_length: int = 50
+  policy_history_length: int = 5
+
+
+@dataclass
+class SPV3EstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
+  estimator_root_height_loss_coef: float = 1.0
+  estimator_root_lin_vel_loss_coef: float = 1.0
+
+
 def _to_container(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
   return OmegaConf.to_container(cfg, resolve=True) if isinstance(cfg, DictConfig) else dict(cfg)
 
@@ -57,8 +74,9 @@ def _to_container(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
 def _filter_dataclass_kwargs(cls, data: dict[str, Any]) -> dict[str, Any]:
   names = {field.name for field in fields(cls)}
   result = {key: value for key, value in data.items() if key in names}
-  if "hidden_dims" in result and isinstance(result["hidden_dims"], list):
-    result["hidden_dims"] = tuple(result["hidden_dims"])
+  for key, value in tuple(result.items()):
+    if key.endswith("hidden_dims") and isinstance(value, list):
+      result[key] = tuple(value)
   if "wandb_tags" in result and isinstance(result["wandb_tags"], list):
     result["wandb_tags"] = tuple(result["wandb_tags"])
   return result
@@ -75,11 +93,13 @@ def build_agent_cfg(
     assert isinstance(data, dict)
   actor_data = dict(data.pop("actor"))
   critic_data = dict(data.pop("critic"))
-  actor_cls = (
-    HeftTeacherActorCfg
-    if str(actor_data.get("class_name", "")).endswith(":HeftTeacherActor")
-    else RslRlModelCfg
-  )
+  actor_class_name = str(actor_data.get("class_name", ""))
+  if actor_class_name.endswith(":HeftTeacherActor"):
+    actor_cls = HeftTeacherActorCfg
+  elif actor_class_name.endswith(":SPV3EstimatorActor"):
+    actor_cls = SPV3EstimatorActorCfg
+  else:
+    actor_cls = RslRlModelCfg
   critic_cls = (
     HeftTeacherCriticCfg
     if str(critic_data.get("class_name", "")).endswith(":HeftTeacherCritic")
@@ -92,6 +112,8 @@ def build_agent_cfg(
   algorithm_class_name = str(algorithm_data.get("class_name", ""))
   if algorithm_class_name.endswith(":HeftTeacherPPO"):
     algorithm_cls = HeftTeacherPpoAlgorithmCfg
+  elif algorithm_class_name.endswith(":SPV3EstimatorPPO"):
+    algorithm_cls = SPV3EstimatorPpoAlgorithmCfg
   elif split_lr_keys.intersection(algorithm_data):
     algorithm_cls = SplitLrPpoAlgorithmCfg
   else:
@@ -126,7 +148,9 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
     model = data[model_name]
     if model.get("class_name") == "MLPModel" or str(
       model.get("class_name", "")
-    ).endswith((":HeftTeacherActor", ":HeftTeacherCritic")):
+    ).endswith(
+      (":HeftTeacherActor", ":HeftTeacherCritic", ":SPV3EstimatorActor")
+    ):
       for key in ("cnn_cfg", "rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
         model.pop(key, None)
   return data
