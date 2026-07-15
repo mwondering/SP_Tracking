@@ -346,5 +346,5 @@ def test_semantic_keypoint_rewards_match_identical_current_and_reference() -> No
     )
     reward = reward_type(cfg, env)
     torch.testing.assert_close(
-      reward(env, command_name="motion", sigma=[0.3]), torch.ones(1)
+      reward(env, **cfg.params), torch.ones(1)
     )

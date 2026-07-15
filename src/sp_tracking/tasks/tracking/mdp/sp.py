@@ -1317,7 +1317,11 @@ class root_ang_vel_tracking(_RewardBase):
 
 class keypoint_pos_tracking(_KeypointReward):
   def __call__(
-    self, env: "ManagerBasedRlEnv", command_name: str, sigma: list[float]
+    self,
+    env: "ManagerBasedRlEnv",
+    command_name: str,
+    sigma: list[float],
+    **_: Any,
   ) -> torch.Tensor:
     if self.resolver is not None:
       target = self._semantic_reference(command_name)[0]
@@ -1335,7 +1339,11 @@ class keypoint_pos_tracking(_KeypointReward):
 
 class keypoint_vel_tracking(_KeypointReward):
   def __call__(
-    self, env: "ManagerBasedRlEnv", command_name: str, sigma: list[float]
+    self,
+    env: "ManagerBasedRlEnv",
+    command_name: str,
+    sigma: list[float],
+    **_: Any,
   ) -> torch.Tensor:
     if self.resolver is not None:
       target = self._semantic_reference(command_name)[2]
@@ -1353,7 +1361,11 @@ class keypoint_vel_tracking(_KeypointReward):
 
 class keypoint_rot_tracking(_KeypointReward):
   def __call__(
-    self, env: "ManagerBasedRlEnv", command_name: str, sigma: list[float]
+    self,
+    env: "ManagerBasedRlEnv",
+    command_name: str,
+    sigma: list[float],
+    **_: Any,
   ) -> torch.Tensor:
     if self.resolver is not None:
       target = self._semantic_reference(command_name)[1]
@@ -1371,7 +1383,11 @@ class keypoint_rot_tracking(_KeypointReward):
 
 class keypoint_angvel_tracking(_KeypointReward):
   def __call__(
-    self, env: "ManagerBasedRlEnv", command_name: str, sigma: list[float]
+    self,
+    env: "ManagerBasedRlEnv",
+    command_name: str,
+    sigma: list[float],
+    **_: Any,
   ) -> torch.Tensor:
     if self.resolver is not None:
       target = self._semantic_reference(command_name)[3]

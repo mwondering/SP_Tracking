@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+from inspect import Parameter, signature
 
 from hydra import compose, initialize_config_module
 from mjlab.tasks.registry import list_tasks
@@ -134,6 +135,19 @@ def test_bfm_heft_reward_terms_match_complete_sp_heft_reward() -> None:
       params.pop("keypoint_specs", None)
       params.pop("toe_specs", None)
       assert params == sp_term.params
+
+
+def test_heft_reward_manager_can_forward_every_configured_param() -> None:
+  env = build_env_cfg(_compose("tracking_bfm_heft_reward").task)
+  for term_name, term in env.rewards.items():
+    callback = term.func.__call__ if isinstance(term.func, type) else term.func
+    parameters = signature(callback).parameters
+    accepts_extra = any(
+      parameter.kind is Parameter.VAR_KEYWORD
+      for parameter in parameters.values()
+    )
+    unsupported = set(term.params) - set(parameters)
+    assert accepts_extra or not unsupported, (term_name, unsupported)
 
 
 def test_bfm_heft_reward_uses_strict_semantic_hand_and_toe_geometry() -> None:
