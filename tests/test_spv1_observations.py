@@ -11,6 +11,7 @@ from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.scripts.train import prepare_train_cfg
 from sp_tracking.tasks.tracking.mdp import sp as sp_mdp
 from sp_tracking.tasks.tracking.mdp import spv1
+from sp_tracking.tasks.tracking.mdp import spv2
 
 
 class _CommandManager:
@@ -57,6 +58,12 @@ def _reference_env(global_yaw: float = 0.0, joint_count: int = 29):
   ang_vel_w = sp_mdp.quat_apply_inverse(
     sp_mdp._quat_conjugate(global_quat).expand_as(quat), local_ang_vel
   )
+  local_lin_vel = torch.stack(
+    (1.0 + steps * 0.1, 0.25 + steps * 0.02, steps * 0.01), dim=-1
+  )
+  lin_vel_w = sp_mdp.quat_apply_inverse(
+    sp_mdp._quat_conjugate(global_quat).expand_as(quat), local_lin_vel
+  )
   joint_scale = torch.linspace(-1.0, 1.0, joint_count)
   joint_pos = steps[:, None] * joint_scale[None]
   joint_vel = joint_pos * 0.5
@@ -64,6 +71,7 @@ def _reference_env(global_yaw: float = 0.0, joint_count: int = 29):
     "body_pos_w": pos[None, :, None, :],
     "body_quat_w": quat[None, :, None, :],
     "body_ang_vel_w": ang_vel_w[None, :, None, :],
+    "body_lin_vel_w": lin_vel_w[None, :, None, :],
     "joint_pos": joint_pos[None],
     "joint_vel": joint_vel[None],
   }
@@ -127,6 +135,25 @@ def test_explicit_joint_error_reuses_newest_noisy_proprioception(monkeypatch) ->
 
   assert calls == 1
   torch.testing.assert_close(error, command.fields["joint_pos"][:, 0] - measured)
+
+
+def test_spv2_reference_additions_are_heading_invariant() -> None:
+  base, _ = _reference_env(global_yaw=0.0)
+  rotated, _ = _reference_env(global_yaw=-0.8)
+
+  height = spv2.ref_root_height(base, command_name="motion")
+  lin_vel = spv2.ref_root_lin_vel(base, command_name="motion")
+  assert height.shape == (1, 7)
+  assert lin_vel.shape == (1, 21)
+  torch.testing.assert_close(
+    height, spv2.ref_root_height(rotated, command_name="motion")
+  )
+  torch.testing.assert_close(
+    lin_vel,
+    spv2.ref_root_lin_vel(rotated, command_name="motion"),
+    atol=1.0e-5,
+    rtol=1.0e-5,
+  )
 
 
 def test_substep_cache_averages_joint_torque_sensor_measurements() -> None:
@@ -240,4 +267,49 @@ def test_spv1_task_has_exact_actor_critic_reward_and_sensor_contract() -> None:
   assert all(
     model.sensor_type[sensor_id] == mujoco.mjtSensor.mjSENS_JOINTACTFRC
     for sensor_id in torque_sensor_ids
+  )
+
+
+def test_spv2_adds_only_reference_height_and_linear_velocity_to_spv1() -> None:
+  spv1_cfg = _compose("tracking_bfm_spv1_actor_heft_critic_heft_reward")
+  cfg = _compose("tracking_bfm_spv2_actor_heft_critic_heft_reward")
+  prepared = prepare_train_cfg(cfg)
+  env = build_env_cfg(cfg.task)
+  spv1_env = build_env_cfg(spv1_cfg.task)
+
+  spv1_terms = tuple(spv1_env.observations["actor"].terms)
+  spv2_terms = tuple(env.observations["actor"].terms)
+  assert spv2_terms == (
+    *spv1_terms[:8],
+    "ref_root_height",
+    "ref_root_lin_vel",
+    *spv1_terms[8:],
+  )
+  assert 1786 + 7 + 21 == 1814
+  assert prepared.agent.obs_groups == {
+    "actor": ("actor",),
+    "critic": ("policy", "priv"),
+  }
+  assert prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")
+  assert cfg.task.variant.reward_profile == "heft_tracking_bfm"
+  assert tuple(env.commands["motion"].reference_cache_steps["body_lin_vel_w"]) == (
+    -8,
+    -4,
+    -2,
+    -1,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    8,
+    12,
+    16,
+    20,
+  )
+  assert (
+    env.scene.entities["robot"].spec_fn
+    is spv1_env.scene.entities["robot"].spec_fn
   )

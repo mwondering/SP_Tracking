@@ -1,0 +1,14 @@
+defaults:
+  - tracking_bfm_spv1_actor_heft_critic_heft_reward
+  - override obs: spv2_heft_critic
+  - _self_
+
+name: tracking_bfm_spv2_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv2_1814_actor_heft_critic
+
+# SPV2 additionally consumes continuous future root linear velocity through +6.
+command:
+  command:
+    reference_cache_steps:
+      body_lin_vel_w: [-8, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12, 16, 20]

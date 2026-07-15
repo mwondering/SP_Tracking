@@ -38,6 +38,7 @@ from sp_tracking.tasks.tracking.mdp.actions import (
 from sp_tracking.tasks.tracking.mdp import randomizations as sp_randomizations
 from sp_tracking.tasks.tracking.mdp import sp as sp_mdp
 from sp_tracking.tasks.tracking.mdp import spv1 as spv1_mdp
+from sp_tracking.tasks.tracking.mdp import spv2 as spv2_mdp
 from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
   MotionCommandCfg as LargeDatasetMotionCommandCfg,
 )
@@ -109,6 +110,8 @@ OBS_TERMS = {
   "spv1_joint_vel_error": spv1_mdp.joint_vel_error,
   "spv1_projected_gravity_error": spv1_mdp.projected_gravity_error,
   "spv1_base_ang_vel_error": spv1_mdp.base_ang_vel_error,
+  "spv2_ref_root_height": spv2_mdp.ref_root_height,
+  "spv2_ref_root_lin_vel": spv2_mdp.ref_root_lin_vel,
 }
 
 REWARD_TERMS = {

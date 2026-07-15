@@ -132,8 +132,9 @@ profile.
 | `tracking_bfm_wbteleop_actor_bfm_critic` | deployable WBTeleop `actor` (886-D) | BFM `critic` | BFM | BFM XML + complete BFM runtime |
 | `tracking_bfm_wbteleop_actor_heft_critic` | deployable WBTeleop `actor` (886-D) | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
 | `tracking_bfm_spv1_actor_heft_critic_heft_reward` | heading-invariant SPV1 `actor` (1786-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
+| `tracking_bfm_spv2_actor_heft_critic_heft_reward` | SPV1 + root height/linear velocity (1814-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
 
-Every BFM-XML task above except the already-HEFT-reward SPV1 task also has an
+Every BFM-XML task above except the already-HEFT-reward SPV tasks also has an
 additive HEFT-reward variant. Append `_heft_reward` to its Hydra task name, for
 example:
 
@@ -198,6 +199,11 @@ reference-minus-measurement errors.
 Neither global root position nor robot global yaw enters the actor. The task
 uses the unchanged HEFT `policy + priv` critic and the complete HEFT reward on
 the BFM runtime.
+
+SPV2 preserves the complete SPV1 interface and additionally supplies reference
+pelvis height plus reference-local pelvis linear velocity at the current and
+next six control steps. These 28 values contain reference motion only and do
+not expose robot global position or yaw.
 
 ## Checkpoints, Resume, and Deployment Export
 
