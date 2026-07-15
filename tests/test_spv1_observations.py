@@ -43,7 +43,11 @@ def _yaw_quat(angle: torch.Tensor) -> torch.Tensor:
   )
 
 
-def _reference_env(global_yaw: float = 0.0, joint_count: int = 29):
+def _reference_env(
+  global_yaw: float = 0.0,
+  joint_count: int = 29,
+  robot_relative_yaw: float = 0.0,
+):
   steps = torch.arange(7, dtype=torch.float32)
   local_pos = torch.stack((steps, steps * 0.25, steps * 0.1), dim=-1)
   global_quat = _yaw_quat(torch.tensor(global_yaw))
@@ -76,10 +80,19 @@ def _reference_env(global_yaw: float = 0.0, joint_count: int = 29):
     "joint_vel": joint_vel[None],
   }
   command = _ReferenceCommand(fields)
+  robot_quat = sp_mdp.quat_mul(
+    global_quat,
+    _yaw_quat(torch.tensor(robot_relative_yaw)),
+  )
   env = SimpleNamespace(
     num_envs=1,
     device="cpu",
     command_manager=_CommandManager(command),
+    scene={
+      "robot": SimpleNamespace(
+        data=SimpleNamespace(root_link_quat_w=robot_quat.unsqueeze(0))
+      )
+    },
   )
   return env, command
 
@@ -137,23 +150,38 @@ def test_explicit_joint_error_reuses_newest_noisy_proprioception(monkeypatch) ->
   torch.testing.assert_close(error, command.fields["joint_pos"][:, 0] - measured)
 
 
-def test_spv2_reference_additions_are_heading_invariant() -> None:
-  base, _ = _reference_env(global_yaw=0.0)
-  rotated, _ = _reference_env(global_yaw=-0.8)
+def test_spv2_reference_terms_use_current_plus_four_future_steps() -> None:
+  base, _ = _reference_env(global_yaw=0.0, robot_relative_yaw=0.35)
+  rotated, _ = _reference_env(global_yaw=-0.8, robot_relative_yaw=0.35)
 
-  height = spv2.ref_root_height(base, command_name="motion")
-  lin_vel = spv2.ref_root_lin_vel(base, command_name="motion")
-  assert height.shape == (1, 7)
-  assert lin_vel.shape == (1, 21)
-  torch.testing.assert_close(
-    height, spv2.ref_root_height(rotated, command_name="motion")
+  functions_and_dims = (
+    (spv2.root_pos_command, 12),
+    (spv2.root_ori_command, 30),
+    (spv2.ref_root_height, 5),
+    (spv2.ref_root_lin_vel, 15),
+    (spv2.ref_joint_pos, 145),
+    (spv2.ref_joint_vel, 145),
+    (spv2.ref_projected_gravity, 15),
+    (spv2.ref_base_ang_vel, 15),
   )
-  torch.testing.assert_close(
-    lin_vel,
-    spv2.ref_root_lin_vel(rotated, command_name="motion"),
-    atol=1.0e-5,
-    rtol=1.0e-5,
-  )
+  for function, expected_dim in functions_and_dims:
+    base_value = function(base, command_name="motion")
+    rotated_value = function(rotated, command_name="motion")
+    assert base_value.shape == (1, expected_dim)
+    torch.testing.assert_close(
+      base_value, rotated_value, atol=1.0e-5, rtol=1.0e-5
+    )
+
+
+def test_spv2_root_orientation_command_contains_robot_heading_error() -> None:
+  aligned, _ = _reference_env(robot_relative_yaw=0.0)
+  yaw_error, _ = _reference_env(robot_relative_yaw=0.5)
+
+  aligned_obs = spv2.root_ori_command(aligned, command_name="motion")
+  yaw_error_obs = spv2.root_ori_command(yaw_error, command_name="motion")
+
+  assert aligned_obs.shape == yaw_error_obs.shape == (1, 30)
+  assert not torch.allclose(aligned_obs, yaw_error_obs)
 
 
 def test_substep_cache_averages_joint_torque_sensor_measurements() -> None:
@@ -270,7 +298,7 @@ def test_spv1_task_has_exact_actor_critic_reward_and_sensor_contract() -> None:
   )
 
 
-def test_spv2_adds_only_reference_height_and_linear_velocity_to_spv1() -> None:
+def test_spv2_has_compact_actor_and_heft_critic_contract() -> None:
   spv1_cfg = _compose("tracking_bfm_spv1_actor_heft_critic_heft_reward")
   cfg = _compose("tracking_bfm_spv2_actor_heft_critic_heft_reward")
   prepared = prepare_train_cfg(cfg)
@@ -285,14 +313,45 @@ def test_spv2_adds_only_reference_height_and_linear_velocity_to_spv1() -> None:
     "ref_root_lin_vel",
     *spv1_terms[8:],
   )
-  assert 1786 + 7 + 21 == 1814
+  actor = env.observations["actor"]
+  assert all(
+    actor.terms[name].history_length == 5
+    for name in (
+      "joint_pos",
+      "joint_vel",
+      "projected_gravity",
+      "base_ang_vel",
+      "last_action",
+      "joint_torque",
+    )
+  )
+  assert actor.terms["root_pos_command"].func is spv2.root_pos_command
+  assert actor.terms["root_ori_command"].func is spv2.root_ori_command
+  assert actor.terms["root_ori_command"].params["noise_std"] == 0.1
+  assert actor.terms["ref_joint_pos"].func is spv2.ref_joint_pos
+  assert actor.terms["ref_joint_vel"].func is spv2.ref_joint_vel
+  assert actor.terms["ref_projected_gravity"].func is spv2.ref_projected_gravity
+  assert actor.terms["ref_base_ang_vel"].func is spv2.ref_base_ang_vel
+  assert (
+    5 * (4 * 29 + 2 * 3)
+    + 12
+    + 30
+    + 2 * (5 * 29)
+    + 3 * (5 * 3)
+    + 5
+    + 64
+    == 1056
+  )
   assert prepared.agent.obs_groups == {
     "actor": ("actor",),
     "critic": ("policy", "priv"),
   }
   assert prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")
   assert cfg.task.variant.reward_profile == "heft_tracking_bfm"
-  assert tuple(env.commands["motion"].reference_cache_steps["body_lin_vel_w"]) == (
+  assert tuple(env.commands["motion"].reference_cache_steps["joint_vel"]) == tuple(
+    range(5)
+  )
+  expected_body_velocity_steps = (
     -8,
     -4,
     -2,
@@ -302,13 +361,17 @@ def test_spv2_adds_only_reference_height_and_linear_velocity_to_spv1() -> None:
     2,
     3,
     4,
-    5,
-    6,
     8,
     12,
     16,
     20,
   )
+  assert tuple(
+    env.commands["motion"].reference_cache_steps["body_lin_vel_w"]
+  ) == expected_body_velocity_steps
+  assert tuple(
+    env.commands["motion"].reference_cache_steps["body_ang_vel_w"]
+  ) == expected_body_velocity_steps
   assert (
     env.scene.entities["robot"].spec_fn
     is spv1_env.scene.entities["robot"].spec_fn

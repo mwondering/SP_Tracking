@@ -110,6 +110,12 @@ OBS_TERMS = {
   "spv1_joint_vel_error": spv1_mdp.joint_vel_error,
   "spv1_projected_gravity_error": spv1_mdp.projected_gravity_error,
   "spv1_base_ang_vel_error": spv1_mdp.base_ang_vel_error,
+  "spv2_root_pos_command": spv2_mdp.root_pos_command,
+  "spv2_root_ori_command": spv2_mdp.root_ori_command,
+  "spv2_ref_joint_pos": spv2_mdp.ref_joint_pos,
+  "spv2_ref_joint_vel": spv2_mdp.ref_joint_vel,
+  "spv2_ref_projected_gravity": spv2_mdp.ref_projected_gravity,
+  "spv2_ref_base_ang_vel": spv2_mdp.ref_base_ang_vel,
   "spv2_ref_root_height": spv2_mdp.ref_root_height,
   "spv2_ref_root_lin_vel": spv2_mdp.ref_root_lin_vel,
 }

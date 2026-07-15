@@ -5,10 +5,13 @@ defaults:
 
 name: tracking_bfm_spv2_actor_heft_critic_heft_reward
 variant:
-  observation_profile: spv2_1814_actor_heft_critic
+  observation_profile: spv2_1056_actor_heft_critic
 
-# SPV2 additionally consumes continuous future root linear velocity through +6.
+# SPV2 actor uses five-frame proprioception and current-through-+4 references.
+# Keep the wider HEFT policy/privileged groups unchanged for the critic.
 command:
   command:
     reference_cache_steps:
-      body_lin_vel_w: [-8, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12, 16, 20]
+      joint_vel: [0, 1, 2, 3, 4]
+      body_lin_vel_w: [-8, -4, -2, -1, 0, 1, 2, 3, 4, 8, 12, 16, 20]
+      body_ang_vel_w: [-8, -4, -2, -1, 0, 1, 2, 3, 4, 8, 12, 16, 20]
