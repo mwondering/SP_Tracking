@@ -1,0 +1,26 @@
+defaults:
+  - tracking_bfm_wbteleop_actor_heft_critic_heft_reward
+  - override obs: spv1_heft_critic
+  - _self_
+
+name: tracking_bfm_spv1_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv1_1786_actor_heft_critic
+
+# Preserve the BFM runtime and add task-local joint-side torque sensors only.
+robot:
+  asset: tracking_bfm_spv1_g1
+
+# SPV1 needs continuous future joint and root-angular velocities through +6.
+command:
+  command:
+    reference_cache_steps:
+      joint_vel: [0, 1, 2, 3, 4, 5, 6]
+      body_ang_vel_w: [-8, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 12, 16, 20]
+
+# Average measured jointactuatorfrc over all four physics substeps.
+metrics:
+  substep_tracking_cache:
+    params:
+      sensor_name: contact_forces
+      joint_torque_sensor_prefix: spv1_joint_torque_

@@ -28,6 +28,7 @@ from sp_tracking.assets.robots import (
   get_g1_sp_xml_bfm_runtime_robot_cfg,
   get_g1_sp_tracking_robot_cfg,
   get_g1_tracking_bfm_robot_cfg,
+  get_g1_tracking_bfm_spv1_robot_cfg,
 )
 from sp_tracking.tasks.tracking import mdp
 from sp_tracking.tasks.tracking.mdp.actions import (
@@ -36,6 +37,7 @@ from sp_tracking.tasks.tracking.mdp.actions import (
 )
 from sp_tracking.tasks.tracking.mdp import randomizations as sp_randomizations
 from sp_tracking.tasks.tracking.mdp import sp as sp_mdp
+from sp_tracking.tasks.tracking.mdp import spv1 as spv1_mdp
 from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
   MotionCommandCfg as LargeDatasetMotionCommandCfg,
 )
@@ -92,6 +94,21 @@ OBS_TERMS = {
   "domain_perturb_body_materials": sp_mdp.domain_perturb_body_materials,
   "domain_random_joint_offset": sp_mdp.domain_random_joint_offset,
   "domain_perturb_gravity": sp_mdp.domain_perturb_gravity,
+  "spv1_root_pos_command": spv1_mdp.root_pos_command,
+  "spv1_root_ori_command": spv1_mdp.root_ori_command,
+  "spv1_ref_joint_pos": spv1_mdp.ref_joint_pos,
+  "spv1_ref_joint_vel": spv1_mdp.ref_joint_vel,
+  "spv1_ref_projected_gravity": spv1_mdp.ref_projected_gravity,
+  "spv1_ref_base_ang_vel": spv1_mdp.ref_base_ang_vel,
+  "spv1_joint_pos": spv1_mdp.joint_pos,
+  "spv1_joint_vel": spv1_mdp.joint_vel,
+  "spv1_projected_gravity": spv1_mdp.projected_gravity,
+  "spv1_base_ang_vel": spv1_mdp.base_ang_vel,
+  "spv1_joint_torque": spv1_mdp.joint_torque,
+  "spv1_joint_pos_error": spv1_mdp.joint_pos_error,
+  "spv1_joint_vel_error": spv1_mdp.joint_vel_error,
+  "spv1_projected_gravity_error": spv1_mdp.projected_gravity_error,
+  "spv1_base_ang_vel_error": spv1_mdp.base_ang_vel_error,
 }
 
 REWARD_TERMS = {
@@ -702,6 +719,8 @@ def _build_robot(cfg: DictConfig):
   asset = str(cfg.robot.get("asset", "tracking_bfm_g1"))
   if asset == "tracking_bfm_g1":
     robot_cfg = get_g1_tracking_bfm_robot_cfg()
+  elif asset == "tracking_bfm_spv1_g1":
+    robot_cfg = get_g1_tracking_bfm_spv1_robot_cfg()
   elif asset == "sp_tracking_g1":
     robot_cfg = get_g1_sp_tracking_robot_cfg()
   elif asset == "sp_xml_bfm_runtime_g1":

@@ -131,9 +131,11 @@ profile.
 | `tracking_bfm_teacher_actor_bfm_critic` | raw `policy + priv` | BFM `critic` | BFM | BFM XML/runtime + HEFT observation support |
 | `tracking_bfm_wbteleop_actor_bfm_critic` | deployable WBTeleop `actor` (886-D) | BFM `critic` | BFM | BFM XML + complete BFM runtime |
 | `tracking_bfm_wbteleop_actor_heft_critic` | deployable WBTeleop `actor` (886-D) | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_spv1_actor_heft_critic_heft_reward` | heading-invariant SPV1 `actor` (1786-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
 
-Every BFM-XML task above also has an additive HEFT-reward variant. Append
-`_heft_reward` to its Hydra task name, for example:
+Every BFM-XML task above except the already-HEFT-reward SPV1 task also has an
+additive HEFT-reward variant. Append `_heft_reward` to its Hydra task name, for
+example:
 
 ```bash
 uv run sp-train task=tracking_bfm_wbteleop_actor_heft_critic_heft_reward \
@@ -187,6 +189,15 @@ for 886 dimensions total. It contains no `base_lin_vel` or global tracking-error
 term. The HEFT-critic variant additionally builds `policy + priv`; the extra
 cache, contact sensor, and action-mean history are observation support and do
 not enter the actor or BFM reward.
+
+The SPV1 actor combines ten-frame deployable proprioception (joint state,
+gravity, gyro, raw action, and four-substep-averaged `jointactuatorfrc`) with
+six-step heading-invariant root offsets, current-through-six-step joint,
+gravity, and angular-velocity commands, and explicit current
+reference-minus-measurement errors.
+Neither global root position nor robot global yaw enters the actor. The task
+uses the unchanged HEFT `policy + priv` critic and the complete HEFT reward on
+the BFM runtime.
 
 ## Checkpoints, Resume, and Deployment Export
 

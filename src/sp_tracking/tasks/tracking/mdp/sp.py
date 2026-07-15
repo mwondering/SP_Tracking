@@ -107,6 +107,26 @@ class substep_tracking_cache:
       dtype=torch.bool,
       device=env.device,
     )
+    torque_sensor_prefix = str(
+      cfg.params.get("joint_torque_sensor_prefix", "")
+    )
+    self._joint_torque_sensors = (
+      tuple(
+        env.scene[f"robot/{torque_sensor_prefix}{joint_name}"]
+        for joint_name in self.asset.joint_names
+      )
+      if torque_sensor_prefix
+      else ()
+    )
+    self._joint_torque_samples = (
+      torch.zeros(
+        (env.num_envs, len(self._joint_torque_sensors), self.decimation),
+        dtype=self.asset.data.joint_pos.dtype,
+        device=env.device,
+      )
+      if self._joint_torque_sensors
+      else None
+    )
     self.current_contact = torch.zeros(
       (env.num_envs, self.contact_count), dtype=torch.bool, device=env.device
     )
@@ -127,6 +147,8 @@ class substep_tracking_cache:
     self._joint_pos[env_ids] = 0.0
     self._joint_vel[env_ids] = 0.0
     self._contact_found[env_ids] = False
+    if self._joint_torque_samples is not None:
+      self._joint_torque_samples[env_ids] = 0.0
     self.current_contact[env_ids] = False
     self.first_contact[env_ids] = False
     self.first_air[env_ids] = False
@@ -163,6 +185,15 @@ class substep_tracking_cache:
     self._joint_pos[:, joint_slot] = self.asset.data.joint_pos
     self._joint_vel[:, joint_slot] = self.asset.data.joint_vel
     self._contact_found[:, :, contact_slot] = self._read_contact_found()
+    if self._joint_torque_samples is not None:
+      torque = torch.cat(
+        [
+          sensor.data.reshape(self.env.num_envs, -1)
+          for sensor in self._joint_torque_sensors
+        ],
+        dim=-1,
+      )
+      self._joint_torque_samples[:, :, contact_slot] = torque
     self._substep_count += 1
     return self._metric_value
 
@@ -186,6 +217,14 @@ class substep_tracking_cache:
       self.current_contact[:] = current
       self._contact_finalized_step = step
     return self.current_contact, self.first_contact, self.first_air
+
+  def joint_torque_average(self) -> torch.Tensor:
+    """Return the mean jointactuatorfrc measurement over one control step."""
+    if self._joint_torque_samples is None:
+      raise RuntimeError(
+        "SP substep cache was not configured with joint torque sensors."
+      )
+    return self._joint_torque_samples.mean(dim=-1)
 
 
 def _substep_cache(env: "ManagerBasedRlEnv") -> substep_tracking_cache | None:
