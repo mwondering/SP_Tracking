@@ -145,3 +145,29 @@ def test_bfm_hand_semantic_keypoints_match_sp_xml_pose_and_velocity() -> None:
       np.testing.assert_allclose(
         parent_ang_vel, hand_ang_vel, atol=1e-12, rtol=0
       )
+
+
+def test_bfm_semantic_toes_match_sp_xml_under_random_fk() -> None:
+  sp_model = mujoco.MjModel.from_xml_path(
+    str(ASSET_ROOT / "g1_sp_tracking/g1.xml")
+  )
+  bfm_model = mujoco.MjModel.from_xml_path(
+    str(ASSET_ROOT / "g1_tracking_bfm/g1.xml")
+  )
+  sp_data = mujoco.MjData(sp_model)
+  bfm_data = mujoco.MjData(bfm_model)
+  rng = np.random.default_rng(20260715)
+
+  for _ in range(20):
+    _set_matching_state(sp_model, sp_data, bfm_model, bfm_data, rng)
+    for side in ("left", "right"):
+      toe_pos, _ = _body_pose(
+        sp_model, sp_data, f"{side}_ankle_roll_toe_link"
+      )
+      ankle_pos, ankle_rot = _body_pose(
+        bfm_model, bfm_data, f"{side}_ankle_roll_link"
+      )
+      semantic_toe_pos = ankle_pos + ankle_rot @ np.array([0.1, 0.0, 0.0])
+      np.testing.assert_allclose(
+        semantic_toe_pos, toe_pos, atol=1e-12, rtol=0
+      )

@@ -1,0 +1,9 @@
+defaults:
+  - tracking_bfm_sp_ablation_bfm_actor
+  - bfm_heft_reward_support
+  - override reward: heft_tracking_bfm
+  - _self_
+
+name: tracking_bfm_sp_ablation_bfm_actor_heft_reward
+variant:
+  reward_profile: heft_tracking_bfm

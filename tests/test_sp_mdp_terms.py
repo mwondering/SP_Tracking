@@ -273,3 +273,78 @@ def test_loco_reward_group_schedule_matches_source_pretrain_factor() -> None:
   assert schedule.step_schedule(1.0)["factor"] == 1.0
   assert term_cfgs["survival"].weight == 3.0
   assert term_cfgs["action_rate_l2"].weight == 0.02
+
+
+def test_semantic_keypoint_rewards_match_identical_current_and_reference() -> None:
+  body_names = ("pelvis", "wrist_yaw", "wrist_pitch")
+  identity = torch.tensor([1.0, 0.0, 0.0, 0.0])
+  yaw_90 = torch.tensor([2.0**-0.5, 0.0, 0.0, 2.0**-0.5])
+  body_pos = torch.tensor([[[0.0, 0.0, 0.0], [0.046, 0.0, 0.0], [0.0, 0.0, 0.0]]])
+  body_quat = torch.stack((identity, yaw_90, identity)).unsqueeze(0)
+  body_lin_vel = torch.zeros((1, 3, 3))
+  body_ang_vel = torch.tensor(
+    [[[0.0, 0.0, 0.0], [0.0, 0.0, 2.0], [0.0, 0.0, 3.0]]]
+  )
+  robot = SimpleNamespace(
+    body_names=body_names,
+    data=SimpleNamespace(
+      body_link_pos_w=body_pos,
+      body_link_quat_w=body_quat,
+      body_link_lin_vel_w=body_lin_vel,
+      body_link_ang_vel_w=body_ang_vel,
+      root_link_pos_w=body_pos[:, 0],
+      root_link_quat_w=body_quat[:, 0],
+      root_link_lin_vel_w=body_lin_vel[:, 0],
+      root_link_ang_vel_w=body_ang_vel[:, 0],
+    ),
+  )
+
+  class _Command:
+    cfg = SimpleNamespace(body_names=body_names)
+    motion_anchor_body_index = 0
+
+    fields = {
+      "body_pos_w": body_pos,
+      "body_quat_w": body_quat,
+      "body_lin_vel_w": body_lin_vel,
+      "body_ang_vel_w": body_ang_vel,
+    }
+
+    def gather_reference(self, field_name: str, steps: tuple[int, ...]):
+      assert steps == (0,)
+      return self.fields[field_name].unsqueeze(1)
+
+  command = _Command()
+  env = SimpleNamespace(
+    num_envs=1,
+    device="cpu",
+    scene={"robot": robot},
+    command_manager=_FakeCommandManager(command),
+  )
+  specs = (
+    {
+      "name": "hand",
+      "body_name": "wrist_yaw",
+      "local_pos": (0.116, 0.0, 0.0),
+      "correction_body_name": "wrist_pitch",
+      "correction_local_pos": (0.005, 0.0, 0.0),
+    },
+  )
+
+  for reward_type in (
+    sp_mdp.keypoint_pos_tracking,
+    sp_mdp.keypoint_vel_tracking,
+    sp_mdp.keypoint_rot_tracking,
+    sp_mdp.keypoint_angvel_tracking,
+  ):
+    cfg = SimpleNamespace(
+      params={
+        "command_name": "motion",
+        "sigma": (0.3,),
+        "keypoint_specs": specs,
+      }
+    )
+    reward = reward_type(cfg, env)
+    torch.testing.assert_close(
+      reward(env, command_name="motion", sigma=[0.3]), torch.ones(1)
+    )

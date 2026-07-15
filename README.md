@@ -120,17 +120,50 @@ profile.
 
 ## Tasks
 
-| Task | Actor observation | Critic observation | Runtime |
-| --- | --- | --- | --- |
-| `tracking_bfm` | BFM `actor` | BFM `critic` | BFM XML + complete BFM runtime |
-| `tracking_bfm_sp` | `policy + priv` | `policy + priv + priv_critic` | SP XML + HEFT pretrain runtime |
-| `tracking_bfm_sp_ablation_bfm_actor` | BFM `actor` | `policy + priv` | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_sp_ablation_student_actor` | HEFT student `policy` | `policy + priv` | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_sp_ablation_teacher_actor` | raw `policy + priv` | `policy + priv` | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_student_actor_bfm_critic` | HEFT student `policy` | BFM `critic` | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_teacher_actor_bfm_critic` | raw `policy + priv` | BFM `critic` | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_wbteleop_actor_bfm_critic` | deployable WBTeleop `actor` (886-D) | BFM `critic` | BFM XML + complete BFM runtime |
-| `tracking_bfm_wbteleop_actor_heft_critic` | deployable WBTeleop `actor` (886-D) | `policy + priv` | BFM XML/runtime + HEFT observation support |
+| Task | Actor observation | Critic observation | Reward | Runtime |
+| --- | --- | --- | --- | --- |
+| `tracking_bfm` | BFM `actor` | BFM `critic` | BFM | BFM XML + complete BFM runtime |
+| `tracking_bfm_sp` | `policy + priv` | `policy + priv + priv_critic` | HEFT | SP XML + HEFT pretrain runtime |
+| `tracking_bfm_sp_ablation_bfm_actor` | BFM `actor` | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_sp_ablation_student_actor` | HEFT student `policy` | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_sp_ablation_teacher_actor` | raw `policy + priv` | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_student_actor_bfm_critic` | HEFT student `policy` | BFM `critic` | BFM | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_teacher_actor_bfm_critic` | raw `policy + priv` | BFM `critic` | BFM | BFM XML/runtime + HEFT observation support |
+| `tracking_bfm_wbteleop_actor_bfm_critic` | deployable WBTeleop `actor` (886-D) | BFM `critic` | BFM | BFM XML + complete BFM runtime |
+| `tracking_bfm_wbteleop_actor_heft_critic` | deployable WBTeleop `actor` (886-D) | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
+
+Every BFM-XML task above also has an additive HEFT-reward variant. Append
+`_heft_reward` to its Hydra task name, for example:
+
+```bash
+uv run sp-train task=tracking_bfm_wbteleop_actor_heft_critic_heft_reward \
+  motion_path=/path/to/motions
+```
+
+This defines eight additional tasks:
+
+- `tracking_bfm_heft_reward`
+- `tracking_bfm_sp_ablation_bfm_actor_heft_reward`
+- `tracking_bfm_sp_ablation_student_actor_heft_reward`
+- `tracking_bfm_sp_ablation_teacher_actor_heft_reward`
+- `tracking_bfm_student_actor_bfm_critic_heft_reward`
+- `tracking_bfm_teacher_actor_bfm_critic_heft_reward`
+- `tracking_bfm_wbteleop_actor_bfm_critic_heft_reward`
+- `tracking_bfm_wbteleop_actor_heft_critic_heft_reward`
+
+Each variant inherits its parent actor, critic, action, PPO, events,
+terminations, curriculum, simulation, and seed. Only the reward is replaced,
+plus the internal BFM reference bodies, foot contact sensor, and substep cache
+needed to evaluate it. The original nine task configurations are unchanged.
+The complete SP task is not duplicated because `tracking_bfm_sp` already uses
+the HEFT reward and HEFT runtime.
+
+The HEFT preset contains the ten tracking terms and seven enabled locomotion
+terms from the source pretrain config. Its locomotion group starts at factor
+0.5 and is scheduled linearly to 1.0; MJLab applies the same per-step `dt`
+scaling as the source. On the BFM XML, missing SP-only bodies are represented
+by kinematically exact semantic points: the hand includes the 5 mm wrist-chain
+correction and the toe is the ankle-roll frame plus 0.1 m along local x.
 
 All three ablations use a raw-observation BFM `MLPModel` actor with no adapter
 or privileged encoder. The BFM and teacher actors retain parameter-matched

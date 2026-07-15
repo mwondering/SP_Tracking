@@ -1,0 +1,120 @@
+# Internal mixin for applying the HEFT reward to the BFM XML/runtime.
+# It adds only the reference bodies, semantic virtual points, foot-contact
+# target state, and substep samples required by that reward. Actor/critic
+# observations, actions, PPO, events, and terminations come from the parent task.
+
+robot:
+  body_names: ${task.reference_views.combined.body_names}
+
+obs:
+  semantic_keypoints:
+    heft:
+      - {name: left_hip, body_name: left_hip_yaw_link}
+      - {name: left_knee, body_name: left_knee_link}
+      - {name: left_foot, body_name: left_ankle_roll_link}
+      - {name: right_hip, body_name: right_hip_yaw_link}
+      - {name: right_knee, body_name: right_knee_link}
+      - {name: right_foot, body_name: right_ankle_roll_link}
+      - {name: head, body_name: torso_link, local_pos: [0.01, 0.0, 0.41]}
+      - {name: left_shoulder, body_name: left_shoulder_yaw_link}
+      - {name: left_wrist, body_name: left_wrist_roll_link}
+      - name: left_hand
+        body_name: left_wrist_yaw_link
+        local_pos: [0.116, 0.0, 0.0]
+        correction_body_name: left_wrist_pitch_link
+        correction_local_pos: [0.005, 0.0, 0.0]
+      - {name: right_shoulder, body_name: right_shoulder_yaw_link}
+      - {name: right_wrist, body_name: right_wrist_roll_link}
+      - name: right_hand
+        body_name: right_wrist_yaw_link
+        local_pos: [0.116, 0.0, 0.0]
+        correction_body_name: right_wrist_pitch_link
+        correction_local_pos: [0.005, 0.0, 0.0]
+    feet_toes:
+      - {name: left_toe, body_name: left_ankle_roll_link, local_pos: [0.1, 0.0, 0.0]}
+      - {name: right_toe, body_name: right_ankle_roll_link, local_pos: [0.1, 0.0, 0.0]}
+
+# Keep the original BFM view byte-for-byte in meaning even though the command
+# now caches a superset for the HEFT keypoint reward.
+reference_views:
+  old_tracking:
+    anchor_body_name: pelvis
+    body_names:
+      - pelvis
+      - left_hip_roll_link
+      - left_knee_link
+      - left_ankle_roll_link
+      - right_hip_roll_link
+      - right_knee_link
+      - right_ankle_roll_link
+      - torso_link
+      - left_shoulder_roll_link
+      - left_elbow_link
+      - left_wrist_yaw_link
+      - right_shoulder_roll_link
+      - right_elbow_link
+      - right_wrist_yaw_link
+    termination_body_names:
+      - left_ankle_roll_link
+      - right_ankle_roll_link
+      - left_wrist_yaw_link
+      - right_wrist_yaw_link
+  sp_tracking:
+    anchor_body_name: pelvis
+    body_names:
+      - pelvis
+      - left_hip_yaw_link
+      - left_knee_link
+      - left_ankle_roll_link
+      - right_hip_yaw_link
+      - right_knee_link
+      - right_ankle_roll_link
+      - torso_link
+      - left_shoulder_yaw_link
+      - left_wrist_roll_link
+      - left_wrist_yaw_link
+      - right_shoulder_yaw_link
+      - right_wrist_roll_link
+      - right_wrist_yaw_link
+  combined:
+    body_names:
+      - pelvis
+      - left_hip_yaw_link
+      - left_knee_link
+      - left_ankle_roll_link
+      - right_hip_yaw_link
+      - right_knee_link
+      - right_ankle_roll_link
+      - torso_link
+      - left_shoulder_yaw_link
+      - left_wrist_roll_link
+      - left_wrist_yaw_link
+      - right_shoulder_yaw_link
+      - right_wrist_roll_link
+      - right_wrist_yaw_link
+      - left_hip_roll_link
+      - right_hip_roll_link
+      - left_shoulder_roll_link
+      - left_elbow_link
+      - right_shoulder_roll_link
+      - right_elbow_link
+      - left_wrist_pitch_link
+      - right_wrist_pitch_link
+
+command:
+  command:
+    feet_standing_body_names: [left_ankle_roll_link, right_ankle_roll_link]
+    feet_standing:
+      z_enter: 0.18
+      z_exit: 0.25
+      vxy_enter: 0.2
+      vxy_exit: 0.3
+      vz_enter: 0.15
+      vz_exit: 0.25
+
+metrics:
+  substep_tracking_cache:
+    term: substep_tracking_cache
+    params: {sensor_name: contact_forces}
+    per_substep: true
+    reduce: last

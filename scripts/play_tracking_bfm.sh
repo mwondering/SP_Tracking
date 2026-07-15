@@ -56,7 +56,15 @@ if [[ -n "${TASK}" ]]; then
     tracking_bfm_student_actor_bfm_critic|\
     tracking_bfm_teacher_actor_bfm_critic|\
     tracking_bfm_wbteleop_actor_bfm_critic|\
-    tracking_bfm_wbteleop_actor_heft_critic) ;;
+    tracking_bfm_wbteleop_actor_heft_critic|\
+    tracking_bfm_heft_reward|\
+    tracking_bfm_sp_ablation_bfm_actor_heft_reward|\
+    tracking_bfm_sp_ablation_student_actor_heft_reward|\
+    tracking_bfm_sp_ablation_teacher_actor_heft_reward|\
+    tracking_bfm_student_actor_bfm_critic_heft_reward|\
+    tracking_bfm_teacher_actor_bfm_critic_heft_reward|\
+    tracking_bfm_wbteleop_actor_bfm_critic_heft_reward|\
+    tracking_bfm_wbteleop_actor_heft_critic_heft_reward) ;;
     *) echo "Invalid task: ${TASK}" >&2; exit 2 ;;
   esac
 fi

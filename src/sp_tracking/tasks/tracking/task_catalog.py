@@ -16,6 +16,14 @@ TaskName = Literal[
   "tracking_bfm_teacher_actor_bfm_critic",
   "tracking_bfm_wbteleop_actor_bfm_critic",
   "tracking_bfm_wbteleop_actor_heft_critic",
+  "tracking_bfm_heft_reward",
+  "tracking_bfm_sp_ablation_bfm_actor_heft_reward",
+  "tracking_bfm_sp_ablation_student_actor_heft_reward",
+  "tracking_bfm_sp_ablation_teacher_actor_heft_reward",
+  "tracking_bfm_student_actor_bfm_critic_heft_reward",
+  "tracking_bfm_teacher_actor_bfm_critic_heft_reward",
+  "tracking_bfm_wbteleop_actor_bfm_critic_heft_reward",
+  "tracking_bfm_wbteleop_actor_heft_critic_heft_reward",
 ]
 
 
@@ -71,6 +79,46 @@ TASK_SPECS = (
     "tracking_bfm_wbteleop_actor_heft_critic",
     "SPTracking-G1-BFM-WBTeleopActor-HEFTCritic",
     ("task=tracking_bfm_wbteleop_actor_heft_critic",),
+  ),
+  TaskSpec(
+    "tracking_bfm_heft_reward",
+    "SPTracking-G1-BFM-BFMActor-BFMCritic-HEFTReward",
+    ("task=tracking_bfm_heft_reward",),
+  ),
+  TaskSpec(
+    "tracking_bfm_sp_ablation_bfm_actor_heft_reward",
+    "SPTracking-G1-BFM-BFMActor-HEFTCritic-HEFTReward",
+    ("task=tracking_bfm_sp_ablation_bfm_actor_heft_reward",),
+  ),
+  TaskSpec(
+    "tracking_bfm_sp_ablation_student_actor_heft_reward",
+    "SPTracking-G1-BFM-StudentActor-HEFTCritic-HEFTReward",
+    ("task=tracking_bfm_sp_ablation_student_actor_heft_reward",),
+  ),
+  TaskSpec(
+    "tracking_bfm_sp_ablation_teacher_actor_heft_reward",
+    "SPTracking-G1-BFM-TeacherActor-HEFTCritic-HEFTReward",
+    ("task=tracking_bfm_sp_ablation_teacher_actor_heft_reward",),
+  ),
+  TaskSpec(
+    "tracking_bfm_student_actor_bfm_critic_heft_reward",
+    "SPTracking-G1-BFM-StudentActor-BFMCritic-HEFTReward",
+    ("task=tracking_bfm_student_actor_bfm_critic_heft_reward",),
+  ),
+  TaskSpec(
+    "tracking_bfm_teacher_actor_bfm_critic_heft_reward",
+    "SPTracking-G1-BFM-TeacherActor-BFMCritic-HEFTReward",
+    ("task=tracking_bfm_teacher_actor_bfm_critic_heft_reward",),
+  ),
+  TaskSpec(
+    "tracking_bfm_wbteleop_actor_bfm_critic_heft_reward",
+    "SPTracking-G1-BFM-WBTeleopActor-BFMCritic-HEFTReward",
+    ("task=tracking_bfm_wbteleop_actor_bfm_critic_heft_reward",),
+  ),
+  TaskSpec(
+    "tracking_bfm_wbteleop_actor_heft_critic_heft_reward",
+    "SPTracking-G1-BFM-WBTeleopActor-HEFTCritic-HEFTReward",
+    ("task=tracking_bfm_wbteleop_actor_heft_critic_heft_reward",),
   ),
 )
 

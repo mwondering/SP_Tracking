@@ -4,14 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 LAUNCH_SCRIPT_PATH="${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")"
-export WANDB_API_KEY="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"
 
 usage() {
   cat >&2 <<'USAGE'
 Usage:
-  scripts/train_tracking_bfm_multigpu.sh [motion_path] [hydra_overrides...]
+  scripts/train_tracking_bfm_multigpu.sh [task_id] [motion_path] [hydra_overrides...]
 
 Environment:
+  SP_TRACKING_TASK_ID=<id>          Public task ID passed to the training entrypoint.
   SP_TRACKING_GPUS=0,1              CUDA devices visible to torchrun.
   SP_TRACKING_NPROC=2              Number of torchrun workers. Defaults to the GPU count.
   SP_TRACKING_MOTION_PATH=<path>   Motion directory when no positional path is given.
@@ -20,6 +20,8 @@ Environment:
 
 Examples:
   SP_TRACKING_GPUS=0,1 scripts/train_tracking_bfm_multigpu.sh
+  scripts/train_tracking_bfm_multigpu.sh \
+    SPTracking-G1-BFM-WBTeleopActor-HEFTCritic-HEFTReward /path/to/motions
   SP_TRACKING_GPUS=0,1,2,3 scripts/train_tracking_bfm_multigpu.sh /path/to/motions task.num_envs=4096
 USAGE
 }
@@ -27,6 +29,12 @@ USAGE
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
+fi
+
+TASK_ID="${SP_TRACKING_TASK_ID:-SPTracking-G1-BFM-BFMActor-BFMCritic}"
+if [[ "${1:-}" == SPTracking-* ]]; then
+  TASK_ID="$1"
+  shift
 fi
 
 MOTION_PATH="${SP_TRACKING_MOTION_PATH:-/data_zcy/zcy/datasets/motion_data_used_g1/AMASS_LAFAN_Qingtong/lafan_qingtong}"
@@ -49,14 +57,20 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-${REPO_ROOT}/.cache/matplotlib}"
 mkdir -p "${MPLCONFIGDIR}"
 
+HAS_TASK_OVERRIDE=false
+for argument in "$@"; do
+  if [[ "${argument}" == task=* || "${argument}" == task_id=* ]]; then
+    HAS_TASK_OVERRIDE=true
+    break
+  fi
+done
+
 cmd=(
   uv run torchrun
   --standalone
   # "--local_ranks_filter=0"
   "--nproc_per_node=${NPROC}"
   -m sp_tracking.scripts.train
-  # task=tracking_bfm
-  task=tracking_bfm_sp
   "motion_path=${MOTION_PATH}"
   "launch_script_path=${LAUNCH_SCRIPT_PATH}"
   "task.num_envs=${SP_TRACKING_NUM_ENVS:-16384}"
@@ -75,11 +89,14 @@ cmd=(
   "++task.command.command.motion_scan_backend=fd"
   "++task.command.command.motion_scan_fd_executable=fdfind"
   "++task.command.command.motion_scan_workers=32"
-  "++task.command.command.motion_metadata_read_workers=32"
   "++task.command.command.motion_metadata_read_backend=process"
   "++task.command.command.motion_metadata_read_workers=32"
   "++task.command.command.motion_metadata_read_chunksize=128"
 )
+
+if [[ "${HAS_TASK_OVERRIDE}" == false ]]; then
+  cmd+=("task_id=${TASK_ID}")
+fi
 
 RUN_NAME="${SP_TRACKING_RUN_NAME:-trydebug_multigpu}"
 if [[ -n "${RUN_NAME}" ]]; then

@@ -8,8 +8,6 @@ from mjlab.managers import RewardTermCfg
 from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.observation_manager import ObservationTermCfg
 from mjlab.sensor import ContactSensor
-from sp_tracking.tasks.tracking.mdp.keypoints import SemanticKeypointResolver
-from sp_tracking.tasks.tracking.mdp.multi_commands import MultiMotionCommand
 from mjlab.utils.lab_api.math import (
   axis_angle_from_quat,
   matrix_from_quat,
@@ -18,6 +16,9 @@ from mjlab.utils.lab_api.math import (
   quat_mul,
 )
 from mjlab.utils.lab_api.string import resolve_matching_names
+
+from sp_tracking.tasks.tracking.mdp.keypoints import SemanticKeypointResolver
+from sp_tracking.tasks.tracking.mdp.multi_commands import MultiMotionCommand
 
 if False:
   from mjlab.envs import ManagerBasedRlEnv
@@ -1188,7 +1189,20 @@ class loco_reward_group_schedule(_RewardBase):
 class _KeypointReward(_RewardBase):
   def __init__(self, cfg: RewardTermCfg, env: "ManagerBasedRlEnv"):
     super().__init__(cfg, env)
-    self.asset_ids = _robot_body_indices(self.asset, SP_KEYPOINT_BODY_NAMES, env.device)
+    raw_specs = cfg.params.get("keypoint_specs")
+    self.resolver: SemanticKeypointResolver | None = None
+    self.asset_ids: torch.Tensor | None = None
+    if raw_specs is None:
+      # Preserve the complete SP task's direct-body fast path exactly.
+      self.asset_ids = _robot_body_indices(
+        self.asset, SP_KEYPOINT_BODY_NAMES, env.device
+      )
+    else:
+      command_name = str(cfg.params.get("command_name", "motion"))
+      cmd = _command(env, command_name)
+      self.resolver = SemanticKeypointResolver(
+        self.asset, tuple(cmd.cfg.body_names), raw_specs
+      )
 
   def _motion_ids(self, command_name: str) -> list[int]:
     cmd = _command(self.env, command_name)
@@ -1199,14 +1213,50 @@ class _KeypointReward(_RewardBase):
     root_quat = self.asset.data.root_link_quat_w
     root_lin = self.asset.data.root_link_lin_vel_w
     root_ang = self.asset.data.root_link_ang_vel_w
-    pos = self.asset.data.body_link_pos_w[:, self.asset_ids]
-    quat = self.asset.data.body_link_quat_w[:, self.asset_ids]
-    lin = self.asset.data.body_link_lin_vel_w[:, self.asset_ids]
-    ang = self.asset.data.body_link_ang_vel_w[:, self.asset_ids]
+    if self.resolver is None:
+      assert self.asset_ids is not None
+      pos = self.asset.data.body_link_pos_w[:, self.asset_ids]
+      quat = self.asset.data.body_link_quat_w[:, self.asset_ids]
+      lin = self.asset.data.body_link_lin_vel_w[:, self.asset_ids]
+      ang = self.asset.data.body_link_ang_vel_w[:, self.asset_ids]
+    else:
+      current = self.resolver.current(self.asset)
+      pos = current.pos_w
+      quat = current.quat_w
+      lin = current.lin_vel_w
+      ang = current.ang_vel_w
     pos_b = _quat_apply_inverse(root_quat.unsqueeze(1), pos - root_pos.unsqueeze(1))
     quat_b = _quat_in_frame(root_quat.unsqueeze(1).expand_as(quat), quat)
     lin_b = _quat_apply_inverse(root_quat.unsqueeze(1), lin - root_lin.unsqueeze(1))
     ang_b = _quat_apply_inverse(root_quat.unsqueeze(1), ang - root_ang.unsqueeze(1))
+    return pos_b, quat_b, lin_b, ang_b
+
+  def _semantic_reference(
+    self, command_name: str
+  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert self.resolver is not None
+    reference = self.resolver.reference(
+      _gather_current(self.env, command_name, "body_pos_w"),
+      _gather_current(self.env, command_name, "body_quat_w"),
+      _gather_current(self.env, command_name, "body_lin_vel_w"),
+      _gather_current(self.env, command_name, "body_ang_vel_w"),
+    )
+    root_pos = _root_motion_current(self.env, command_name, "body_pos_w")
+    root_quat = _root_motion_current(self.env, command_name, "body_quat_w")
+    root_lin = _root_motion_current(self.env, command_name, "body_lin_vel_w")
+    root_ang = _root_motion_current(self.env, command_name, "body_ang_vel_w")
+    pos_b = _quat_apply_inverse(
+      root_quat.unsqueeze(1), reference.pos_w - root_pos.unsqueeze(1)
+    )
+    quat_b = _quat_in_frame(
+      root_quat.unsqueeze(1).expand_as(reference.quat_w), reference.quat_w
+    )
+    lin_b = _quat_apply_inverse(
+      root_quat.unsqueeze(1), reference.lin_vel_w - root_lin.unsqueeze(1)
+    )
+    ang_b = _quat_apply_inverse(
+      root_quat.unsqueeze(1), reference.ang_vel_w - root_ang.unsqueeze(1)
+    )
     return pos_b, quat_b, lin_b, ang_b
 
 
@@ -1269,13 +1319,16 @@ class keypoint_pos_tracking(_KeypointReward):
   def __call__(
     self, env: "ManagerBasedRlEnv", command_name: str, sigma: list[float]
   ) -> torch.Tensor:
-    ids = self._motion_ids(command_name)
-    root_pos = _root_motion_current(env, command_name, "body_pos_w")
-    root_quat = _root_motion_current(env, command_name, "body_quat_w")
-    target_w = _gather_current(env, command_name, "body_pos_w")[:, ids]
-    target = _quat_apply_inverse(
-      root_quat.unsqueeze(1), target_w - root_pos.unsqueeze(1)
-    )
+    if self.resolver is not None:
+      target = self._semantic_reference(command_name)[0]
+    else:
+      ids = self._motion_ids(command_name)
+      root_pos = _root_motion_current(env, command_name, "body_pos_w")
+      root_quat = _root_motion_current(env, command_name, "body_quat_w")
+      target_w = _gather_current(env, command_name, "body_pos_w")[:, ids]
+      target = _quat_apply_inverse(
+        root_quat.unsqueeze(1), target_w - root_pos.unsqueeze(1)
+      )
     error = (target - self._current()[0]).norm(dim=-1).mean(dim=-1, keepdim=True)
     return _exp_sigma(error, sigma).squeeze(-1)
 
@@ -1284,13 +1337,16 @@ class keypoint_vel_tracking(_KeypointReward):
   def __call__(
     self, env: "ManagerBasedRlEnv", command_name: str, sigma: list[float]
   ) -> torch.Tensor:
-    ids = self._motion_ids(command_name)
-    root_quat = _root_motion_current(env, command_name, "body_quat_w")
-    root_vel = _root_motion_current(env, command_name, "body_lin_vel_w")
-    target_w = _gather_current(env, command_name, "body_lin_vel_w")[:, ids]
-    target = _quat_apply_inverse(
-      root_quat.unsqueeze(1), target_w - root_vel.unsqueeze(1)
-    )
+    if self.resolver is not None:
+      target = self._semantic_reference(command_name)[2]
+    else:
+      ids = self._motion_ids(command_name)
+      root_quat = _root_motion_current(env, command_name, "body_quat_w")
+      root_vel = _root_motion_current(env, command_name, "body_lin_vel_w")
+      target_w = _gather_current(env, command_name, "body_lin_vel_w")[:, ids]
+      target = _quat_apply_inverse(
+        root_quat.unsqueeze(1), target_w - root_vel.unsqueeze(1)
+      )
     error = (target - self._current()[2]).norm(dim=-1).mean(dim=-1, keepdim=True)
     return _exp_sigma(error, sigma).squeeze(-1)
 
@@ -1299,10 +1355,15 @@ class keypoint_rot_tracking(_KeypointReward):
   def __call__(
     self, env: "ManagerBasedRlEnv", command_name: str, sigma: list[float]
   ) -> torch.Tensor:
-    ids = self._motion_ids(command_name)
-    root_quat = _root_motion_current(env, command_name, "body_quat_w")
-    target_w = _gather_current(env, command_name, "body_quat_w")[:, ids]
-    target = _quat_in_frame(root_quat.unsqueeze(1).expand_as(target_w), target_w)
+    if self.resolver is not None:
+      target = self._semantic_reference(command_name)[1]
+    else:
+      ids = self._motion_ids(command_name)
+      root_quat = _root_motion_current(env, command_name, "body_quat_w")
+      target_w = _gather_current(env, command_name, "body_quat_w")[:, ids]
+      target = _quat_in_frame(
+        root_quat.unsqueeze(1).expand_as(target_w), target_w
+      )
     error = axis_angle_from_quat(_quat_delta(self._current()[1], target)).norm(dim=-1)
     error = error.mean(dim=-1, keepdim=True)
     return _exp_sigma(error, sigma).squeeze(-1)
@@ -1312,13 +1373,16 @@ class keypoint_angvel_tracking(_KeypointReward):
   def __call__(
     self, env: "ManagerBasedRlEnv", command_name: str, sigma: list[float]
   ) -> torch.Tensor:
-    ids = self._motion_ids(command_name)
-    root_quat = _root_motion_current(env, command_name, "body_quat_w")
-    root_ang = _root_motion_current(env, command_name, "body_ang_vel_w")
-    target_w = _gather_current(env, command_name, "body_ang_vel_w")[:, ids]
-    target = _quat_apply_inverse(
-      root_quat.unsqueeze(1), target_w - root_ang.unsqueeze(1)
-    )
+    if self.resolver is not None:
+      target = self._semantic_reference(command_name)[3]
+    else:
+      ids = self._motion_ids(command_name)
+      root_quat = _root_motion_current(env, command_name, "body_quat_w")
+      root_ang = _root_motion_current(env, command_name, "body_ang_vel_w")
+      target_w = _gather_current(env, command_name, "body_ang_vel_w")[:, ids]
+      target = _quat_apply_inverse(
+        root_quat.unsqueeze(1), target_w - root_ang.unsqueeze(1)
+      )
     error = (target - self._current()[3]).norm(dim=-1).mean(dim=-1, keepdim=True)
     return _exp_sigma(error, sigma).squeeze(-1)
 
@@ -1407,7 +1471,20 @@ class feet_air_time_ref_dense(_RewardBase):
   def __init__(self, cfg: RewardTermCfg, env: "ManagerBasedRlEnv"):
     super().__init__(cfg, env)
     self.feet_ids = _robot_body_indices(self.asset, SP_FEET_BODY_NAMES, env.device)
-    self.toe_ids = _robot_body_indices(self.asset, SP_FEET_TOE_BODY_NAMES, env.device)
+    raw_toe_specs = cfg.params.get("toe_specs")
+    self.toe_resolver: SemanticKeypointResolver | None = None
+    self.toe_ids: torch.Tensor | None = None
+    if raw_toe_specs is None:
+      # Preserve the complete SP task's dedicated toe-body path.
+      self.toe_ids = _robot_body_indices(
+        self.asset, SP_FEET_TOE_BODY_NAMES, env.device
+      )
+    else:
+      command_name = str(cfg.params.get("command_name", "motion"))
+      cmd = _command(env, command_name)
+      self.toe_resolver = SemanticKeypointResolver(
+        self.asset, tuple(cmd.cfg.body_names), raw_toe_specs
+      )
 
   def __call__(
     self,
@@ -1418,6 +1495,7 @@ class feet_air_time_ref_dense(_RewardBase):
     air_h_high: float,
     contact_h_low: float,
     contact_h_high: float,
+    **_: Any,
   ) -> torch.Tensor:
     sensor: ContactSensor = env.scene[sensor_name]
     cache = _substep_cache(env)
@@ -1435,7 +1513,11 @@ class feet_air_time_ref_dense(_RewardBase):
     penalty[mismatch] = -1.0
 
     feet_z = self.asset.data.body_link_pos_w[:, self.feet_ids, 2]
-    toe_z = self.asset.data.body_link_pos_w[:, self.toe_ids, 2]
+    if self.toe_resolver is None:
+      assert self.toe_ids is not None
+      toe_z = self.asset.data.body_link_pos_w[:, self.toe_ids, 2]
+    else:
+      toe_z = self.toe_resolver.current(self.asset).pos_w[..., 2]
     air_height = torch.minimum(feet_z, toe_z)
     air_span = max(float(air_h_high) - float(air_h_low), 1.0e-6)
     air_ratio = ((air_height - float(air_h_low)) / air_span).clamp(0.0, 1.0)
