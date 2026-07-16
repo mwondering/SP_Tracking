@@ -75,9 +75,11 @@ def _key_body_error(
   robot_from_reference_root: torch.Tensor,
 ) -> torch.Tensor:
   """Reference-minus-robot error, entirely in the current robot root frame."""
-  relative_root = robot_from_reference_root.unsqueeze(1)
+  relative_root = robot_from_reference_root.unsqueeze(1).expand_as(
+    reference.quat
+  )
   reference_pos = quat_apply(relative_root, reference.pos)
-  reference_quat = quat_mul(relative_root.expand_as(reference.quat), reference.quat)
+  reference_quat = quat_mul(relative_root, reference.quat)
   reference_lin_vel = quat_apply(relative_root, reference.lin_vel)
   reference_ang_vel = quat_apply(relative_root, reference.ang_vel)
 

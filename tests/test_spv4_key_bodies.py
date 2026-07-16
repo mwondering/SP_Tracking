@@ -95,19 +95,24 @@ def test_spv4_world_kinematics_are_converted_to_root_frame() -> None:
 
 
 def test_spv4_key_body_error_aligns_reference_root_and_is_zero_centered() -> None:
+  num_envs = 2
   count = 13
-  robot_from_reference = _yaw(math.pi / 2.0)
-  reference_from_robot = _yaw(-math.pi / 2.0).unsqueeze(1)
-  robot_pos = torch.randn(1, count, 3)
-  robot_lin_vel = torch.randn(1, count, 3)
-  robot_ang_vel = torch.randn(1, count, 3)
-  robot_quat = _yaw(0.4).unsqueeze(1).expand(-1, count, -1)
+  robot_from_reference = _yaw(math.pi / 2.0).expand(num_envs, -1)
+  reference_from_robot = (
+    _yaw(-math.pi / 2.0).expand(num_envs, -1).unsqueeze(1)
+  )
+  robot_pos = torch.randn(num_envs, count, 3)
+  robot_lin_vel = torch.randn(num_envs, count, 3)
+  robot_ang_vel = torch.randn(num_envs, count, 3)
+  robot_quat = (
+    _yaw(0.4).expand(num_envs, -1).unsqueeze(1).expand(-1, count, -1)
+  )
   reference_from_robot_quat = reference_from_robot.expand_as(robot_quat)
   reference = RootFrameKeyBodyState(
-    pos=quat_apply(reference_from_robot, robot_pos),
+    pos=quat_apply(reference_from_robot_quat, robot_pos),
     quat=quat_mul(reference_from_robot_quat, robot_quat),
-    lin_vel=quat_apply(reference_from_robot, robot_lin_vel),
-    ang_vel=quat_apply(reference_from_robot, robot_ang_vel),
+    lin_vel=quat_apply(reference_from_robot_quat, robot_lin_vel),
+    ang_vel=quat_apply(reference_from_robot_quat, robot_ang_vel),
   )
   robot = RootFrameKeyBodyState(
     pos=robot_pos,
@@ -118,7 +123,7 @@ def test_spv4_key_body_error_aligns_reference_root_and_is_zero_centered() -> Non
 
   error = _key_body_error(robot, reference, robot_from_reference)
 
-  assert error.shape == (1, 195)
+  assert error.shape == (num_envs, 195)
   torch.testing.assert_close(error, torch.zeros_like(error), atol=1.0e-6, rtol=0.0)
 
 
