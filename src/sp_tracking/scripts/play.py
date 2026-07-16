@@ -17,19 +17,23 @@ from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 from sp_tracking.config.build_agent import serialize_agent_cfg
 from sp_tracking.scripts.train import prepare_train_cfg
 from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
-from sp_tracking.tasks.tracking.task_catalog import TASK_BY_NAME, TaskName
+from sp_tracking.tasks.tracking.task_catalog import (
+  TASK_BY_CONFIG_NAME,
+  TASK_BY_ID,
+  TaskId,
+)
 
 
 TASK_OVERRIDES = {
-  name: list(spec.hydra_overrides) for name, spec in TASK_BY_NAME.items()
+  task_id: list(spec.hydra_overrides) for task_id, spec in TASK_BY_ID.items()
 }
 
 
 @dataclass(frozen=True)
 class PlayConfig:
-  # New checkpoints are self-describing; task is only needed for legacy local
-  # checkpoints that do not carry the source-style ``cfg`` field.
-  task: TaskName | None = None
+  # New checkpoints are self-describing; task_id is only needed for legacy
+  # local checkpoints that do not carry the source-style ``cfg`` field.
+  task_id: TaskId | None = None
   checkpoint_file: str | None = None
   motion_path: str | None = None
   motion_file: str | None = None
@@ -103,16 +107,21 @@ def _load_saved_train_cfg(checkpoint_path: Path) -> DictConfig | None:
 
 
 def _prepare_checkpoint_train_cfg(
-  checkpoint_path: Path, requested_task: str | None
+  checkpoint_path: Path, requested_task_id: str | None
 ):
   saved_cfg = _load_saved_train_cfg(checkpoint_path)
   if saved_cfg is None:
-    if requested_task is None:
+    if requested_task_id is None:
       raise ValueError(
-        "This legacy checkpoint has no embedded cfg. Pass --task explicitly "
+        "This legacy checkpoint has no embedded cfg. Pass --task-id explicitly "
         f"to select one of: {', '.join(TASK_OVERRIDES)}."
       )
-    fallback_cfg = _compose_train(TASK_OVERRIDES[requested_task])
+    if requested_task_id not in TASK_OVERRIDES:
+      raise ValueError(
+        f"Unknown task ID '{requested_task_id}'. Available task IDs: "
+        f"{', '.join(TASK_OVERRIDES)}."
+      )
+    fallback_cfg = _compose_train(TASK_OVERRIDES[requested_task_id])
     return prepare_train_cfg(fallback_cfg)
 
   if "task" not in saved_cfg or "agent" not in saved_cfg:
@@ -120,17 +129,24 @@ def _prepare_checkpoint_train_cfg(
       "The checkpoint cfg is not an SP_Tracking train configuration. "
       "Raw source checkpoints cannot be loaded by the different RSL policy stack."
     )
-  saved_task = str(saved_cfg.task.get("name", ""))
-  if requested_task is not None and requested_task != saved_task:
+  saved_task_id = str(saved_cfg.get("task_id", ""))
+  if not saved_task_id:
+    saved_config_name = str(saved_cfg.task.get("name", ""))
+    saved_spec = TASK_BY_CONFIG_NAME.get(saved_config_name)
+    saved_task_id = (
+      saved_spec.task_id if saved_spec is not None else saved_config_name
+    )
+  if requested_task_id is not None and requested_task_id != saved_task_id:
     raise ValueError(
-      f"Requested task '{requested_task}' does not match checkpoint task '{saved_task}'."
+      f"Requested task ID '{requested_task_id}' does not match checkpoint "
+      f"task ID '{saved_task_id}'."
     )
   return prepare_train_cfg(saved_cfg)
 
 
 def prepare_play_cfg(cfg: PlayConfig) -> PreparedPlayCfg:
   checkpoint_path = _resolve_checkpoint_path(cfg)
-  prepared_train = _prepare_checkpoint_train_cfg(checkpoint_path, cfg.task)
+  prepared_train = _prepare_checkpoint_train_cfg(checkpoint_path, cfg.task_id)
   env_cfg = prepared_train.env
   agent_cfg = prepared_train.agent
   env_cfg.scene.num_envs = int(cfg.num_envs)

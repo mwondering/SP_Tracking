@@ -6,6 +6,11 @@ from tensordict import TensorDict
 
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.scripts.train import prepare_train_cfg
+from sp_tracking.tasks.tracking.mdp.motion_fk import (
+  finite_diff_torch,
+  normalize,
+  smooth_avg5_torch,
+)
 from sp_tracking.tasks.tracking.mdp.spv5 import (
   SPV5_REFERENCE_INPUT_DIM,
   SPV5_REFERENCE_INPUT_STEPS,
@@ -13,9 +18,13 @@ from sp_tracking.tasks.tracking.mdp.spv5 import (
   SPV5_REFERENCE_TARGET_DIM,
 )
 from sp_tracking.tasks.tracking.rl.spv5_models import (
+  SPV5_POLICY_CONTEXT_CACHE_DIM,
+  SPV5_POLICY_CONTEXT_CACHE_GROUP,
   SPV5_POLICY_INPUT_DIM,
   SPV5_RAW_ACTOR_OBS_DIM,
   SPV5ReferenceEncoderActor,
+  SPV5ReferenceKinematics,
+  _support_angvel_from_quat,
 )
 from sp_tracking.tasks.tracking.rl.ppo import SPV5ReferenceEncoderPPO
 
@@ -123,6 +132,59 @@ def test_spv5_window_contract_and_zero_initialized_residual() -> None:
   assert actor.obs_dim == SPV5_RAW_ACTOR_OBS_DIM == 8199
 
 
+def test_spv5_seven_frame_key_body_fk_is_exact_at_current_frame() -> None:
+  torch.manual_seed(7)
+  batch = 3
+  current = 3
+  key_support = 7
+  kinematics = SPV5ReferenceKinematics(KEYPOINT_SPECS, fps=50.0)
+  helper = kinematics._fk_helper(torch.device("cpu"))
+  joint_pos = torch.randn(batch, 11, 29) * 0.2
+
+  full_pos, full_quat = helper.body_pose(joint_pos)
+  short_pos, short_quat = helper.body_pose(joint_pos[:, :key_support])
+  torch.testing.assert_close(short_pos, full_pos[:, :key_support])
+  torch.testing.assert_close(short_quat, full_quat[:, :key_support])
+
+  root_quat = normalize(torch.randn(batch, 11, 4))
+  root_ang_vel = smooth_avg5_torch(
+    _support_angvel_from_quat(root_quat, 50.0, dim=1), dim=1
+  )
+  full_lin_vel = smooth_avg5_torch(
+    finite_diff_torch(full_pos, 50.0, dim=1)
+    + torch.linalg.cross(
+      root_ang_vel.unsqueeze(-2).expand_as(full_pos), full_pos, dim=-1
+    ),
+    dim=1,
+  )
+  short_lin_vel = smooth_avg5_torch(
+    finite_diff_torch(short_pos, 50.0, dim=1)
+    + torch.linalg.cross(
+      root_ang_vel[:, :key_support]
+      .unsqueeze(-2)
+      .expand_as(short_pos),
+      short_pos,
+      dim=-1,
+    ),
+    dim=1,
+  )
+  full_ang_vel = smooth_avg5_torch(
+    _support_angvel_from_quat(full_quat, 50.0, dim=1), dim=1
+  )
+  short_ang_vel = smooth_avg5_torch(
+    _support_angvel_from_quat(short_quat, 50.0, dim=1), dim=1
+  )
+
+  torch.testing.assert_close(short_pos[:, current], full_pos[:, current])
+  torch.testing.assert_close(short_quat[:, current], full_quat[:, current])
+  torch.testing.assert_close(
+    short_lin_vel[:, current], full_lin_vel[:, current]
+  )
+  torch.testing.assert_close(
+    short_ang_vel[:, current], full_ang_vel[:, current]
+  )
+
+
 def test_spv5_policy_and_supervised_gradients_are_separated() -> None:
   obs = _observations()
   actor = _actor(obs)
@@ -133,6 +195,21 @@ def test_spv5_policy_and_supervised_gradients_are_separated() -> None:
   assert all(
     parameter.grad is None for parameter in actor.reference_encoder.parameters()
   )
+
+
+def test_spv5_rollout_context_cache_avoids_recomputing_reference() -> None:
+  obs = _observations()
+  actor = _actor(obs)
+  uncached_latent = actor.get_latent(obs)
+  context = actor.populate_policy_context_cache(obs)
+  latent = actor.get_latent(obs)
+
+  assert context.shape == (2, SPV5_POLICY_CONTEXT_CACHE_DIM)
+  assert SPV5_POLICY_CONTEXT_CACHE_GROUP in obs
+  torch.testing.assert_close(latent, uncached_latent)
+  obs["reference_encoder_input"].normal_(mean=100.0, std=10.0)
+  obs["robot_root_quat"].normal_()
+  torch.testing.assert_close(actor.get_latent(obs), latent)
 
   actor.zero_grad()
   reference_loss, diagnostics = actor.reference_encoder_losses(obs)
@@ -226,6 +303,17 @@ def test_spv5_task_exposes_only_encoded_reference_to_actor() -> None:
     ":SPV5ReferenceEncoderPPO"
   )
   assert len(prepared.agent.actor.keypoint_specs) == 13
+  assert prepared.agent.actor.reference_encoder_hidden_dims == (512, 256, 128)
+  randomization = cfg.task.command.command.student_motion_randomization
+  assert randomization.enable is True
+  assert randomization.root_pos_noise_std == 0.005
+  assert randomization.root_ori_noise_std == 0.02
+  assert randomization.joint_pos_noise_std == 0.01
+  runtime_randomization = env.commands["motion"].student_motion_randomization
+  assert runtime_randomization["enable"] is True
+  assert runtime_randomization["root_pos_noise_std"] == 0.005
+  assert runtime_randomization["root_ori_noise_std"] == 0.02
+  assert runtime_randomization["joint_pos_noise_std"] == 0.01
   assert "actor_core" not in env.observations
   assert "ref_key_body" not in env.observations
   assert "key_body_error" not in env.observations

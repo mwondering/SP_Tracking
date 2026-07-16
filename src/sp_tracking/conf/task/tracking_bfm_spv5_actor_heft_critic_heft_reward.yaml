@@ -21,7 +21,7 @@ agent_overrides:
     class_name: sp_tracking.tasks.tracking.rl.spv5_models:SPV5ReferenceEncoderActor
     estimator_hidden_dims: [512, 256, 128]
     estimator_activation: elu
-    reference_encoder_hidden_dims: [1024, 512, 512]
+    reference_encoder_hidden_dims: [512, 256, 128]
     reference_encoder_activation: elu
     robot_root_quat_group: robot_root_quat
     estimator_history_group: estimator_history
@@ -40,3 +40,26 @@ agent_overrides:
     estimator_root_height_loss_coef: 1.0
     estimator_root_lin_vel_loss_coef: 1.0
     reference_encoder_loss_coef: 1.0
+
+# SPV5 inherits the BFM task family, whose command does not otherwise enable
+# HEFT's student-reference corruption.  Without this block input == target and
+# the residual encoder loss is identically zero.
+command:
+  command:
+    student_motion_randomization:
+      enable: true
+      root_pos_noise_std: 0.005
+      root_ori_noise_std: 0.02
+      joint_pos_noise_std: 0.01
+      joint_pos_bias_std:
+        ".*(shoulder|elbow|wrist|waist).*": 0.0
+        ".*(hip|knee|ankle).*": 0.1
+      root_pos_drift:
+        root_z_offset_range_m: [-0.05, 0.05]
+        xy_speed_range: [0.0, 0.2]
+        xy_freq_range_hz: [0.25, 1.0]
+        z_amplitude_range_m: [0.0, 0.025]
+        z_freq_range_hz: [0.25, 1.0]
+      root_rot_drift:
+        amplitude_range_rad: [0.0, 0.1]
+        freq_range_hz: [0.25, 1.0]

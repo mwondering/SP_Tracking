@@ -343,6 +343,9 @@ def _build_command(cfg: DictConfig):
       command_cfg.get("feet_standing_body_names")
     ),
     "feet_standing": _params(command_cfg.get("feet_standing")),
+    "student_motion_randomization": _params(
+      command_cfg.get("student_motion_randomization")
+    ),
     "resample_on_motion_end": bool(
       command_cfg.get("resample_on_motion_end", True)
     ),

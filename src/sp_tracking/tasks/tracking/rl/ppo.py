@@ -423,6 +423,36 @@ class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
 class SPV5ReferenceEncoderPPO(SPV3EstimatorPPO):
   """SPV3 supervision plus the normalized equal-MSE reference objective."""
 
+  @staticmethod
+  def construct_algorithm(obs, env, cfg: dict, device: str):
+    # Reserve the compact behavior-time cache in rollout storage before RSL
+    # allocates its TensorDict buffers.  It contains only derived reference
+    # state (577) and the detached root estimate (4), not supervision targets.
+    from .spv5_models import (
+      SPV5_POLICY_CONTEXT_CACHE_DIM,
+      SPV5_POLICY_CONTEXT_CACHE_GROUP,
+    )
+
+    cache_device = obs.device
+    if cache_device is None:
+      cache_device = next(iter(obs.values())).device
+    obs.set(
+      SPV5_POLICY_CONTEXT_CACHE_GROUP,
+      torch.zeros(
+        (*obs.batch_size, SPV5_POLICY_CONTEXT_CACHE_DIM),
+        device=cache_device,
+      ),
+    )
+    algorithm = PPO.construct_algorithm(obs, env, cfg, device)
+    populate = getattr(algorithm.actor, "populate_policy_context_cache", None)
+    if not callable(populate):
+      raise TypeError(
+        "SPV5ReferenceEncoderPPO requires an actor with "
+        "populate_policy_context_cache()"
+      )
+    populate(obs)
+    return algorithm
+
   def __init__(
     self,
     *args,

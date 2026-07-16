@@ -5,6 +5,11 @@ import torch
 from hydra import compose, initialize_config_module
 
 from sp_tracking.scripts.play import PlayConfig, prepare_play_cfg
+from sp_tracking.tasks.tracking.task_catalog import TASK_BY_CONFIG_NAME
+
+
+def _task_id(config_name: str) -> str:
+  return TASK_BY_CONFIG_NAME[config_name].task_id
 
 
 def _save_local_checkpoint(
@@ -69,7 +74,10 @@ def test_prepare_play_cfg_requires_task_for_legacy_local_checkpoint(tmp_path: Pa
     prepare_play_cfg(PlayConfig(checkpoint_file=str(checkpoint_file)))
 
   prepared = prepare_play_cfg(
-    PlayConfig(task="tracking_bfm", checkpoint_file=str(checkpoint_file))
+    PlayConfig(
+      task_id=_task_id("tracking_bfm"),
+      checkpoint_file=str(checkpoint_file),
+    )
   )
   assert list(prepared.env.observations) == ["actor", "critic"]
 
@@ -114,7 +122,7 @@ def test_prepare_play_cfg_supports_new_variant_for_legacy_checkpoint(
   torch.save({}, checkpoint_file)
 
   prepared = prepare_play_cfg(
-    PlayConfig(task=task, checkpoint_file=str(checkpoint_file))  # type: ignore[arg-type]
+    PlayConfig(task_id=_task_id(task), checkpoint_file=str(checkpoint_file))
   )
 
   assert list(prepared.env.observations) == obs_groups
@@ -125,7 +133,10 @@ def test_prepare_play_cfg_rejects_task_mismatch_with_local_checkpoint(tmp_path: 
 
   with pytest.raises(ValueError, match="does not match checkpoint task"):
     prepare_play_cfg(
-      PlayConfig(task="tracking_bfm", checkpoint_file=str(checkpoint_file))
+      PlayConfig(
+        task_id=_task_id("tracking_bfm"),
+        checkpoint_file=str(checkpoint_file),
+      )
     )
 
 

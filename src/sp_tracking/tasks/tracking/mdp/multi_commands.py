@@ -950,6 +950,17 @@ class MultiMotionCommand(CommandTerm):
     self, field_name: str, relative_steps: tuple[int, ...]
   ) -> torch.Tensor:
     value = self.gather_reference(field_name, relative_steps).clone()
+    return self.apply_student_reference_randomization(
+      field_name, relative_steps, value
+    )
+
+  def apply_student_reference_randomization(
+    self,
+    field_name: str,
+    relative_steps: tuple[int, ...],
+    value: torch.Tensor,
+  ) -> torch.Tensor:
+    """Apply configured student corruption to an already-gathered window."""
     if not self._student_motion_randomization_enabled:
       return value
     cfg = self._student_motion_randomization_cfg
@@ -1016,6 +1027,17 @@ class MultiMotionCommand(CommandTerm):
   ) -> torch.Tensor:
     """Gather the noisy student root window without a full-body tensor."""
     value = self.gather_root_reference(field_name, relative_steps).clone()
+    return self.apply_student_root_reference_randomization(
+      field_name, relative_steps, value
+    )
+
+  def apply_student_root_reference_randomization(
+    self,
+    field_name: str,
+    relative_steps: tuple[int, ...],
+    value: torch.Tensor,
+  ) -> torch.Tensor:
+    """Apply student root corruption to an already-gathered root window."""
     if not self._student_motion_randomization_enabled:
       return value
     cfg = self._student_motion_randomization_cfg

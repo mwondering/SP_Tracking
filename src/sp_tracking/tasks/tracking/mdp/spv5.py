@@ -72,26 +72,46 @@ def _reference_values(
     return cached
 
   input_steps = SPV5_REFERENCE_INPUT_STEPS
-  noisy_root_pos = _root_reference(
-    env, command_name, "body_pos_w", input_steps, noisy=True
+  clean_root_pos_full = _root_reference(
+    env, command_name, "body_pos_w", input_steps, noisy=False
   )
-  noisy_root_quat = _root_reference(
-    env, command_name, "body_quat_w", input_steps, noisy=True
+  clean_root_quat_full = _root_reference(
+    env, command_name, "body_quat_w", input_steps, noisy=False
   )
-  noisy_joint_pos = sp_mdp._gather_horizon(
-    env, command_name, "joint_pos", input_steps, "student"
+  clean_joint_pos_full = sp_mdp._gather_horizon(
+    env, command_name, "joint_pos", input_steps, "teacher"
   )
+  corrupt_root = getattr(
+    command, "apply_student_root_reference_randomization", None
+  )
+  corrupt_reference = getattr(
+    command, "apply_student_reference_randomization", None
+  )
+  if callable(corrupt_root) and callable(corrupt_reference):
+    noisy_root_pos = corrupt_root(
+      "body_pos_w", input_steps, clean_root_pos_full.clone()
+    )
+    noisy_root_quat = corrupt_root(
+      "body_quat_w", input_steps, clean_root_quat_full.clone()
+    )
+    noisy_joint_pos = corrupt_reference(
+      "joint_pos", input_steps, clean_joint_pos_full.clone()
+    )
+  else:
+    noisy_root_pos = _root_reference(
+      env, command_name, "body_pos_w", input_steps, noisy=True
+    )
+    noisy_root_quat = _root_reference(
+      env, command_name, "body_quat_w", input_steps, noisy=True
+    )
+    noisy_joint_pos = sp_mdp._gather_horizon(
+      env, command_name, "joint_pos", input_steps, "student"
+    )
 
-  support_steps = SPV5_REFERENCE_SUPPORT_STEPS
-  clean_root_pos = _root_reference(
-    env, command_name, "body_pos_w", support_steps, noisy=False
-  )
-  clean_root_quat = _root_reference(
-    env, command_name, "body_quat_w", support_steps, noisy=False
-  )
-  clean_joint_pos = sp_mdp._gather_horizon(
-    env, command_name, "joint_pos", support_steps, "teacher"
-  )
+  support_length = len(SPV5_REFERENCE_SUPPORT_STEPS)
+  clean_root_pos = clean_root_pos_full[:, -support_length:]
+  clean_root_quat = clean_root_quat_full[:, -support_length:]
+  clean_joint_pos = clean_joint_pos_full[:, -support_length:]
 
   values = {
     "input": _pack_minimal_reference(

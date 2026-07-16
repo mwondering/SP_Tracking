@@ -12,7 +12,7 @@ uv sync
 scripts/train_tracking_bfm.sh
 ```
 
-The default training script runs `tracking_bfm` with the multi-motion loader and
+The default training script runs `SPTracking-G1-BFM-BFMActor-BFMCritic` with the multi-motion loader and
 uses `/home/lenovo/DATASETS/Data10k_full` as the motion path. Override it either
 with the first positional argument or with `SP_TRACKING_MOTION_PATH`:
 
@@ -74,10 +74,10 @@ and `SP_TRACKING_NUM_ENVS=4096`, each GPU creates 4096 environments and the
 global rollout batch is doubled. Override `SP_TRACKING_NPROC` only when it
 should differ from the number of comma-separated GPU IDs in `SP_TRACKING_GPUS`.
 
-The script forwards to:
+The script forwards the canonical public task ID to:
 
 ```bash
-uv run sp-train task=tracking_bfm motion_path=/path/to/motions
+uv run sp-train task_id=SPTracking-G1-BFM-BFMActor-BFMCritic motion_path=/path/to/motions
 ```
 
 You can also call the Hydra entry point directly:
@@ -93,7 +93,7 @@ teacher network, optimizer, schedules, symmetry and motion randomization. Start
 pretraining from scratch with:
 
 ```bash
-uv run sp-train task=tracking_bfm_sp motion_path=/path/to/motions
+uv run sp-train task_id=SPTracking-G1-HEFT-TeacherActor-HEFTCritic motion_path=/path/to/motions
 ```
 
 The resulting checkpoint is self-describing and can be passed directly to
@@ -108,9 +108,9 @@ applied joint-position dynamics, rewards, terminations, events, curriculum,
 sampler, reset, seed, and training budget. Run them with:
 
 ```bash
-uv run sp-train task=tracking_bfm_sp_ablation_bfm_actor motion_path=/path/to/motions
-uv run sp-train task=tracking_bfm_sp_ablation_student_actor motion_path=/path/to/motions
-uv run sp-train task=tracking_bfm_sp_ablation_teacher_actor motion_path=/path/to/motions
+uv run sp-train task_id=SPTracking-G1-BFM-BFMActor-HEFTCritic motion_path=/path/to/motions
+uv run sp-train task_id=SPTracking-G1-BFM-StudentActor-HEFTCritic motion_path=/path/to/motions
+uv run sp-train task_id=SPTracking-G1-BFM-TeacherActor-HEFTCritic motion_path=/path/to/motions
 ```
 
 The default `tracking_bfm` task keeps the BFM tracking term set, termination,
@@ -122,40 +122,39 @@ profile.
 
 | Task | Actor observation | Critic observation | Reward | Runtime |
 | --- | --- | --- | --- | --- |
-| `tracking_bfm` | BFM `actor` | BFM `critic` | BFM | BFM XML + complete BFM runtime |
-| `tracking_bfm_sp` | `policy + priv` | `policy + priv + priv_critic` | HEFT | SP XML + HEFT pretrain runtime |
-| `tracking_bfm_sp_ablation_bfm_actor` | BFM `actor` | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_sp_ablation_student_actor` | HEFT student `policy` | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_sp_ablation_teacher_actor` | raw `policy + priv` | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_student_actor_bfm_critic` | HEFT student `policy` | BFM `critic` | BFM | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_teacher_actor_bfm_critic` | raw `policy + priv` | BFM `critic` | BFM | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_wbteleop_actor_bfm_critic` | deployable WBTeleop `actor` (886-D) | BFM `critic` | BFM | BFM XML + complete BFM runtime |
-| `tracking_bfm_wbteleop_actor_heft_critic` | deployable WBTeleop `actor` (886-D) | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
-| `tracking_bfm_spv1_actor_heft_critic_heft_reward` | heading-invariant SPV1 `actor` (1786-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
-| `tracking_bfm_spv2_actor_heft_critic_heft_reward` | Compact SPV2: 5-frame history, +4 future, HEFT root rotation (1056-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
-| `tracking_bfm_spv3_actor_heft_critic_heft_reward` | SPV3: SPV2 + supervised MLP root-state estimator (6546-D deploy input, 1064-D policy input) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
-| `tracking_bfm_spv4_actor_heft_critic_heft_reward` | SPV4: SPV3 + current root-frame robot/reference/error states for 13 HEFT key bodies (1649-D policy input) | `policy + priv` | HEFT | Privileged BFM simulator body state; not directly deployable |
-| `tracking_bfm_spv5_actor_heft_critic_heft_reward` | SPV5: supervised 50-frame noisy qpos encoder + HEFT-style FK into the SPV4 information layout (1649-D policy input) | `policy + priv` | HEFT | Reference side is deployment-compatible; robot key-body state retains SPV4's runtime requirement |
+| `SPTracking-G1-BFM-BFMActor-BFMCritic` | BFM `actor` | BFM `critic` | BFM | BFM XML + complete BFM runtime |
+| `SPTracking-G1-HEFT-TeacherActor-HEFTCritic` | `policy + priv` | `policy + priv + priv_critic` | HEFT | SP XML + HEFT pretrain runtime |
+| `SPTracking-G1-BFM-BFMActor-HEFTCritic` | BFM `actor` | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
+| `SPTracking-G1-BFM-StudentActor-HEFTCritic` | HEFT student `policy` | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
+| `SPTracking-G1-BFM-TeacherActor-HEFTCritic` | raw `policy + priv` | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
+| `SPTracking-G1-BFM-StudentActor-BFMCritic` | HEFT student `policy` | BFM `critic` | BFM | BFM XML/runtime + HEFT observation support |
+| `SPTracking-G1-BFM-TeacherActor-BFMCritic` | raw `policy + priv` | BFM `critic` | BFM | BFM XML/runtime + HEFT observation support |
+| `SPTracking-G1-BFM-WBTeleopActor-BFMCritic` | deployable WBTeleop `actor` (886-D) | BFM `critic` | BFM | BFM XML + complete BFM runtime |
+| `SPTracking-G1-BFM-WBTeleopActor-HEFTCritic` | deployable WBTeleop `actor` (886-D) | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
+| `SPTracking-G1-BFM-SPV1Actor-HEFTCritic-HEFTReward` | heading-invariant SPV1 `actor` (1786-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
+| `SPTracking-G1-BFM-SPV2Actor-HEFTCritic-HEFTReward` | Compact SPV2: 5-frame history, +4 future, HEFT root rotation (1056-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
+| `SPTracking-G1-BFM-SPV3Actor-HEFTCritic-HEFTReward` | SPV3: SPV2 + supervised MLP root-state estimator (6546-D deploy input, 1064-D policy input) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
+| `SPTracking-G1-BFM-SPV4Actor-HEFTCritic-HEFTReward` | SPV4: SPV3 + current root-frame robot/reference/error states for 13 HEFT key bodies (1649-D policy input) | `policy + priv` | HEFT | Privileged BFM simulator body state; not directly deployable |
+| `SPTracking-G1-BFM-SPV5Actor-HEFTCritic-HEFTReward` | SPV5: supervised 50-frame noisy qpos encoder + HEFT-style FK into the SPV4 information layout (1649-D policy input) | `policy + priv` | HEFT | Reference side is deployment-compatible; robot key-body state retains SPV4's runtime requirement |
 
 Every BFM-XML task above except the already-HEFT-reward SPV tasks also has an
-additive HEFT-reward variant. Append `_heft_reward` to its Hydra task name, for
-example:
+additive HEFT-reward variant with the same public naming grammar, for example:
 
 ```bash
-uv run sp-train task=tracking_bfm_wbteleop_actor_heft_critic_heft_reward \
+uv run sp-train task_id=SPTracking-G1-BFM-WBTeleopActor-HEFTCritic-HEFTReward \
   motion_path=/path/to/motions
 ```
 
 This defines eight additional tasks:
 
-- `tracking_bfm_heft_reward`
-- `tracking_bfm_sp_ablation_bfm_actor_heft_reward`
-- `tracking_bfm_sp_ablation_student_actor_heft_reward`
-- `tracking_bfm_sp_ablation_teacher_actor_heft_reward`
-- `tracking_bfm_student_actor_bfm_critic_heft_reward`
-- `tracking_bfm_teacher_actor_bfm_critic_heft_reward`
-- `tracking_bfm_wbteleop_actor_bfm_critic_heft_reward`
-- `tracking_bfm_wbteleop_actor_heft_critic_heft_reward`
+- `SPTracking-G1-BFM-BFMActor-BFMCritic-HEFTReward`
+- `SPTracking-G1-BFM-BFMActor-HEFTCritic-HEFTReward`
+- `SPTracking-G1-BFM-StudentActor-HEFTCritic-HEFTReward`
+- `SPTracking-G1-BFM-TeacherActor-HEFTCritic-HEFTReward`
+- `SPTracking-G1-BFM-StudentActor-BFMCritic-HEFTReward`
+- `SPTracking-G1-BFM-TeacherActor-BFMCritic-HEFTReward`
+- `SPTracking-G1-BFM-WBTeleopActor-BFMCritic-HEFTReward`
+- `SPTracking-G1-BFM-WBTeleopActor-HEFTCritic-HEFTReward`
 
 Each variant inherits its parent actor, critic, action, PPO, events,
 terminations, curriculum, simulation, and seed. Only the reward is replaced,
@@ -289,8 +288,8 @@ override.
 ## Play
 
 Play is local-checkpoint-only. New checkpoints embed the resolved training
-configuration, so `--task` is inferred and observation/reward/network
-ablations are reconstructed from the checkpoint. Pass `--task` only for a
+configuration, so `--task-id` is inferred and observation/reward/network
+ablations are reconstructed from the checkpoint. Pass `--task-id` only for a
 legacy checkpoint that lacks `cfg`.
 
 Use the play script with a local checkpoint:

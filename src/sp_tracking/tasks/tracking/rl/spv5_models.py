@@ -50,6 +50,7 @@ from .spv3_models import (
   PROPRIO_TERM_DIMS,
   SPV2_POLICY_HISTORY_LENGTH,
   SPV3_ESTIMATOR_HISTORY_LENGTH,
+  SPV3_ESTIMATOR_OUTPUT_DIM,
   SPV3_EXISTING_ERROR_DIM,
   SPV3_POLICY_INPUT_DIM,
   SPV3_REFERENCE_DIM,
@@ -62,6 +63,11 @@ from .spv4_models import _assemble_spv4_features
 SPV5_REFERENCE_POLICY_START = SPV5_REFERENCE_SUPPORT_STEPS.index(0)
 SPV5_REFERENCE_POLICY_LENGTH = 5
 SPV5_POLICY_INPUT_DIM = SPV3_POLICY_INPUT_DIM + 3 * SPV4_KEY_BODY_STATE_DIM
+SPV5_REFERENCE_CACHE_DIM = SPV3_REFERENCE_DIM + SPV4_KEY_BODY_STATE_DIM
+SPV5_POLICY_CONTEXT_CACHE_DIM = (
+  SPV5_REFERENCE_CACHE_DIM + SPV3_ESTIMATOR_OUTPUT_DIM
+)
+SPV5_POLICY_CONTEXT_CACHE_GROUP = "spv5_policy_context_cache"
 SPV5_RAW_ACTOR_OBS_DIM = (
   SPV5_ROBOT_ROOT_QUAT_DIM
   + SPV3_ESTIMATOR_HISTORY_LENGTH * sum(PROPRIO_TERM_DIMS)
@@ -225,12 +231,20 @@ class SPV5ReferenceKinematics:
       finite_diff_torch(joint_pos, self.fps, dim=1), dim=1
     )
 
+    # Only the current key-body state reaches the policy.  HEFT's centered
+    # difference plus avg5 at t=0 needs [-3,+3], not the full [-3,+7]
+    # command support.  Limiting body FK to these seven frames cuts its batch
+    # by 36% without changing the current pose or velocity.
+    key_support_stop = SPV5_REFERENCE_POLICY_START + 4
+    key_joint_pos = joint_pos[:, :key_support_stop]
     helper = self._fk_helper(decoded.device)
-    body_pos_b, body_quat_b = helper.body_pose(joint_pos)
+    body_pos_b, body_quat_b = helper.body_pose(key_joint_pos)
     body_lin_vel_b = smooth_avg5_torch(
       finite_diff_torch(body_pos_b, self.fps, dim=1)
       + torch.linalg.cross(
-        root_ang_vel_b.unsqueeze(-2).expand_as(body_pos_b),
+        root_ang_vel_b[:, :key_support_stop]
+        .unsqueeze(-2)
+        .expand_as(body_pos_b),
         body_pos_b,
         dim=-1,
       ),
@@ -315,18 +329,54 @@ class SPV5ReferenceKinematics:
     )
 
 
+def _pack_reference_cache(reference: _ReferenceFeatures) -> torch.Tensor:
+  return torch.cat((reference.standard, reference.key_body), dim=-1)
+
+
+def _reference_features_from_cache(value: torch.Tensor) -> _ReferenceFeatures:
+  if value.shape[-1] != SPV5_REFERENCE_CACHE_DIM:
+    raise ValueError(
+      f"SPV5 reference cache has {value.shape[-1]} values, "
+      f"expected {SPV5_REFERENCE_CACHE_DIM}"
+    )
+  standard = value[..., :SPV3_REFERENCE_DIM]
+  key_body = value[..., SPV3_REFERENCE_DIM:]
+  robot_from_reference = _rot6d_to_quat(standard[..., 12:18])
+  key_state = _unpack_key_body(key_body)
+  return _ReferenceFeatures(
+    standard=standard,
+    key_body=key_body,
+    key_state=key_state,
+    robot_from_reference_root=robot_from_reference,
+    joint_pos_current=standard[..., 62:91],
+    joint_vel_current=standard[..., 207:236],
+    gravity_current=standard[..., 352:355],
+    ang_vel_current=standard[..., 367:370],
+    height_current=standard[..., 42:43],
+    lin_vel_current_robot=quat_apply(
+      robot_from_reference, standard[..., 47:50]
+    ),
+  )
+
+
 def _spv5_policy_features(
   *,
   history: torch.Tensor,
   latest_proprio: torch.Tensor,
   estimate: torch.Tensor,
-  decoded_reference: torch.Tensor,
-  robot_root_quat: torch.Tensor,
+  decoded_reference: torch.Tensor | None,
+  robot_root_quat: torch.Tensor | None,
   robot_key_body: torch.Tensor,
   history_length: int,
   kinematics: SPV5ReferenceKinematics,
+  reference_cache: torch.Tensor | None = None,
 ) -> torch.Tensor:
-  reference = kinematics(decoded_reference, robot_root_quat)
+  if reference_cache is None:
+    if decoded_reference is None or robot_root_quat is None:
+      raise ValueError("SPV5 uncached policy features require decoded reference")
+    reference = kinematics(decoded_reference, robot_root_quat)
+  else:
+    reference = _reference_features_from_cache(reference_cache)
   joint_pos, joint_vel, gravity, ang_vel, _, _ = _current_proprio(
     history, history_length
   )
@@ -392,7 +442,7 @@ class SPV5ReferenceEncoderActor(SPV3EstimatorActor):
     distribution_cfg: dict | None = None,
     estimator_hidden_dims: Sequence[int] = (512, 256, 128),
     estimator_activation: str = "elu",
-    reference_encoder_hidden_dims: Sequence[int] = (1024, 512, 512),
+    reference_encoder_hidden_dims: Sequence[int] = (512, 256, 128),
     reference_encoder_activation: str = "elu",
     actor_core_group: str = "actor_core",
     robot_root_quat_group: str = "robot_root_quat",
@@ -494,7 +544,11 @@ class SPV5ReferenceEncoderActor(SPV3EstimatorActor):
     return self._noisy_support(reference_input) + residual
 
   def _spv5_features(
-    self, obs: TensorDict, estimate: torch.Tensor, decoded: torch.Tensor
+    self,
+    obs: TensorDict,
+    estimate: torch.Tensor,
+    decoded: torch.Tensor | None,
+    reference_cache: torch.Tensor | None = None,
   ) -> torch.Tensor:
     history = obs[self.estimator_history_group]
     return _spv5_policy_features(
@@ -502,11 +556,39 @@ class SPV5ReferenceEncoderActor(SPV3EstimatorActor):
       latest_proprio=self._latest_policy_proprio(history),
       estimate=estimate,
       decoded_reference=decoded,
-      robot_root_quat=obs[self.robot_root_quat_group],
+      robot_root_quat=(
+        obs[self.robot_root_quat_group] if reference_cache is None else None
+      ),
       robot_key_body=obs[self.robot_key_body_group],
       history_length=self.estimator_history_length,
       kinematics=self.reference_kinematics,
+      reference_cache=reference_cache,
     )
+
+  @torch.no_grad()
+  def populate_policy_context_cache(self, obs: TensorDict) -> torch.Tensor:
+    """Materialize one behavior-time context for rollout storage.
+
+    PPO treats the supervised encoder and estimator outputs as observations,
+    not policy parameters.  Storing this compact context makes those
+    observations fixed for the rollout and removes all FK/encoder/estimator
+    inference from the repeated learning minibatches.
+    """
+    estimate = self.estimate_root_state(obs)
+    decoded = self.encode_reference(obs)
+    reference = self.reference_kinematics(
+      decoded, obs[self.robot_root_quat_group]
+    )
+    context = torch.cat(
+      (_pack_reference_cache(reference), estimate), dim=-1
+    ).detach()
+    if context.shape[-1] != SPV5_POLICY_CONTEXT_CACHE_DIM:
+      raise RuntimeError(
+        f"SPV5 policy context has {context.shape[-1]} values, "
+        f"expected {SPV5_POLICY_CONTEXT_CACHE_DIM}"
+      )
+    obs.set(SPV5_POLICY_CONTEXT_CACHE_GROUP, context)
+    return context
 
   def get_latent(
     self,
@@ -515,10 +597,19 @@ class SPV5ReferenceEncoderActor(SPV3EstimatorActor):
     hidden_state: HiddenState = None,
   ) -> torch.Tensor:
     del masks, hidden_state
-    estimate = self.estimate_root_state(obs).detach()
-    # PPO must not update either supervised representation network.
-    decoded = self.encode_reference(obs).detach()
-    return self.policy_normalizer(self._spv5_features(obs, estimate, decoded))
+    context = obs.get(SPV5_POLICY_CONTEXT_CACHE_GROUP)
+    if context is not None:
+      reference_cache = context[..., :SPV5_REFERENCE_CACHE_DIM]
+      estimate = context[..., SPV5_REFERENCE_CACHE_DIM:]
+      features = self._spv5_features(
+        obs, estimate, None, reference_cache=reference_cache
+      )
+    else:
+      estimate = self.estimate_root_state(obs).detach()
+      # PPO must not update either supervised representation network.
+      decoded = self.encode_reference(obs).detach()
+      features = self._spv5_features(obs, estimate, decoded)
+    return self.policy_normalizer(features)
 
   def reference_encoder_losses(
     self, obs: TensorDict
@@ -558,6 +649,7 @@ class SPV5ReferenceEncoderActor(SPV3EstimatorActor):
   @torch.no_grad()
   def update_normalization(self, obs: TensorDict) -> None:
     if not self.obs_normalization:
+      self.populate_policy_context_cache(obs)
       return
     history = obs[self.estimator_history_group]
     reference_input = obs[self.reference_encoder_input_group]
@@ -567,10 +659,15 @@ class SPV5ReferenceEncoderActor(SPV3EstimatorActor):
     self.reference_residual_normalizer.update(  # type: ignore[attr-defined]
       target - self._noisy_support(reference_input)
     )
-    estimate = self.estimate_root_state(obs)
-    decoded = self.encode_reference(obs)
+    context = self.populate_policy_context_cache(obs)
+    estimate = context[..., SPV5_REFERENCE_CACHE_DIM:]
     self.policy_normalizer.update(  # type: ignore[attr-defined]
-      self._spv5_features(obs, estimate, decoded)
+      self._spv5_features(
+        obs,
+        estimate,
+        None,
+        reference_cache=context[..., :SPV5_REFERENCE_CACHE_DIM],
+      )
     )
 
   def as_onnx(self, verbose: bool = False) -> nn.Module:

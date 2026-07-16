@@ -3,39 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 
-TaskName = Literal[
-  "tracking_bfm",
-  "tracking_bfm_sp",
-  "tracking_bfm_sp_ablation_bfm_actor",
-  "tracking_bfm_sp_ablation_student_actor",
-  "tracking_bfm_sp_ablation_teacher_actor",
-  "tracking_bfm_student_actor_bfm_critic",
-  "tracking_bfm_teacher_actor_bfm_critic",
-  "tracking_bfm_wbteleop_actor_bfm_critic",
-  "tracking_bfm_wbteleop_actor_heft_critic",
-  "tracking_bfm_heft_reward",
-  "tracking_bfm_sp_ablation_bfm_actor_heft_reward",
-  "tracking_bfm_sp_ablation_student_actor_heft_reward",
-  "tracking_bfm_sp_ablation_teacher_actor_heft_reward",
-  "tracking_bfm_student_actor_bfm_critic_heft_reward",
-  "tracking_bfm_teacher_actor_bfm_critic_heft_reward",
-  "tracking_bfm_wbteleop_actor_bfm_critic_heft_reward",
-  "tracking_bfm_wbteleop_actor_heft_critic_heft_reward",
-  "tracking_bfm_spv1_actor_heft_critic_heft_reward",
-  "tracking_bfm_spv2_actor_heft_critic_heft_reward",
-  "tracking_bfm_spv3_actor_heft_critic_heft_reward",
-  "tracking_bfm_spv4_actor_heft_critic_heft_reward",
-  "tracking_bfm_spv5_actor_heft_critic_heft_reward",
-]
+TaskId = str
 
 
 @dataclass(frozen=True)
 class TaskSpec:
-  name: TaskName
-  task_id: str
+  # ``config_name`` is a private Hydra implementation key.  ``task_id`` is
+  # the sole user-facing and registry-facing task identifier.
+  config_name: str
+  task_id: TaskId
   hydra_overrides: tuple[str, ...]
 
 
@@ -152,4 +130,5 @@ TASK_SPECS = (
   ),
 )
 
-TASK_BY_NAME = {spec.name: spec for spec in TASK_SPECS}
+TASK_BY_CONFIG_NAME = {spec.config_name: spec for spec in TASK_SPECS}
+TASK_BY_ID = {spec.task_id: spec for spec in TASK_SPECS}

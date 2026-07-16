@@ -156,7 +156,9 @@ def test_supported_task_profile_matrix() -> None:
 
 def test_every_catalog_task_matches_declared_semantics() -> None:
   original_catalog_tasks = {
-    spec.name for spec in TASK_SPECS if not spec.name.endswith("_heft_reward")
+    spec.config_name
+    for spec in TASK_SPECS
+    if not spec.config_name.endswith("_heft_reward")
   }
   assert original_catalog_tasks == set(EXPECTED_TASK_SEMANTICS)
 

@@ -70,7 +70,7 @@ class SPV4KeyBodyActorCfg(SPV3EstimatorActorCfg):
 
 @dataclass
 class SPV5ReferenceEncoderActorCfg(SPV3EstimatorActorCfg):
-  reference_encoder_hidden_dims: tuple[int, ...] = (1024, 512, 512)
+  reference_encoder_hidden_dims: tuple[int, ...] = (512, 256, 128)
   reference_encoder_activation: str = "elu"
   robot_root_quat_group: str = "robot_root_quat"
   reference_encoder_input_group: str = "reference_encoder_input"

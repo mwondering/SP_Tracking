@@ -8,7 +8,10 @@ from mjlab.tasks.registry import list_tasks
 
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.scripts.train import prepare_train_cfg
-from sp_tracking.tasks.tracking.task_catalog import TASK_BY_NAME, TASK_SPECS
+from sp_tracking.tasks.tracking.task_catalog import (
+  TASK_BY_CONFIG_NAME,
+  TASK_SPECS,
+)
 
 
 PARENT_BY_HEFT_REWARD = {
@@ -48,7 +51,9 @@ def test_every_non_sp_task_has_a_registered_heft_reward_variant() -> None:
   import sp_tracking.tasks.tracking.registry  # noqa: F401
 
   original_names = {
-    spec.name for spec in TASK_SPECS if not spec.name.endswith("_heft_reward")
+    spec.config_name
+    for spec in TASK_SPECS
+    if not spec.config_name.endswith("_heft_reward")
   }
   assert original_names == {
     "tracking_bfm",
@@ -64,10 +69,10 @@ def test_every_non_sp_task_has_a_registered_heft_reward_variant() -> None:
   assert set(PARENT_BY_HEFT_REWARD.values()) == original_names - {
     "tracking_bfm_sp"
   }
-  assert set(PARENT_BY_HEFT_REWARD) <= set(TASK_BY_NAME)
+  assert set(PARENT_BY_HEFT_REWARD) <= set(TASK_BY_CONFIG_NAME)
   registered = set(list_tasks())
   assert {
-    TASK_BY_NAME[name].task_id for name in PARENT_BY_HEFT_REWARD
+    TASK_BY_CONFIG_NAME[name].task_id for name in PARENT_BY_HEFT_REWARD
   } <= registered
 
 

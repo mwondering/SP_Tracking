@@ -20,7 +20,10 @@ from sp_tracking.config.build_agent import build_agent_cfg, serialize_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
 from sp_tracking.tasks.tracking.rl.checkpoints import resolve_local_checkpoint_path
-from sp_tracking.tasks.tracking.task_catalog import TASK_SPECS
+from sp_tracking.tasks.tracking.task_catalog import (
+  TASK_BY_CONFIG_NAME,
+  TASK_SPECS,
+)
 
 
 @dataclass
@@ -30,7 +33,9 @@ class PreparedTrainCfg:
   raw: DictConfig
 
 
-TASK_NAME_BY_ID = {spec.task_id: spec.name for spec in TASK_SPECS}
+TASK_CONFIG_NAME_BY_ID = {
+  spec.task_id: spec.config_name for spec in TASK_SPECS
+}
 
 
 def normalize_task_id_argv(argv: list[str]) -> list[str]:
@@ -45,16 +50,16 @@ def normalize_task_id_argv(argv: list[str]) -> list[str]:
     elif argument.startswith("task_id="):
       override_kind = "task_id"
       task_value = argument.removeprefix("task_id=")
-    elif argument in TASK_NAME_BY_ID:
+    elif argument in TASK_CONFIG_NAME_BY_ID:
       override_kind = "positional"
 
     if override_kind is None:
       continue
-    task_name = TASK_NAME_BY_ID.get(task_value)
-    if task_name is not None:
-      normalized[index] = f"task={task_name}"
+    config_name = TASK_CONFIG_NAME_BY_ID.get(task_value)
+    if config_name is not None:
+      normalized[index] = f"task={config_name}"
     elif override_kind == "task_id":
-      available = ", ".join(TASK_NAME_BY_ID)
+      available = ", ".join(TASK_CONFIG_NAME_BY_ID)
       raise ValueError(
         f"Unknown task ID '{task_value}'. Available task IDs: {available}"
       )
@@ -141,8 +146,9 @@ def _copy_launch_script_to_log_dir(
 
 def _save_resolved_cfg(log_dir: Path, cfg: DictConfig) -> None:
   log_dir.mkdir(parents=True, exist_ok=True)
-  OmegaConf.save(cfg, log_dir / "cfg.yaml", resolve=True)
-  OmegaConf.save(cfg, log_dir / "config.yaml", resolve=True)
+  serialized = OmegaConf.create(_serialize_checkpoint_cfg(cfg))
+  OmegaConf.save(serialized, log_dir / "cfg.yaml", resolve=True)
+  OmegaConf.save(serialized, log_dir / "config.yaml", resolve=True)
 
 
 def _serialize_checkpoint_cfg(cfg: DictConfig) -> dict[str, Any]:
@@ -150,6 +156,11 @@ def _serialize_checkpoint_cfg(cfg: DictConfig) -> dict[str, Any]:
   serialized = OmegaConf.to_container(cfg, resolve=True)
   if not isinstance(serialized, dict):
     raise TypeError("Expected the resolved training configuration to be a mapping.")
+  task = serialized.get("task")
+  if isinstance(task, dict):
+    spec = TASK_BY_CONFIG_NAME.get(str(task.get("name", "")))
+    if spec is not None:
+      serialized["task_id"] = spec.task_id
   return serialized
 
 

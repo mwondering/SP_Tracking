@@ -16,6 +16,10 @@ from sp_tracking.scripts.train import (
   prepare_train_cfg,
 )
 from sp_tracking.tasks.tracking.rl.runner import _upload_launch_script_artifact
+from sp_tracking.tasks.tracking.task_catalog import (
+  TASK_BY_CONFIG_NAME,
+  TASK_BY_ID,
+)
 
 
 def _compose(*overrides: str):
@@ -41,6 +45,17 @@ def test_train_cli_accepts_public_task_id_in_all_supported_forms() -> None:
 def test_train_cli_keeps_hydra_task_name_compatible() -> None:
   argv = ["sp-train", "task=tracking_bfm_sp"]
   assert normalize_task_id_argv(argv) == argv
+
+
+def test_public_task_ids_are_the_only_canonical_task_keys() -> None:
+  assert all(task_id.startswith("SPTracking-G1-") for task_id in TASK_BY_ID)
+  assert all(
+    not config_name.startswith("SPTracking-")
+    for config_name in TASK_BY_CONFIG_NAME
+  )
+  assert {spec.task_id for spec in TASK_BY_CONFIG_NAME.values()} == set(
+    TASK_BY_ID
+  )
 
 
 def test_prepare_train_cfg_applies_motion_path_override() -> None:
@@ -175,7 +190,11 @@ def test_serialize_checkpoint_cfg_is_a_resolved_mapping() -> None:
 
   serialized = _serialize_checkpoint_cfg(cfg)
 
-  assert serialized == {"task": {"name": "tracking_bfm"}, "agent": {"n": 4}}
+  assert serialized == {
+    "task": {"name": "tracking_bfm"},
+    "agent": {"n": 4},
+    "task_id": "SPTracking-G1-BFM-BFMActor-BFMCritic",
+  }
 
 
 def test_resolve_resume_path_uses_explicit_checkpoint_path(tmp_path: Path) -> None:
