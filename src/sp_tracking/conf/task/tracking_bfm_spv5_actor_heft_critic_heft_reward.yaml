@@ -1,0 +1,42 @@
+defaults:
+  - tracking_bfm_spv4_actor_heft_critic_heft_reward
+  - override obs: spv5_heft_critic
+  - _self_
+
+name: tracking_bfm_spv5_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv5_reference_encoder_actor_heft_critic
+
+# The encoder consumes only the deployable NPZ qpos representation.  Its
+# decoded 11-frame support is detached before all policy-side FK and errors.
+agent_overrides:
+  obs_groups:
+    actor:
+      - robot_root_quat
+      - estimator_history
+      - reference_encoder_input
+      - robot_key_body
+    critic: [policy, priv]
+  actor:
+    class_name: sp_tracking.tasks.tracking.rl.spv5_models:SPV5ReferenceEncoderActor
+    estimator_hidden_dims: [512, 256, 128]
+    estimator_activation: elu
+    reference_encoder_hidden_dims: [1024, 512, 512]
+    reference_encoder_activation: elu
+    robot_root_quat_group: robot_root_quat
+    estimator_history_group: estimator_history
+    estimator_target_group: estimator_target
+    reference_encoder_input_group: reference_encoder_input
+    reference_encoder_target_group: reference_encoder_target
+    robot_key_body_group: robot_key_body
+    estimator_history_length: 50
+    policy_history_length: 5
+    reference_fps: 50.0
+    keypoint_specs: ${task.obs.semantic_keypoints.heft}
+  algorithm:
+    class_name: sp_tracking.tasks.tracking.rl.ppo:SPV5ReferenceEncoderPPO
+    actor_learning_rate: 0.001
+    critic_learning_rate: 0.001
+    estimator_root_height_loss_coef: 1.0
+    estimator_root_lin_vel_loss_coef: 1.0
+    reference_encoder_loss_coef: 1.0

@@ -69,9 +69,26 @@ class SPV4KeyBodyActorCfg(SPV3EstimatorActorCfg):
 
 
 @dataclass
+class SPV5ReferenceEncoderActorCfg(SPV3EstimatorActorCfg):
+  reference_encoder_hidden_dims: tuple[int, ...] = (1024, 512, 512)
+  reference_encoder_activation: str = "elu"
+  robot_root_quat_group: str = "robot_root_quat"
+  reference_encoder_input_group: str = "reference_encoder_input"
+  reference_encoder_target_group: str = "reference_encoder_target"
+  robot_key_body_group: str = "robot_key_body"
+  reference_fps: float = 50.0
+  keypoint_specs: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass
 class SPV3EstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
   estimator_root_height_loss_coef: float = 1.0
   estimator_root_lin_vel_loss_coef: float = 1.0
+
+
+@dataclass
+class SPV5ReferenceEncoderPpoAlgorithmCfg(SPV3EstimatorPpoAlgorithmCfg):
+  reference_encoder_loss_coef: float = 1.0
 
 
 def _to_container(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
@@ -95,7 +112,11 @@ def build_agent_cfg(
 ) -> RslRlOnPolicyRunnerCfg:
   data = _to_container(cfg)
   if overrides:
-    merged = OmegaConf.merge(OmegaConf.create(data), overrides)
+    # Resolve task-relative interpolations while ``overrides`` is still
+    # attached to the composed Hydra root.  Detaching it first would make
+    # values such as ${task.obs.semantic_keypoints.heft} unresolvable.
+    resolved_overrides = _to_container(overrides)
+    merged = OmegaConf.merge(OmegaConf.create(data), resolved_overrides)
     data = OmegaConf.to_container(merged, resolve=True)
     assert isinstance(data, dict)
   actor_data = dict(data.pop("actor"))
@@ -107,6 +128,8 @@ def build_agent_cfg(
     actor_cls = SPV3EstimatorActorCfg
   elif actor_class_name.endswith(":SPV4KeyBodyActor"):
     actor_cls = SPV4KeyBodyActorCfg
+  elif actor_class_name.endswith(":SPV5ReferenceEncoderActor"):
+    actor_cls = SPV5ReferenceEncoderActorCfg
   else:
     actor_cls = RslRlModelCfg
   critic_cls = (
@@ -123,6 +146,8 @@ def build_agent_cfg(
     algorithm_cls = HeftTeacherPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV3EstimatorPPO"):
     algorithm_cls = SPV3EstimatorPpoAlgorithmCfg
+  elif algorithm_class_name.endswith(":SPV5ReferenceEncoderPPO"):
+    algorithm_cls = SPV5ReferenceEncoderPpoAlgorithmCfg
   elif split_lr_keys.intersection(algorithm_data):
     algorithm_cls = SplitLrPpoAlgorithmCfg
   else:
@@ -163,6 +188,7 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
         ":HeftTeacherCritic",
         ":SPV3EstimatorActor",
         ":SPV4KeyBodyActor",
+        ":SPV5ReferenceEncoderActor",
       )
     ):
       for key in ("cnn_cfg", "rnn_type", "rnn_hidden_dim", "rnn_num_layers"):

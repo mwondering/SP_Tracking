@@ -1,0 +1,34 @@
+observations:
+  # SPV5 reconstructs every actor-visible reference quantity inside the actor.
+  # Clean SPV3/SPV4 reference and error groups must therefore not leak through.
+  actor_core:
+    enabled: false
+  ref_key_body:
+    enabled: false
+  key_body_error:
+    enabled: false
+
+  robot_root_quat:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: current
+        term: spv5_robot_root_quat
+        params: {command_name: motion, root_quat_noise_std: 0.1}
+
+  reference_encoder_input:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: noisy_qpos_window
+        term: spv5_reference_encoder_input
+        params: {command_name: motion, root_quat_noise_std: 0.1}
+
+  # Rollout-only clean target; it is absent from actor and critic obs_groups.
+  reference_encoder_target:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: clean_qpos_support
+        term: spv5_reference_encoder_target
+        params: {command_name: motion, root_quat_noise_std: 0.1}

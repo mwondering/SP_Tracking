@@ -57,6 +57,7 @@ class SPV3EstimatorActor(nn.Module):
     policy_history_length: int = SPV2_POLICY_HISTORY_LENGTH,
     extra_actor_groups: Sequence[str] = (),
     extra_policy_input_dim: int = 0,
+    actor_core_expected_dim: int = SPV3_ACTOR_CORE_DIM,
   ) -> None:
     super().__init__()
     self.obs_groups = list(obs_groups[obs_set])
@@ -87,10 +88,10 @@ class SPV3EstimatorActor(nn.Module):
     )
     self.actor_core_dim = int(obs[self.actor_core_group].shape[-1])
     history_dim = int(obs[self.estimator_history_group].shape[-1])
-    if self.actor_core_dim != SPV3_ACTOR_CORE_DIM:
+    if self.actor_core_dim != int(actor_core_expected_dim):
       raise ValueError(
         f"SPV3 actor_core has {self.actor_core_dim} values, "
-        f"expected {SPV3_ACTOR_CORE_DIM}"
+        f"expected {int(actor_core_expected_dim)}"
       )
     if history_dim != self.estimator_history_dim:
       raise ValueError(

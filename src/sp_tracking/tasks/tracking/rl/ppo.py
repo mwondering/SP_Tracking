@@ -420,6 +420,36 @@ class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
     }
 
 
+class SPV5ReferenceEncoderPPO(SPV3EstimatorPPO):
+  """SPV3 supervision plus the normalized equal-MSE reference objective."""
+
+  def __init__(
+    self,
+    *args,
+    reference_encoder_loss_coef: float = 1.0,
+    **kwargs,
+  ) -> None:
+    super().__init__(*args, **kwargs)
+    self.reference_encoder_loss_coef = float(reference_encoder_loss_coef)
+
+  def _auxiliary_loss(
+    self, observations
+  ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    estimator_loss, diagnostics = super()._auxiliary_loss(observations)
+    reference_losses = getattr(self.actor, "reference_encoder_losses", None)
+    if not callable(reference_losses):
+      raise TypeError(
+        "SPV5ReferenceEncoderPPO requires an actor with "
+        "reference_encoder_losses()"
+      )
+    reference_loss, reference_diagnostics = reference_losses(observations)
+    diagnostics.update(reference_diagnostics)
+    return (
+      estimator_loss + self.reference_encoder_loss_coef * reference_loss,
+      diagnostics,
+    )
+
+
 def _schedule_value(schedule, progress: float) -> float:
   if isinstance(schedule, (int, float)):
     return float(schedule)

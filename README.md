@@ -135,6 +135,7 @@ profile.
 | `tracking_bfm_spv2_actor_heft_critic_heft_reward` | Compact SPV2: 5-frame history, +4 future, HEFT root rotation (1056-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
 | `tracking_bfm_spv3_actor_heft_critic_heft_reward` | SPV3: SPV2 + supervised MLP root-state estimator (6546-D deploy input, 1064-D policy input) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
 | `tracking_bfm_spv4_actor_heft_critic_heft_reward` | SPV4: SPV3 + current root-frame robot/reference/error states for 13 HEFT key bodies (1649-D policy input) | `policy + priv` | HEFT | Privileged BFM simulator body state; not directly deployable |
+| `tracking_bfm_spv5_actor_heft_critic_heft_reward` | SPV5: supervised 50-frame noisy qpos encoder + HEFT-style FK into the SPV4 information layout (1649-D policy input) | `policy + priv` | HEFT | Reference side is deployment-compatible; robot key-body state retains SPV4's runtime requirement |
 
 Every BFM-XML task above except the already-HEFT-reward SPV tasks also has an
 additive HEFT-reward variant. Append `_heft_reward` to its Hydra task name, for
@@ -228,6 +229,18 @@ the robot root frame before constructing reference-minus-robot errors; rotation
 errors use a zero-centered relative 6D rotation. These body states come directly
 from the simulator and motion cache, so SPV4 is not a sim-to-real observation
 contract until body FK or an equivalent estimator is added.
+
+SPV5 removes the clean-reference side of that contract. Its supervised MLP
+reads 50 noisy minimal-qpos frames (`root_pos(3) + root_rot6d(6) +
+joint_pos(29)`) at offsets `[-42, +7]` and predicts a normalized residual for
+the clean `[-3, +7]` support window. Only `[0, +4]` reaches the policy; the
+extra support frames make HEFT's centered differences and five-frame moving
+average well-defined at both policy-window boundaries. Reference root
+velocity, angular velocity, joint velocity, projected gravity, and all 13
+semantic key-body states are rebuilt from the decoded qpos through the BFM G1
+kinematic tree. PPO gradients are detached at both the reference encoder and
+the SPV3 root estimator. Their separately logged supervised losses are the
+only gradients that update those networks.
 
 ## Checkpoints, Resume, and Deployment Export
 

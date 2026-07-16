@@ -160,6 +160,7 @@ _MUJOCO_JOINT_NAMES = [
   "right_wrist_pitch_joint",
   "right_wrist_yaw_joint",
 ]
+MUJOCO_JOINT_NAMES = tuple(_MUJOCO_JOINT_NAMES)
 
 _ISAACLAB_BODY_NAMES = [
   "pelvis",
@@ -985,6 +986,72 @@ class MultiMotionCommand(CommandTerm):
         value += (torch.rand_like(value) * 2.0 - 1.0) * std
     return value
 
+  def gather_root_reference(
+    self, field_name: str, relative_steps: tuple[int, ...]
+  ) -> torch.Tensor:
+    """Gather only the motion root instead of materializing every body.
+
+    SPV5 consumes a 50-frame root window.  Gathering the complete body cache
+    for that window would allocate substantially more memory even though only
+    the anchor body is used.
+    """
+    if field_name not in ("body_pos_w", "body_quat_w"):
+      raise ValueError(f"Unsupported root reference field: {field_name}")
+    steps = torch.as_tensor(
+      tuple(int(step) for step in relative_steps),
+      device=self.device,
+      dtype=torch.long,
+    )
+    absolute_steps = self.time_steps.unsqueeze(1) + steps.unsqueeze(0)
+    frame_indices = self._get_frame_indices(self.motion_idx, absolute_steps)
+    value = getattr(self.motion, field_name)[
+      frame_indices, self.motion_anchor_body_index
+    ]
+    if field_name == "body_pos_w" and self.cfg.motion_origin_recenter:
+      value = value + self.motion_origin_offset_w[:, None].to(value)
+    return value
+
+  def gather_student_root_reference(
+    self, field_name: str, relative_steps: tuple[int, ...]
+  ) -> torch.Tensor:
+    """Gather the noisy student root window without a full-body tensor."""
+    value = self.gather_root_reference(field_name, relative_steps).clone()
+    if not self._student_motion_randomization_enabled:
+      return value
+    cfg = self._student_motion_randomization_cfg
+    steps = torch.as_tensor(relative_steps, device=self.device)
+    time_s = (self.time_steps[:, None] + steps[None]).float() * float(
+      self._env.step_dt
+    )
+    if field_name == "body_pos_w":
+      xy = self._student_xy_amplitude[:, None] * torch.sin(
+        self._student_xy_omega[:, None] * time_s
+        + self._student_xy_phase[:, None]
+      )
+      z = self._student_z_amplitude[:, None] * torch.sin(
+        self._student_z_omega[:, None] * time_s
+        + self._student_z_phase[:, None]
+      ) + self._student_root_z_offset[:, None]
+      offset = value.new_zeros((self.num_envs, len(relative_steps), 3))
+      offset[..., :2] = xy[..., None] * self._student_xy_direction[:, None]
+      offset[..., 2] = z
+      return self._spherical_noise(
+        value + offset, float(cfg.get("root_pos_noise_std", 0.0))
+      )
+    if field_name == "body_quat_w":
+      angle = self._student_rot_amplitude[:, None] * torch.sin(
+        self._student_rot_omega[:, None] * time_s
+        + self._student_rot_phase[:, None]
+      )
+      axis = self._student_rot_axis[:, None].expand(
+        -1, len(relative_steps), -1
+      )
+      value = quat_mul(quat_from_angle_axis(angle, axis), value)
+      return self._quaternion_noise(
+        value, float(cfg.get("root_ori_noise_std", 0.0))
+      )
+    raise ValueError(f"Unsupported student root reference field: {field_name}")
+
   def _clear_shared_joint_observation_cache(self) -> None:
     cache = getattr(self, "_shared_joint_observation_cache", None)
     if isinstance(cache, dict):
@@ -995,6 +1062,9 @@ class MultiMotionCommand(CommandTerm):
     spv4_cache = getattr(self, "_shared_spv4_key_body_cache", None)
     if isinstance(spv4_cache, dict):
       spv4_cache.clear()
+    spv5_cache = getattr(self, "_shared_spv5_reference_cache", None)
+    if isinstance(spv5_cache, dict):
+      spv5_cache.clear()
 
   def _shared_noisy_joint_observation(
     self, field_name: Literal["joint_pos", "joint_vel"], noise_std: float
