@@ -992,6 +992,9 @@ class MultiMotionCommand(CommandTerm):
     spv1_cache = getattr(self, "_shared_spv1_observation_cache", None)
     if isinstance(spv1_cache, dict):
       spv1_cache.clear()
+    spv4_cache = getattr(self, "_shared_spv4_key_body_cache", None)
+    if isinstance(spv4_cache, dict):
+      spv4_cache.clear()
 
   def _shared_noisy_joint_observation(
     self, field_name: Literal["joint_pos", "joint_vel"], noise_std: float

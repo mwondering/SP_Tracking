@@ -62,6 +62,13 @@ class SPV3EstimatorActorCfg(RslRlModelCfg):
 
 
 @dataclass
+class SPV4KeyBodyActorCfg(SPV3EstimatorActorCfg):
+  robot_key_body_group: str = "robot_key_body"
+  ref_key_body_group: str = "ref_key_body"
+  key_body_error_group: str = "key_body_error"
+
+
+@dataclass
 class SPV3EstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
   estimator_root_height_loss_coef: float = 1.0
   estimator_root_lin_vel_loss_coef: float = 1.0
@@ -98,6 +105,8 @@ def build_agent_cfg(
     actor_cls = HeftTeacherActorCfg
   elif actor_class_name.endswith(":SPV3EstimatorActor"):
     actor_cls = SPV3EstimatorActorCfg
+  elif actor_class_name.endswith(":SPV4KeyBodyActor"):
+    actor_cls = SPV4KeyBodyActorCfg
   else:
     actor_cls = RslRlModelCfg
   critic_cls = (
@@ -149,7 +158,12 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
     if model.get("class_name") == "MLPModel" or str(
       model.get("class_name", "")
     ).endswith(
-      (":HeftTeacherActor", ":HeftTeacherCritic", ":SPV3EstimatorActor")
+      (
+        ":HeftTeacherActor",
+        ":HeftTeacherCritic",
+        ":SPV3EstimatorActor",
+        ":SPV4KeyBodyActor",
+      )
     ):
       for key in ("cnn_cfg", "rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
         model.pop(key, None)

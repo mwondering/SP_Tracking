@@ -1,0 +1,35 @@
+observations:
+  # Privileged current-frame body states.  Every vector is root-relative and
+  # root-frame expressed; no world-frame tensor is exposed to the actor.
+  robot_key_body:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: current
+        term: spv4_robot_key_body_state
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+          keypoint_specs: ${task.obs.semantic_keypoints.heft}
+
+  ref_key_body:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: current
+        term: spv4_ref_key_body_state
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+          keypoint_specs: ${task.obs.semantic_keypoints.heft}
+
+  key_body_error:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: current
+        term: spv4_key_body_error
+        params:
+          command_name: motion
+          root_body_name: ${task.reference_views.sp_tracking.anchor_body_name}
+          keypoint_specs: ${task.obs.semantic_keypoints.heft}

@@ -134,6 +134,7 @@ profile.
 | `tracking_bfm_spv1_actor_heft_critic_heft_reward` | heading-invariant SPV1 `actor` (1786-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
 | `tracking_bfm_spv2_actor_heft_critic_heft_reward` | Compact SPV2: 5-frame history, +4 future, HEFT root rotation (1056-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
 | `tracking_bfm_spv3_actor_heft_critic_heft_reward` | SPV3: SPV2 + supervised MLP root-state estimator (6546-D deploy input, 1064-D policy input) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
+| `tracking_bfm_spv4_actor_heft_critic_heft_reward` | SPV4: SPV3 + current root-frame robot/reference/error states for 13 HEFT key bodies (1649-D policy input) | `policy + priv` | HEFT | Privileged BFM simulator body state; not directly deployable |
 
 Every BFM-XML task above except the already-HEFT-reward SPV tasks also has an
 additive HEFT-reward variant. Append `_heft_reward` to its Hydra task name, for
@@ -218,6 +219,15 @@ in the rollout supervision group; it is excluded from actor/critic inputs and
 ONNX export. PPO gradients are stopped at the estimator output, so the
 estimator is trained exclusively by the separately logged height and linear
 velocity MSE losses.
+
+SPV4 is a privileged training variant that additionally observes current
+position, 6D rotation, root-relative linear velocity, and root-relative angular
+velocity for the 13 HEFT semantic key bodies. Robot and reference states are
+expressed in their respective root frames. Reference states are aligned into
+the robot root frame before constructing reference-minus-robot errors; rotation
+errors use a zero-centered relative 6D rotation. These body states come directly
+from the simulator and motion cache, so SPV4 is not a sim-to-real observation
+contract until body FK or an equivalent estimator is added.
 
 ## Checkpoints, Resume, and Deployment Export
 

@@ -27,6 +27,7 @@ TaskName = Literal[
   "tracking_bfm_spv1_actor_heft_critic_heft_reward",
   "tracking_bfm_spv2_actor_heft_critic_heft_reward",
   "tracking_bfm_spv3_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv4_actor_heft_critic_heft_reward",
 ]
 
 
@@ -137,6 +138,11 @@ TASK_SPECS = (
     "tracking_bfm_spv3_actor_heft_critic_heft_reward",
     "SPTracking-G1-BFM-SPV3Actor-HEFTCritic-HEFTReward",
     ("task=tracking_bfm_spv3_actor_heft_critic_heft_reward",),
+  ),
+  TaskSpec(
+    "tracking_bfm_spv4_actor_heft_critic_heft_reward",
+    "SPTracking-G1-BFM-SPV4Actor-HEFTCritic-HEFTReward",
+    ("task=tracking_bfm_spv4_actor_heft_critic_heft_reward",),
   ),
 )
 

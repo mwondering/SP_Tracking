@@ -8,6 +8,7 @@ import torch
 
 
 sp = importlib.import_module("sp_tracking.tasks.tracking.mdp.sp")
+spv4 = importlib.import_module("sp_tracking.tasks.tracking.mdp.spv4")
 
 
 def test_sp_keypoint_order_matches_heft_asset_order() -> None:
@@ -337,6 +338,75 @@ def test_target_keypoints_rot_diff_uses_motion_step_zero_root_frame() -> None:
   )
   expected = sp._rot6d(qz90.reshape(1, 1, 1, 4)).reshape(6)
   assert torch.allclose(diff[0, 1, 0], expected)
+
+
+def test_spv4_current_key_body_terms_are_root_frame_and_zero_aligned() -> None:
+  body_names = tuple(sp.SP_REQUIRED_BODY_NAMES)
+  body_count = len(body_names)
+  frames = 8
+  ref_root_pos = torch.tensor([20.0, -3.0, 0.8])
+  robot_root_pos = torch.tensor([10.0, 4.0, 0.8])
+  ref_root_lin = torch.tensor([3.0, 2.0, 1.0])
+  robot_root_lin = torch.tensor([-2.0, 4.0, 1.0])
+  ref_root_ang = torch.tensor([0.1, 0.2, 0.3])
+  robot_root_ang = torch.tensor([-0.2, 0.4, 0.3])
+
+  body_pos_w = ref_root_pos.expand(1, frames, body_count, 3).clone()
+  body_quat_w = _identity_quat((1, frames, body_count))
+  body_lin_vel_w = ref_root_lin.expand(1, frames, body_count, 3).clone()
+  body_ang_vel_w = ref_root_ang.expand(1, frames, body_count, 3).clone()
+  robot_body_pos_w = robot_root_pos.expand(1, body_count, 3).clone()
+  robot_body_quat_w = _identity_quat((1, body_count))
+  robot_body_lin_vel_w = robot_root_lin.expand(1, body_count, 3).clone()
+  robot_body_ang_vel_w = robot_root_ang.expand(1, body_count, 3).clone()
+
+  for index, name in enumerate(sp.SP_KEYPOINT_BODY_NAMES):
+    body_id = body_names.index(name)
+    local_pos = torch.tensor([0.1 * index, -0.05 * index, 0.02 * index])
+    local_lin = torch.tensor([0.01 * index, 0.02 * index, -0.01 * index])
+    local_ang = torch.tensor([-0.02 * index, 0.01 * index, 0.03 * index])
+    body_pos_w[:, :, body_id] += local_pos
+    body_lin_vel_w[:, :, body_id] += local_lin
+    body_ang_vel_w[:, :, body_id] += local_ang
+    robot_body_pos_w[:, body_id] += local_pos
+    robot_body_lin_vel_w[:, body_id] += local_lin
+    robot_body_ang_vel_w[:, body_id] += local_ang
+
+  command = _FakeCommand(
+    {
+      "body_pos_w": body_pos_w,
+      "body_quat_w": body_quat_w,
+      "body_lin_vel_w": body_lin_vel_w,
+      "body_ang_vel_w": body_ang_vel_w,
+    },
+    body_names,
+  )
+  asset = _FakeAsset(
+    data=SimpleNamespace(
+      root_link_pos_w=robot_root_pos.unsqueeze(0),
+      root_link_quat_w=_identity_quat((1,)),
+      root_link_lin_vel_w=robot_root_lin.unsqueeze(0),
+      root_link_ang_vel_w=robot_root_ang.unsqueeze(0),
+      body_link_pos_w=robot_body_pos_w,
+      body_link_quat_w=robot_body_quat_w,
+      body_link_lin_vel_w=robot_body_lin_vel_w,
+      body_link_ang_vel_w=robot_body_ang_vel_w,
+    ),
+    body_names=body_names,
+    joint_count=1,
+  )
+  env = _make_env(asset=asset, command=command)
+  cfg = SimpleNamespace(
+    params={"command_name": "motion", "root_body_name": "pelvis"}
+  )
+
+  robot = spv4.robot_key_body_state(cfg, env)(env)
+  reference = spv4.ref_key_body_state(cfg, env)(env)
+  error = spv4.key_body_error(cfg, env)(env)
+
+  assert robot.shape == reference.shape == error.shape == (1, 195)
+  torch.testing.assert_close(robot, reference)
+  torch.testing.assert_close(error, torch.zeros_like(error), atol=1.0e-6, rtol=0.0)
 
 
 def test_projected_gravity_normalizes_helper_output(monkeypatch) -> None:

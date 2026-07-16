@@ -426,3 +426,40 @@ def test_spv3_has_estimator_history_targets_and_heft_critic_contract() -> None:
   assert prepared.agent.actor.estimator_hidden_dims == (512, 256, 128)
   assert prepared.agent.algorithm.class_name.endswith(":SPV3EstimatorPPO")
   assert prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")
+
+
+def test_spv4_adds_three_current_root_frame_key_body_groups() -> None:
+  cfg = _compose("tracking_bfm_spv4_actor_heft_critic_heft_reward")
+  prepared = prepare_train_cfg(cfg)
+  env = build_env_cfg(cfg.task)
+
+  assert tuple(env.observations) == (
+    "policy",
+    "priv",
+    "actor_core",
+    "estimator_history",
+    "estimator_target",
+    "robot_key_body",
+    "ref_key_body",
+    "key_body_error",
+  )
+  for name in ("robot_key_body", "ref_key_body", "key_body_error"):
+    group = env.observations[name]
+    assert tuple(group.terms) == ("current",)
+    assert group.enable_corruption is False
+    assert group.terms["current"].history_length == 0
+    assert len(group.terms["current"].params["keypoint_specs"]) == 13
+  assert prepared.agent.obs_groups == {
+    "actor": (
+      "actor_core",
+      "estimator_history",
+      "robot_key_body",
+      "ref_key_body",
+      "key_body_error",
+    ),
+    "critic": ("policy", "priv"),
+  }
+  assert prepared.agent.actor.class_name.endswith(":SPV4KeyBodyActor")
+  assert prepared.agent.algorithm.class_name.endswith(":SPV3EstimatorPPO")
+  assert prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")
+  assert cfg.task.command.command.fk_from_joint_pos is False

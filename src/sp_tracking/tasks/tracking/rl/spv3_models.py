@@ -55,13 +55,19 @@ class SPV3EstimatorActor(nn.Module):
     estimator_target_group: str = "estimator_target",
     estimator_history_length: int = SPV3_ESTIMATOR_HISTORY_LENGTH,
     policy_history_length: int = SPV2_POLICY_HISTORY_LENGTH,
+    extra_actor_groups: Sequence[str] = (),
+    extra_policy_input_dim: int = 0,
   ) -> None:
     super().__init__()
     self.obs_groups = list(obs_groups[obs_set])
     self.actor_core_group = str(actor_core_group)
     self.estimator_history_group = str(estimator_history_group)
     self.estimator_target_group = str(estimator_target_group)
-    expected_groups = [self.actor_core_group, self.estimator_history_group]
+    expected_groups = [
+      self.actor_core_group,
+      self.estimator_history_group,
+      *(str(name) for name in extra_actor_groups),
+    ]
     if self.obs_groups != expected_groups:
       raise ValueError(
         f"SPV3EstimatorActor requires actor observation groups {expected_groups}, "
@@ -91,8 +97,8 @@ class SPV3EstimatorActor(nn.Module):
         f"SPV3 estimator_history has {history_dim} values, "
         f"expected {self.estimator_history_dim}"
       )
-    self.obs_dim = self.actor_core_dim + self.estimator_history_dim
-    self.policy_input_dim = SPV3_POLICY_INPUT_DIM
+    self.obs_dim = sum(int(obs[name].shape[-1]) for name in self.obs_groups)
+    self.policy_input_dim = SPV3_POLICY_INPUT_DIM + int(extra_policy_input_dim)
     self.obs_normalization = bool(obs_normalization)
     self.history_normalizer = _identity_or_normalizer(
       self.obs_normalization, self.estimator_history_dim
@@ -190,10 +196,10 @@ class SPV3EstimatorActor(nn.Module):
       ),
       dim=-1,
     )
-    if features.shape[-1] != self.policy_input_dim:
+    if features.shape[-1] != SPV3_POLICY_INPUT_DIM:
       raise RuntimeError(
         f"SPV3 policy features have {features.shape[-1]} values, "
-        f"expected {self.policy_input_dim}"
+        f"expected {SPV3_POLICY_INPUT_DIM}"
       )
     return features
 
