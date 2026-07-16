@@ -18,6 +18,7 @@ num_envs: 1
 episode_length_s: 10.0
 decimation: 4
 seed: 42
+domain_randomization: true
 
 robot:
   name: g1

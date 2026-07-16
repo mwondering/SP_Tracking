@@ -475,6 +475,9 @@ def _build_command(cfg: DictConfig):
 
 
 def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
+  if not bool(cfg.get("domain_randomization", True)):
+    return {}
+
   command_cfg = cfg.command.command if "command" in cfg.command else cfg.command
   velocity_range = _params(command_cfg.velocity_range)
   robot = cfg.robot

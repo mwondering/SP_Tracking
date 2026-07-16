@@ -184,6 +184,7 @@ def test_tracking_bfm_keeps_original_events_and_action() -> None:
 
   env_cfg = build_env_cfg(cfg.task)
 
+  assert cfg.task.domain_randomization is True
   assert type(env_cfg.actions["joint_pos"]).__name__ == "JointPositionActionCfg"
   assert [sensor.name for sensor in env_cfg.scene.sensors] == ["self_collision"]
   assert env_cfg.sim.nconmax == 128
@@ -198,6 +199,14 @@ def test_tracking_bfm_keeps_original_events_and_action() -> None:
   assert "base_mass" in env_cfg.events
   assert "motor_params_implicit" not in env_cfg.events
   assert env_cfg.curriculum == {}
+
+
+def test_tracking_bfm_domain_randomization_is_hydra_switchable() -> None:
+  cfg = _compose("task=tracking_bfm", "task.domain_randomization=false")
+
+  env_cfg = build_env_cfg(cfg.task)
+
+  assert env_cfg.events == {}
 
 
 def test_tracking_bfm_command_adaptive_window_is_hydra_configurable() -> None:
