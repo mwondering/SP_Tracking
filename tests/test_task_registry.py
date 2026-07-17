@@ -30,6 +30,7 @@ def test_tracking_entrypoint_registers_default_tasks() -> None:
   assert registry.TRACKING_BFM_SPV5_ACTOR_HEFT_CRITIC_HEFT_REWARD_TASK_ID in tasks
   assert registry.TRACKING_BFM_SPV6_ACTOR_HEFT_CRITIC_HEFT_REWARD_TASK_ID in tasks
   assert registry.TRACKING_BFM_SPV6_1_ACTOR_HEFT_CRITIC_HEFT_REWARD_TASK_ID in tasks
+  assert registry.TRACKING_BFM_SPV6_0_ACTOR_HEFT_CRITIC_HEFT_REWARD_TASK_ID in tasks
 
 
 def test_task_ids_describe_runtime_actor_and_critic_semantics() -> None:
@@ -82,6 +83,9 @@ def test_task_ids_describe_runtime_actor_and_critic_semantics() -> None:
   )
   assert registry.TRACKING_BFM_SPV6_1_ACTOR_HEFT_CRITIC_HEFT_REWARD_TASK_ID == (
     "SPTracking-G1-BFM-SPV6-1Actor-HEFTCritic-HEFTReward"
+  )
+  assert registry.TRACKING_BFM_SPV6_0_ACTOR_HEFT_CRITIC_HEFT_REWARD_TASK_ID == (
+    "SPTracking-G1-BFM-SPV6-0Actor-HEFTCritic-HEFTReward"
   )
 
 

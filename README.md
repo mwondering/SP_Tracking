@@ -137,6 +137,7 @@ profile.
 | `SPTracking-G1-BFM-SPV4Actor-HEFTCritic-HEFTReward` | SPV4: SPV3 + current root-frame robot/reference/error states for 13 HEFT key bodies (1649-D policy input) | `policy + priv` | HEFT | Privileged BFM simulator body state; not directly deployable |
 | `SPTracking-G1-BFM-SPV5Actor-HEFTCritic-HEFTReward` | SPV5: supervised 50-frame noisy qpos encoder + HEFT-style FK into the SPV4 information layout (1649-D policy input) | `policy + priv` | HEFT | Reference side is deployment-compatible; robot key-body state retains SPV4's runtime requirement |
 | `SPTracking-G1-BFM-SPV6Actor-HEFTCritic-HEFTReward` | SPV6: SPV5 + actor-inferred 56-D RMA latent from nominal physics and 50-frame proprioception | HEFT base + actual physics/push latent | HEFT | RMA alignment and privileged reconstruction training |
+| `SPTracking-G1-BFM-SPV6-0Actor-HEFTCritic-HEFTReward` | SPV6-0 oracle: SPV5 startup DR + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT | Controlled SPV5 + oracle-information ablation; no DR encoder or reconstruction loss |
 | `SPTracking-G1-BFM-SPV6-1Actor-HEFTCritic-HEFTReward` | SPV6-1 oracle: SPV5 + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT | Diagnostic upper bound; no DR encoder, latent alignment, or reconstruction loss |
 
 Every BFM-XML task above except the already-HEFT-reward SPV tasks also has an

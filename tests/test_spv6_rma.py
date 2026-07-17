@@ -375,3 +375,45 @@ def test_spv6_1_passes_actual_dr_and_push_directly_without_rma_losses() -> None:
   assert env.events["base_mass"].mode == "reset"
   assert env.events["encoder_bias"].mode == "reset"
   assert env.events["foot_friction"].mode == "reset"
+
+
+def test_spv6_0_matches_spv5_startup_dr_with_spv6_1_direct_inputs() -> None:
+  with initialize_config_module(
+    version_base=None, config_module="sp_tracking.conf"
+  ):
+    spv5_cfg = compose(
+      config_name="train",
+      overrides=["task=tracking_bfm_spv5_actor_heft_critic_heft_reward"],
+    )
+    spv6_0_cfg = compose(
+      config_name="train",
+      overrides=[
+        "task=tracking_bfm_spv6_0_actor_heft_critic_heft_reward"
+      ],
+    )
+  spv5_env = build_env_cfg(spv5_cfg.task)
+  env = build_env_cfg(spv6_0_cfg.task)
+  prepared = prepare_train_cfg(spv6_0_cfg)
+
+  assert prepared.agent.actor.class_name.endswith(":SPV61DirectActor")
+  assert prepared.agent.critic.class_name.endswith(":SPV61DirectCritic")
+  assert prepared.agent.algorithm.class_name.endswith(
+    ":SPV5ReferenceEncoderPPO"
+  )
+  assert prepared.agent.obs_groups["actor"][-2:] == (
+    "rma_physics_actual",
+    "rma_push_history",
+  )
+  assert prepared.agent.obs_groups["critic"][-2:] == (
+    "rma_physics_actual",
+    "rma_push_history",
+  )
+  assert not hasattr(prepared.agent.algorithm, "rma_global_alignment_coef")
+  for name in ("base_com", "base_mass", "encoder_bias", "foot_friction"):
+    assert env.events[name].mode == spv5_env.events[name].mode == "startup"
+  assert env.events["foot_friction"].params["ranges"] == (
+    spv5_env.events["foot_friction"].params["ranges"]
+  ) == (0.3, 2.0)
+  assert env.events["push_robot"].func.__name__ == (
+    "recorded_push_by_setting_velocity"
+  )

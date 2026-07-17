@@ -1,0 +1,21 @@
+defaults:
+  - tracking_bfm_spv6_1_actor_heft_critic_heft_reward
+  - _self_
+
+name: tracking_bfm_spv6_0_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv6_0_startup_dr_direct_actor_critic
+
+# SPV6-0 is the controlled SPV5 + oracle-information ablation.  Static DR is
+# sampled once at startup with SPV5's original ranges; the recorded interval
+# push remains behaviorally identical while exposing its 50-frame window.
+events:
+  base_com:
+    mode: startup
+  base_mass:
+    mode: startup
+  encoder_bias:
+    mode: startup
+  foot_friction:
+    mode: startup
+    ranges: [0.3, 2.0]
