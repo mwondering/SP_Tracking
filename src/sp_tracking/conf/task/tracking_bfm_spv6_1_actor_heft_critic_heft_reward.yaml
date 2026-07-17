@@ -1,0 +1,37 @@
+defaults:
+  - tracking_bfm_spv6_actor_heft_critic_heft_reward
+  - override obs: spv6_1_heft_critic
+  - _self_
+
+name: tracking_bfm_spv6_1_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv6_1_direct_dr_actor_critic
+
+agent_overrides:
+  obs_groups:
+    actor:
+      - robot_root_quat
+      - estimator_history
+      - reference_encoder_input
+      - robot_key_body
+      - rma_physics_actual
+      - rma_push_history
+    critic:
+      - policy
+      - priv
+      - rma_physics_actual
+      - rma_push_history
+  actor:
+    class_name: sp_tracking.tasks.tracking.rl.spv6_1_models:SPV61DirectActor
+    rma_physics_actual_group: rma_physics_actual
+    rma_push_history_group: rma_push_history
+  critic:
+    class_name: sp_tracking.tasks.tracking.rl.spv6_1_models:SPV61DirectCritic
+    hidden_dims: [1024, 512, 512]
+    activation: mish
+    obs_normalization: true
+    vecnorm_decay: 0.9999
+    rma_physics_actual_group: rma_physics_actual
+    rma_push_history_group: rma_push_history
+  algorithm:
+    class_name: sp_tracking.tasks.tracking.rl.ppo:SPV5ReferenceEncoderPPO

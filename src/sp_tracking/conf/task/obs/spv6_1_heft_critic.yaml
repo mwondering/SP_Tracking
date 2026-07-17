@@ -1,0 +1,27 @@
+defaults:
+  - spv5_heft_critic
+  - _self_
+
+observations:
+  # Oracle physical parameters after reset randomization.  V6-1 exposes these
+  # directly to both networks and deliberately does not expose nominal values.
+  rma_physics_actual:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: parameters
+        term: spv6_physical_parameters
+        params:
+          mode: actual
+          body_name: torso_link
+          geom_names: ${task.robot.foot_geom_pattern}
+
+  # Exact interval-kick record, oldest -> newest, passed without an encoder.
+  rma_push_history:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: push
+        term: spv6_push_event_state
+        params: {event_name: push_robot}
+        history_length: 50

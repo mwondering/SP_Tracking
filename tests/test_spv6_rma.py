@@ -21,6 +21,11 @@ from sp_tracking.tasks.tracking.rl.spv6_models import (
   SPV6RmaActor,
   SPV6RmaCritic,
 )
+from sp_tracking.tasks.tracking.rl.spv6_1_models import (
+  SPV6_1_DIRECT_DIM,
+  SPV61DirectActor,
+  SPV61DirectCritic,
+)
 
 
 KEYPOINT_SPECS = tuple(
@@ -278,3 +283,95 @@ def test_spv6_task_uses_reset_dr_and_existing_torque_history() -> None:
     assert env.events[name].mode == "reset"
   assert env.events["foot_friction"].params["ranges"] == (0.2, 2.5)
   assert env.events["foot_friction"].params["shared_random"] is True
+
+
+def test_spv6_1_passes_actual_dr_and_push_directly_without_rma_losses() -> None:
+  obs = _observations()
+  actor = SPV61DirectActor(
+    obs,
+    {
+      "actor": [
+        "robot_root_quat",
+        "estimator_history",
+        "reference_encoder_input",
+        "robot_key_body",
+        "rma_physics_actual",
+        "rma_push_history",
+      ]
+    },
+    "actor",
+    3,
+    hidden_dims=(32, 16),
+    estimator_hidden_dims=(16, 8),
+    reference_encoder_hidden_dims=(32, 16),
+    obs_normalization=False,
+    distribution_cfg={
+      "class_name": "GaussianDistribution",
+      "init_std": 1.0,
+      "std_type": "scalar",
+    },
+    keypoint_specs=KEYPOINT_SPECS,
+  )
+  critic = SPV61DirectCritic(
+    obs,
+    {
+      "critic": [
+        "policy",
+        "priv",
+        "rma_physics_actual",
+        "rma_push_history",
+      ]
+    },
+    "critic",
+    1,
+    hidden_dims=(32, 16),
+    obs_normalization=False,
+  )
+
+  expected_direct = torch.cat(
+    (obs["rma_physics_actual"], obs["rma_push_history"]), dim=-1
+  )
+  actor_input = actor.get_latent(obs)
+  critic_input = critic.get_latent(obs)
+  assert actor_input.shape[-1] == SPV5_POLICY_INPUT_DIM + SPV6_1_DIRECT_DIM
+  torch.testing.assert_close(actor_input[..., -SPV6_1_DIRECT_DIM:], expected_direct)
+  torch.testing.assert_close(critic_input[..., -SPV6_1_DIRECT_DIM:], expected_direct)
+  assert actor(obs).shape == (2, 3)
+  assert critic(obs).shape == (2, 1)
+  exported_input = torch.cat(
+    [obs[name] for name in actor.obs_groups], dim=-1
+  )
+  assert actor.as_jit()(exported_input).shape == (2, 3)
+  assert not hasattr(actor, "rma_latents")
+  assert not hasattr(critic, "reconstruction_losses")
+
+  with initialize_config_module(
+    version_base=None, config_module="sp_tracking.conf"
+  ):
+    cfg = compose(
+      config_name="train",
+      overrides=[
+        "task=tracking_bfm_spv6_1_actor_heft_critic_heft_reward"
+      ],
+    )
+  env = build_env_cfg(cfg.task)
+  prepared = prepare_train_cfg(cfg)
+  assert prepared.agent.actor.class_name.endswith(":SPV61DirectActor")
+  assert prepared.agent.critic.class_name.endswith(":SPV61DirectCritic")
+  assert prepared.agent.algorithm.class_name.endswith(
+    ":SPV5ReferenceEncoderPPO"
+  )
+  assert not hasattr(prepared.agent.algorithm, "rma_global_alignment_coef")
+  assert prepared.agent.obs_groups["actor"][-2:] == (
+    "rma_physics_actual",
+    "rma_push_history",
+  )
+  assert prepared.agent.obs_groups["critic"][-2:] == (
+    "rma_physics_actual",
+    "rma_push_history",
+  )
+  assert "rma_physics_nominal" not in env.observations
+  assert env.events["base_com"].mode == "reset"
+  assert env.events["base_mass"].mode == "reset"
+  assert env.events["encoder_bias"].mode == "reset"
+  assert env.events["foot_friction"].mode == "reset"

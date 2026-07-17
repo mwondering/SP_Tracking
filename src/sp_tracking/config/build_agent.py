@@ -89,12 +89,24 @@ class SPV6RmaActorCfg(SPV5ReferenceEncoderActorCfg):
 
 
 @dataclass
+class SPV61DirectActorCfg(SPV5ReferenceEncoderActorCfg):
+  rma_physics_actual_group: str = "rma_physics_actual"
+  rma_push_history_group: str = "rma_push_history"
+
+
+@dataclass
 class SPV6RmaCriticCfg(HeftTeacherCriticCfg):
   rma_physics_actual_group: str = "rma_physics_actual"
   rma_push_history_group: str = "rma_push_history"
   rma_global_latent_dim: int = 8
   rma_sensor_latent_dim: int = 32
   rma_push_latent_dim: int = 16
+
+
+@dataclass
+class SPV61DirectCriticCfg(HeftTeacherCriticCfg):
+  rma_physics_actual_group: str = "rma_physics_actual"
+  rma_push_history_group: str = "rma_push_history"
 
 
 @dataclass
@@ -159,11 +171,15 @@ def build_agent_cfg(
     actor_cls = SPV5ReferenceEncoderActorCfg
   elif actor_class_name.endswith(":SPV6RmaActor"):
     actor_cls = SPV6RmaActorCfg
+  elif actor_class_name.endswith(":SPV61DirectActor"):
+    actor_cls = SPV61DirectActorCfg
   else:
     actor_cls = RslRlModelCfg
   critic_class_name = str(critic_data.get("class_name", ""))
   if critic_class_name.endswith(":SPV6RmaCritic"):
     critic_cls = SPV6RmaCriticCfg
+  elif critic_class_name.endswith(":SPV61DirectCritic"):
+    critic_cls = SPV61DirectCriticCfg
   elif critic_class_name.endswith(":HeftTeacherCritic"):
     critic_cls = HeftTeacherCriticCfg
   else:
@@ -224,6 +240,8 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
         ":SPV5ReferenceEncoderActor",
         ":SPV6RmaActor",
         ":SPV6RmaCritic",
+        ":SPV61DirectActor",
+        ":SPV61DirectCritic",
       )
     ):
       for key in ("cnn_cfg", "rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
