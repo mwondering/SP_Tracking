@@ -47,44 +47,20 @@ SPV6_RMA_LATENT_DIM = (
 )
 
 
-def _term_major_history_to_frames(
-  history: torch.Tensor, history_length: int
-) -> torch.Tensor:
-  terms = []
-  offset = 0
-  for term_dim in PROPRIO_TERM_DIMS:
-    size = int(history_length) * int(term_dim)
-    terms.append(
-      history[..., offset : offset + size].reshape(
-        *history.shape[:-1], history_length, term_dim
-      )
-    )
-    offset += size
-  if offset != history.shape[-1]:
-    raise ValueError(
-      f"SPV6 history consumed {offset} values, got {history.shape[-1]}"
-    )
-  return torch.cat(terms, dim=-1)
+class _FlatHistoryBackbone(nn.Module):
+  """Memory-bounded history encoder that never expands a per-frame feature map."""
 
-
-class _TemporalBackbone(nn.Module):
-  def __init__(self, frame_dim: int, frame_feature_dim: int = 128):
+  def __init__(self, input_dim: int, hidden_dim: int, output_dim: int = 256):
     super().__init__()
-    self.frame_encoder = nn.Sequential(
-      nn.Linear(frame_dim, frame_feature_dim), nn.ELU()
-    )
-    self.temporal = nn.Sequential(
-      nn.Conv1d(frame_feature_dim, 128, kernel_size=5, stride=2, padding=2),
+    self.network = nn.Sequential(
+      nn.Linear(input_dim, hidden_dim),
       nn.ELU(),
-      nn.Conv1d(128, 256, kernel_size=5, stride=2, padding=2),
+      nn.Linear(hidden_dim, output_dim),
       nn.ELU(),
-      nn.AdaptiveAvgPool1d(1),
-      nn.Flatten(),
     )
 
-  def forward(self, frames: torch.Tensor) -> torch.Tensor:
-    encoded = self.frame_encoder(frames).movedim(-1, -2)
-    return self.temporal(encoded)
+  def forward(self, history: torch.Tensor) -> torch.Tensor:
+    return self.network(history)
 
 
 class SPV6RmaActor(SPV5ReferenceEncoderActor):
@@ -133,7 +109,9 @@ class SPV6RmaActor(SPV5ReferenceEncoderActor):
         f"SPV6 nominal physics has {nominal_dim} values, "
         f"expected {SPV6_PHYSICS_DIM}"
       )
-    self.rma_history_backbone = _TemporalBackbone(sum(PROPRIO_TERM_DIMS))
+    self.rma_history_backbone = _FlatHistoryBackbone(
+      self.estimator_history_length * sum(PROPRIO_TERM_DIMS), 512
+    )
     self.rma_nominal_encoder = nn.Sequential(
       nn.Linear(SPV6_PHYSICS_DIM, 128),
       nn.ELU(),
@@ -152,8 +130,7 @@ class SPV6RmaActor(SPV5ReferenceEncoderActor):
     self, obs: TensorDict
   ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     history = self.history_normalizer(obs[self.estimator_history_group])
-    frames = _term_major_history_to_frames(history, self.estimator_history_length)
-    history_feature = self.rma_history_backbone(frames)
+    history_feature = self.rma_history_backbone(history)
     # Physical calibration parameters deliberately bypass observation normalization.
     nominal_feature = self.rma_nominal_encoder(
       obs[self.rma_physics_nominal_group]
@@ -183,8 +160,18 @@ class SPV6RmaActor(SPV5ReferenceEncoderActor):
       estimate = self.estimate_root_state(obs).detach()
       decoded = self.encode_reference(obs).detach()
       features = self._spv5_features(obs, estimate, decoded)
-    rma = torch.cat(self.rma_latents(obs), dim=-1)
+    rma_latents = self.rma_latents(obs)
+    self._cached_rma_latents = rma_latents
+    rma = torch.cat(rma_latents, dim=-1)
     return self.policy_normalizer(torch.cat((features, rma), dim=-1))
+
+  def cached_rma_latents(
+    self, batch_size: int
+  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+    cached = getattr(self, "_cached_rma_latents", None)
+    if cached is None or any(value.shape[0] < batch_size for value in cached):
+      return None
+    return tuple(value[:batch_size] for value in cached)  # type: ignore[return-value]
 
   @torch.no_grad()
   def update_normalization(self, obs: TensorDict) -> None:
@@ -281,7 +268,9 @@ class SPV6RmaCritic(nn.Module):
       nn.Linear(128, 64), nn.Mish(),
       nn.Linear(64, self.sensor_latent_dim), nn.Tanh(),
     )
-    self.push_backbone = _TemporalBackbone(SPV6_PUSH_FRAME_DIM, 32)
+    self.push_backbone = _FlatHistoryBackbone(
+      SPV6_PUSH_HISTORY_DIM, 128
+    )
     self.push_head = nn.Sequential(
       nn.Linear(256, self.push_latent_dim), nn.Tanh()
     )
@@ -309,22 +298,29 @@ class SPV6RmaCritic(nn.Module):
     self, obs: TensorDict
   ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     physics = obs[self.physics_group]
-    push = obs[self.push_group].reshape(
-      *obs[self.push_group].shape[:-1],
-      SPV6_PUSH_HISTORY_LENGTH,
-      SPV6_PUSH_FRAME_DIM,
-    )
     return (
       self.global_encoder(physics[..., :SPV6_GLOBAL_PHYSICS_DIM]),
       self.sensor_encoder(physics[..., SPV6_GLOBAL_PHYSICS_DIM:]),
-      self.push_head(self.push_backbone(push)),
+      self.push_head(self.push_backbone(obs[self.push_group])),
     )
 
+  def cached_rma_latents(
+    self, batch_size: int
+  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+    cached = getattr(self, "_cached_rma_latents", None)
+    if cached is None or any(value.shape[0] < batch_size for value in cached):
+      return None
+    return tuple(value[:batch_size] for value in cached)  # type: ignore[return-value]
+
   def reconstruction_losses(
-    self, obs: TensorDict
+    self,
+    obs: TensorDict,
+    latents: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
   ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
     physics = obs[self.physics_group]
-    z_global, z_sensor, z_push = self.rma_latents(obs)
+    z_global, z_sensor, z_push = (
+      self.rma_latents(obs) if latents is None else latents
+    )
     pred_global = self.global_decoder(z_global)
     pred_sensor = self.sensor_decoder(z_sensor)
     tolerances = physics.new_tensor((0.01, 0.01, 0.01, 0.1, 0.1))
@@ -375,7 +371,9 @@ class SPV6RmaCritic(nn.Module):
     del hidden_state, stochastic_output
     obs = unpad_trajectories(obs, masks) if masks is not None else obs
     base = self.base_normalizer(self._base(obs))
-    return self.mlp(torch.cat((base, *self.rma_latents(obs)), dim=-1))
+    rma_latents = self.rma_latents(obs)
+    self._cached_rma_latents = rma_latents
+    return self.mlp(torch.cat((base, *rma_latents), dim=-1))
 
   @torch.no_grad()
   def update_normalization(self, obs: TensorDict) -> None:
@@ -433,9 +431,12 @@ class _SPV6ActorExport(_SPV5ActorExport):
       history_length=self.history_length,
       kinematics=self.reference_kinematics,
     )
-    frames = _term_major_history_to_frames(normalized_history, self.history_length)
     fused = torch.cat(
-      (self.rma_history_backbone(frames), self.rma_nominal_encoder(nominal)), dim=-1
+      (
+        self.rma_history_backbone(normalized_history),
+        self.rma_nominal_encoder(nominal),
+      ),
+      dim=-1,
     )
     rma = torch.cat(
       (

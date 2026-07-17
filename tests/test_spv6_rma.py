@@ -207,6 +207,14 @@ def test_spv6_ppo_combines_existing_and_rma_auxiliary_losses() -> None:
   algorithm.rma_physics_reconstruction_coef = 0.1
   algorithm.rma_push_reconstruction_coef = 0.1
 
+  actor(obs)
+  critic(obs)
+
+  def fail_if_recomputed(_observations):
+    raise AssertionError("RMA history encoder was recomputed")
+
+  actor.rma_latents = fail_if_recomputed
+  critic.rma_latents = fail_if_recomputed
   total, diagnostics = algorithm._auxiliary_loss(obs)
 
   assert total.ndim == 0

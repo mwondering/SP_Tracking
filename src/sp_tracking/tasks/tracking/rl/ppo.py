@@ -586,8 +586,25 @@ class SPV6RmaPPO(SPV5ReferenceEncoderPPO):
       raise TypeError("SPV6RmaPPO requires actor and critic RMA latent methods")
     if not callable(reconstruction_losses):
       raise TypeError("SPV6RmaPPO requires critic reconstruction_losses()")
-    actor_global, actor_sensor, actor_push = actor_latents(observations)
-    critic_global, critic_sensor, critic_push = critic_latents(observations)
+    batch_size = observations.batch_size[0]
+    actor_cached = getattr(self.actor, "cached_rma_latents", None)
+    critic_cached = getattr(self.critic, "cached_rma_latents", None)
+    cached_actor_values = (
+      actor_cached(batch_size) if callable(actor_cached) else None
+    )
+    cached_critic_values = (
+      critic_cached(batch_size) if callable(critic_cached) else None
+    )
+    actor_global, actor_sensor, actor_push = (
+      actor_latents(observations)
+      if cached_actor_values is None
+      else cached_actor_values
+    )
+    critic_global, critic_sensor, critic_push = (
+      critic_latents(observations)
+      if cached_critic_values is None
+      else cached_critic_values
+    )
     global_alignment = (
       actor_global - critic_global.detach()
     ).square().mean()
@@ -596,7 +613,9 @@ class SPV6RmaPPO(SPV5ReferenceEncoderPPO):
     ).square().mean()
     push_alignment = (actor_push - critic_push.detach()).square().mean()
     physics_reconstruction, push_reconstruction, recon_diagnostics = (
-      reconstruction_losses(observations)
+      reconstruction_losses(
+        observations, (critic_global, critic_sensor, critic_push)
+      )
     )
     rma_loss = (
       self.rma_global_alignment_coef * global_alignment
