@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hydra import compose, initialize_config_module
 import torch
+from rsl_rl.models import MLPModel
 from tensordict import TensorDict
 
 from sp_tracking.config.build_env import build_env_cfg
@@ -36,6 +37,12 @@ from sp_tracking.tasks.tracking.rl.ppo import (
   SPV5ReferenceEncoderPPO,
   SPV51ContactEstimatorPPO,
 )
+from sp_tracking.tasks.tracking.rl.sapg.conditioning import (
+  BlockGaussianDistribution,
+  PolicyConditionedLinear,
+  install_policy_conditioning,
+)
+from sp_tracking.tasks.tracking.rl.sapg.config import SAPGConfig
 
 
 KEYPOINT_SPECS = (
@@ -172,6 +179,32 @@ def test_spv5_window_contract_and_zero_initialized_residual() -> None:
   assert actor.get_latent(obs).shape == (2, SPV5_POLICY_INPUT_DIM)
   assert actor(obs).shape == (2, 3)
   assert actor.obs_dim == SPV5_RAW_ACTOR_OBS_DIM == 8199
+
+
+def test_spv5_models_accept_generic_sapg_conditioning_and_export_leader() -> None:
+  obs = _observations()
+  obs.set("critic_obs", torch.randn(2, 5))
+  actor = _actor(obs)
+  critic = MLPModel(
+    obs,
+    {"critic": ["critic_obs"]},
+    "critic",
+    1,
+    hidden_dims=(16, 8),
+    obs_normalization=False,
+  )
+  context = install_policy_conditioning(
+    actor,
+    critic,
+    SAPGConfig(enabled=True),
+  )
+
+  with context.use(torch.tensor([0, 3])):
+    assert actor(obs).shape == (2, 3)
+    assert critic(obs).shape == (2, 1)
+  assert isinstance(actor.mlp[0], PolicyConditionedLinear)
+  assert isinstance(actor.distribution, BlockGaussianDistribution)
+  assert isinstance(actor.as_onnx().mlp[0], torch.nn.Linear)
 
 
 def test_spv5_seven_frame_key_body_fk_is_exact_at_current_frame() -> None:

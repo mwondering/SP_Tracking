@@ -12,12 +12,22 @@ from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import resolve_optimizer
 
 from .optim import OptimizerGroup, build_heft_optimizer
+from .sapg.config import SAPGConfig
+from .sapg.extension import SAPGRuntime, construct_sapg_algorithm
 
 
 class SparseTrackSplitLrPPO(PPO):
   """PPO with SparseTrack-style actor and critic optimizer learning rates."""
 
   _SPLIT_LR_STATE_KEY = "tracking_split_lr_state"
+  _SAPG_STATE_KEY = "tracking_sapg_state"
+
+  @staticmethod
+  def construct_algorithm(obs, env, cfg: dict, device: str):
+    sapg_cfg = cfg["algorithm"].get("sapg_cfg")
+    if isinstance(sapg_cfg, dict) and bool(sapg_cfg.get("enabled", False)):
+      return construct_sapg_algorithm(obs, env, cfg, device)
+    return PPO.construct_algorithm(obs, env, cfg, device)
 
   def __init__(
     self,
@@ -30,8 +40,10 @@ class SparseTrackSplitLrPPO(PPO):
     clamp_rewards_min: float | None = None,
     learning_rate: float = 0.001,
     optimizer: str = "adam",
+    sapg_cfg: dict | None = None,
     **kwargs,
   ) -> None:
+    sapg_config = SAPGConfig.from_dict(sapg_cfg)
     super().__init__(
       actor,
       critic,
@@ -41,6 +53,15 @@ class SparseTrackSplitLrPPO(PPO):
       optimizer=optimizer,
       **kwargs,
     )
+    if sapg_config.enabled:
+      context = getattr(actor, "_sapg_policy_context", None)
+      if context is None or context is not getattr(
+        critic, "_sapg_policy_context", None
+      ):
+        raise RuntimeError(
+          "SAPG actor and critic were not conditioned before optimizer creation"
+        )
+      self._sapg_runtime = SAPGRuntime(self, sapg_config, context)
     if actor_learning_rate is None or critic_learning_rate is None:
       self.clamp_rewards_min = clamp_rewards_min
       return
@@ -61,6 +82,27 @@ class SparseTrackSplitLrPPO(PPO):
     if self.clamp_rewards_min is not None:
       rewards = rewards.clamp_min(float(self.clamp_rewards_min))
     return super().process_env_step(obs, rewards, dones, extras)
+
+  def act(self, obs):
+    runtime = getattr(self, "_sapg_runtime", None)
+    if runtime is None:
+      return super().act(obs)
+    policy_ids = runtime.rollout_ids(
+      obs.batch_size[0], obs.device, training=True
+    )
+    with runtime.context.use(policy_ids):
+      return super().act(obs)
+
+  def compute_returns(self, obs) -> None:
+    runtime = getattr(self, "_sapg_runtime", None)
+    if runtime is None:
+      return super().compute_returns(obs)
+    runtime.capture_last_observations(obs)
+    policy_ids = runtime.rollout_ids(
+      obs.batch_size[0], obs.device, training=True
+    )
+    with runtime.context.use(policy_ids):
+      return super().compute_returns(obs)
 
   def _set_learning_rate(self, lr: float) -> None:
     if hasattr(self, "actor_learning_rate") and hasattr(self, "critic_learning_rate"):
@@ -132,15 +174,51 @@ class SparseTrackSplitLrPPO(PPO):
     split_lr_state = self._split_lr_checkpoint_state()
     if split_lr_state:
       saved_dict[self._SPLIT_LR_STATE_KEY] = split_lr_state
+    runtime = getattr(self, "_sapg_runtime", None)
+    if runtime is not None:
+      saved_dict[self._SAPG_STATE_KEY] = runtime.save()
     return saved_dict
 
+  def _prepare_sapg_warm_start(self, loaded_dict: dict) -> dict:
+    """Expand a base PPO std vector for actor/critic-only SAPG warm starts."""
+    runtime = getattr(self, "_sapg_runtime", None)
+    if runtime is None or self._SAPG_STATE_KEY in loaded_dict:
+      return loaded_dict
+    actor_state = loaded_dict.get("actor_state_dict")
+    if not isinstance(actor_state, dict):
+      return loaded_dict
+    migrated_actor_state = dict(actor_state)
+    target_state = self._raw_actor.state_dict()
+    for name in ("distribution.std_param", "distribution.log_std_param"):
+      source = migrated_actor_state.get(name)
+      target = target_state.get(name)
+      if (
+        isinstance(source, torch.Tensor)
+        and isinstance(target, torch.Tensor)
+        and source.ndim == 1
+        and target.ndim == 2
+        and source.shape[0] == target.shape[1]
+      ):
+        migrated_actor_state[name] = source.repeat(target.shape[0], 1)
+    migrated = dict(loaded_dict)
+    migrated["actor_state_dict"] = migrated_actor_state
+    return migrated
+
   def load(self, loaded_dict: dict, load_cfg: dict | None, strict: bool) -> bool:
-    load_iteration = super().load(loaded_dict, load_cfg, strict)
-    self._restore_split_lr_checkpoint_state(loaded_dict, load_cfg)
+    prepared_dict = self._prepare_sapg_warm_start(loaded_dict)
+    load_iteration = super().load(prepared_dict, load_cfg, strict)
+    self._restore_split_lr_checkpoint_state(prepared_dict, load_cfg)
+    runtime = getattr(self, "_sapg_runtime", None)
+    if runtime is not None:
+      runtime.load(prepared_dict.get(self._SAPG_STATE_KEY, {}))
     return load_iteration
 
   def update(self) -> dict[str, float]:
     """Run PPO update while preserving actor/critic split learning rates."""
+    if hasattr(self, "_sapg_runtime"):
+      from .sapg.update import update_sapg
+
+      return update_sapg(self)
     if not (
       hasattr(self, "actor_learning_rate") and hasattr(self, "critic_learning_rate")
     ):
@@ -521,7 +599,7 @@ class SPV5ReferenceEncoderPPO(SPV3EstimatorPPO):
         device=cache_device,
       ),
     )
-    algorithm = PPO.construct_algorithm(obs, env, cfg, device)
+    algorithm = SparseTrackSplitLrPPO.construct_algorithm(obs, env, cfg, device)
     populate = getattr(algorithm.actor, "populate_policy_context_cache", None)
     if not callable(populate):
       raise TypeError(
@@ -578,7 +656,7 @@ class SPV51ContactEstimatorPPO(SPV5ReferenceEncoderPPO):
         device=cache_device,
       ),
     )
-    algorithm = PPO.construct_algorithm(obs, env, cfg, device)
+    algorithm = SparseTrackSplitLrPPO.construct_algorithm(obs, env, cfg, device)
     populate = getattr(algorithm.actor, "populate_policy_context_cache", None)
     if not callable(populate):
       raise TypeError(
@@ -744,7 +822,7 @@ class HeftTeacherPPO(SparseTrackSplitLrPPO):
     obs["is_init"] = torch.ones(
       (*obs.batch_size, 1), dtype=torch.bool, device=obs.device
     )
-    algorithm = PPO.construct_algorithm(obs, env, cfg, device)
+    algorithm = SparseTrackSplitLrPPO.construct_algorithm(obs, env, cfg, device)
     algorithm._heft_next_is_init = torch.ones(
       (env.num_envs, 1), dtype=torch.bool, device=device
     )
@@ -862,8 +940,20 @@ class HeftTeacherPPO(SparseTrackSplitLrPPO):
   def compute_returns(self, obs) -> None:
     """Compute GAE with HEFT's global (cross-rank) advantage statistics."""
     st = self.storage
+    runtime = getattr(self, "_sapg_runtime", None)
+    if runtime is not None:
+      runtime.capture_last_observations(obs)
+      policy_ids = runtime.rollout_ids(
+        obs.batch_size[0], obs.device, training=True
+      )
+    else:
+      policy_ids = None
     critic_hidden_state = self.critic.get_hidden_state()
-    last_values = self.critic(obs).detach()
+    if runtime is None:
+      last_values = self.critic(obs).detach()
+    else:
+      with runtime.context.use(policy_ids):
+        last_values = self.critic(obs).detach()
     self.critic.reset(hidden_state=critic_hidden_state)
     advantage = 0
     for step in reversed(range(st.num_transitions_per_env)):

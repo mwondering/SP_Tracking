@@ -31,6 +31,15 @@ critic:
 
 algorithm:
   class_name: PPO
+  sapg_cfg:
+    enabled: false
+    compatibility: official
+    num_policy_blocks: 4
+    local_parameter_dim: 32
+    off_policy_ratio: 1
+    exploration_type: none
+    entropy_coef_scale: 1.0
+    value_eval_chunk_size: 8192
   value_loss_coef: 1.0
   use_clipped_value_loss: true
   clip_param: 0.2

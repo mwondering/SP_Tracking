@@ -228,6 +228,35 @@ def test_agent_cfg_matches_tracking_bfm_defaults() -> None:
   assert agent_cfg.algorithm.learning_rate == 1.0e-3
 
 
+def test_disabled_sapg_does_not_rewrite_or_serialize_plain_ppo() -> None:
+  cfg = _compose()
+
+  agent_cfg = build_agent_cfg(cfg.agent)
+  serialized = serialize_agent_cfg(agent_cfg)
+
+  assert agent_cfg.algorithm.class_name == "PPO"
+  assert "sapg_cfg" not in serialized["algorithm"]
+
+
+def test_enabled_sapg_rewrites_plain_ppo_and_serializes_config() -> None:
+  cfg = _compose("agent.algorithm.sapg_cfg.enabled=true")
+
+  agent_cfg = build_agent_cfg(cfg.agent)
+  serialized = serialize_agent_cfg(agent_cfg)
+
+  assert agent_cfg.algorithm.class_name.endswith(":SparseTrackSplitLrPPO")
+  assert serialized["algorithm"]["sapg_cfg"]["enabled"] is True
+
+
+def test_disabled_sapg_is_removed_from_specialized_ppo_serialization() -> None:
+  cfg = _compose("task=tracking_bfm_sp")
+
+  serialized = serialize_agent_cfg(build_agent_cfg(cfg.agent))
+
+  assert serialized["algorithm"]["class_name"].endswith(":HeftTeacherPPO")
+  assert "sapg_cfg" not in serialized["algorithm"]
+
+
 def test_agent_serialization_drops_irrelevant_mlp_constructor_fields() -> None:
   cfg = _compose("task=tracking_bfm_sp")
 

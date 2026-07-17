@@ -20,6 +20,7 @@ from sp_tracking.config.build_agent import build_agent_cfg, serialize_agent_cfg
 from sp_tracking.config.build_env import build_env_cfg
 from sp_tracking.tasks.tracking.rl import SpTrackingOnPolicyRunner
 from sp_tracking.tasks.tracking.rl.checkpoints import resolve_local_checkpoint_path
+from sp_tracking.tasks.tracking.rl.sapg.config import SAPGConfig
 from sp_tracking.tasks.tracking.task_catalog import (
   TASK_BY_CONFIG_NAME,
   TASK_SPECS,
@@ -111,6 +112,17 @@ def _apply_motion_path(env_cfg: ManagerBasedRlEnvCfg, motion_path: str | None) -
 def prepare_train_cfg(cfg: DictConfig) -> PreparedTrainCfg:
   env_cfg = build_env_cfg(cfg.task)
   agent_cfg = build_agent_cfg(cfg.agent, cfg.task.get("agent_overrides"))
+  serialized_agent = serialize_agent_cfg(agent_cfg)
+  sapg_raw = serialized_agent["algorithm"].get("sapg_cfg")
+  if isinstance(sapg_raw, dict) and bool(sapg_raw.get("enabled", False)):
+    sapg_cfg = SAPGConfig.from_dict(sapg_raw)
+    num_envs = int(env_cfg.scene.num_envs)
+    if num_envs % sapg_cfg.num_policy_blocks:
+      raise ValueError(
+        f"SAPG training requires task.num_envs ({num_envs}) to be divisible "
+        f"by agent.algorithm.sapg_cfg.num_policy_blocks "
+        f"({sapg_cfg.num_policy_blocks})"
+      )
   seed = int(cfg.get("seed", agent_cfg.seed))
   env_cfg.seed = seed
   agent_cfg.seed = seed

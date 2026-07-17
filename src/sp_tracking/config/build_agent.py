@@ -9,7 +9,14 @@ from mjlab.rl import RslRlModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 
 
 @dataclass
-class SplitLrPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
+class SapgPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
+  """Optional SAPG extension shared by plain and tracking-specific PPOs."""
+
+  sapg_cfg: dict[str, Any] | None = None
+
+
+@dataclass
+class SplitLrPpoAlgorithmCfg(SapgPpoAlgorithmCfg):
   """PPO options implemented by the tracking-specific PPO subclass."""
 
   actor_learning_rate: float | None = None
@@ -203,6 +210,13 @@ def build_agent_cfg(
   algorithm_data = dict(data.pop("algorithm"))
   split_lr_keys = {"actor_learning_rate", "critic_learning_rate", "clamp_rewards_min"}
   algorithm_class_name = str(algorithm_data.get("class_name", ""))
+  sapg_data = algorithm_data.get("sapg_cfg")
+  sapg_enabled = isinstance(sapg_data, dict) and bool(sapg_data.get("enabled", False))
+  if sapg_enabled and algorithm_class_name == "PPO":
+    algorithm_class_name = (
+      "sp_tracking.tasks.tracking.rl.ppo:SparseTrackSplitLrPPO"
+    )
+    algorithm_data["class_name"] = algorithm_class_name
   if algorithm_class_name.endswith(":HeftTeacherPPO"):
     algorithm_cls = HeftTeacherPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV6RmaPPO"):
@@ -215,6 +229,8 @@ def build_agent_cfg(
     algorithm_cls = SPV5ReferenceEncoderPpoAlgorithmCfg
   elif split_lr_keys.intersection(algorithm_data):
     algorithm_cls = SplitLrPpoAlgorithmCfg
+  elif sapg_enabled:
+    algorithm_cls = SapgPpoAlgorithmCfg
   else:
     algorithm_cls = RslRlPpoAlgorithmCfg
   algorithm = algorithm_cls(
@@ -243,6 +259,11 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
   (including the SP profile) runnable rather than merely composable.
   """
   data = asdict(cfg)
+  sapg_cfg = data["algorithm"].get("sapg_cfg")
+  if not isinstance(sapg_cfg, dict) or not bool(sapg_cfg.get("enabled", False)):
+    # This is the hard non-regression boundary: disabled SAPG never reaches
+    # RSL-RL's PPO constructor and cannot alter its model or update path.
+    data["algorithm"].pop("sapg_cfg", None)
   for model_name in ("actor", "critic"):
     model = data[model_name]
     if model.get("class_name") == "MLPModel" or str(

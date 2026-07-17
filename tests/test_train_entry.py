@@ -2,6 +2,7 @@ from hydra import compose, initialize_config_module
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from omegaconf import OmegaConf
 from rsl_rl.utils.log_writer import LogWriter
 
@@ -227,6 +228,19 @@ def test_prepare_train_cfg_keeps_num_envs_per_rank() -> None:
   prepared = prepare_train_cfg(cfg)
 
   assert prepared.env.scene.num_envs == 32
+
+
+def test_prepare_train_cfg_rejects_non_divisible_sapg_envs() -> None:
+  cfg = _compose(
+    "task.num_envs=5",
+    "agent.algorithm.sapg_cfg.enabled=true",
+  )
+
+  with pytest.raises(
+    ValueError,
+    match=r"task.num_envs \(5\).*num_policy_blocks \(4\)",
+  ):
+    prepare_train_cfg(cfg)
 
 
 def test_run_train_configures_torch_backends_before_env(monkeypatch, tmp_path: Path) -> None:

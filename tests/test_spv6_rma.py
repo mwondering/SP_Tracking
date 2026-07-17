@@ -15,6 +15,12 @@ from sp_tracking.tasks.tracking.mdp.randomizations import (
   recorded_push_by_setting_velocity,
 )
 from sp_tracking.tasks.tracking.rl.ppo import SPV6RmaPPO
+from sp_tracking.tasks.tracking.rl.sapg.conditioning import (
+  BlockGaussianDistribution,
+  PolicyConditionedLinear,
+  install_policy_conditioning,
+)
+from sp_tracking.tasks.tracking.rl.sapg.config import SAPGConfig
 from sp_tracking.tasks.tracking.rl.spv5_models import SPV5_POLICY_INPUT_DIM
 from sp_tracking.tasks.tracking.rl.spv6_models import (
   SPV6_RMA_LATENT_DIM,
@@ -165,6 +171,23 @@ def test_spv6_actor_critic_latents_and_decoder_gradients() -> None:
   assert any(parameter.grad is not None for parameter in critic.global_decoder.parameters())
   assert any(parameter.grad is not None for parameter in critic.push_decoder.parameters())
   assert "rma_push_mask_bce" in diagnostics
+
+
+def test_spv6_models_accept_generic_sapg_conditioning() -> None:
+  obs = _observations()
+  actor, critic = _models(obs)
+  context = install_policy_conditioning(
+    actor,
+    critic,
+    SAPGConfig(enabled=True),
+  )
+
+  with context.use(torch.tensor([0, 3])):
+    assert actor(obs).shape == (2, 3)
+    assert critic(obs).shape == (2, 1)
+  assert isinstance(actor.mlp[0], PolicyConditionedLinear)
+  assert isinstance(actor.distribution, BlockGaussianDistribution)
+  assert isinstance(actor.as_jit().mlp[0], torch.nn.Linear)
 
 
 def test_spv6_normalization_does_not_run_rma_encoder() -> None:
@@ -344,6 +367,17 @@ def test_spv6_1_passes_actual_dr_and_push_directly_without_rma_losses() -> None:
   assert actor.as_jit()(exported_input).shape == (2, 3)
   assert not hasattr(actor, "rma_latents")
   assert not hasattr(critic, "reconstruction_losses")
+
+  context = install_policy_conditioning(
+    actor,
+    critic,
+    SAPGConfig(enabled=True),
+  )
+  with context.use(torch.tensor([0, 3])):
+    assert actor(obs).shape == (2, 3)
+    assert critic(obs).shape == (2, 1)
+  assert isinstance(actor.mlp[0], PolicyConditionedLinear)
+  assert isinstance(actor.distribution, BlockGaussianDistribution)
 
   with initialize_config_module(
     version_base=None, config_module="sp_tracking.conf"

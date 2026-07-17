@@ -101,6 +101,13 @@ The resulting checkpoint is self-describing and can be passed directly to
 stage. The original `tracking_bfm` dynamics and MLP/PPO preset are retained;
 all task observation and reward views now use a pelvis anchor.
 
+An official-code-compatible SAPG extension can be enabled on any task with
+`agent.algorithm.sapg_cfg.enabled=true`. It is disabled by default and removed
+before the original PPO constructor is called, so existing PPO runs retain
+their previous model, optimizer and update paths. Configuration, algorithm
+semantics, checkpoint behavior and current limitations are documented in
+[docs/sapg.md](docs/sapg.md).
+
 The three observation ablations use the BFM XML and add only the reference
 caches, semantic keypoint views, contact sensing, and policy-mean history needed
 to construct HEFT observations. They retain the BFM MLP actor family, PPO/Adam,
