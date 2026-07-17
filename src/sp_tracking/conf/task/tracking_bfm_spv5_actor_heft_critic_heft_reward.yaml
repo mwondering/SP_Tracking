@@ -37,6 +37,7 @@ agent_overrides:
     class_name: sp_tracking.tasks.tracking.rl.ppo:SPV5ReferenceEncoderPPO
     actor_learning_rate: 0.001
     critic_learning_rate: 0.001
+    estimator_learning_rate: 0.0001
     estimator_root_height_loss_coef: 1.0
     estimator_root_lin_vel_loss_coef: 1.0
     reference_encoder_loss_coef: 1.0

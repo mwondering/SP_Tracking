@@ -425,6 +425,7 @@ def test_spv3_has_estimator_history_targets_and_heft_critic_contract() -> None:
   assert prepared.agent.actor.class_name.endswith(":SPV3EstimatorActor")
   assert prepared.agent.actor.estimator_hidden_dims == (512, 256, 128)
   assert prepared.agent.algorithm.class_name.endswith(":SPV3EstimatorPPO")
+  assert prepared.agent.algorithm.estimator_learning_rate == 1.0e-4
   assert prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")
 
 
@@ -461,5 +462,6 @@ def test_spv4_adds_three_current_root_frame_key_body_groups() -> None:
   }
   assert prepared.agent.actor.class_name.endswith(":SPV4KeyBodyActor")
   assert prepared.agent.algorithm.class_name.endswith(":SPV3EstimatorPPO")
+  assert prepared.agent.algorithm.estimator_learning_rate == 1.0e-4
   assert prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")
   assert cfg.task.command.command.fk_from_joint_pos is False

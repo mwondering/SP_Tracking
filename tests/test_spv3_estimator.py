@@ -107,6 +107,7 @@ def test_spv3_estimator_ppo_reports_two_physical_mse_terms() -> None:
     learning_rate=1.0e-3,
     actor_learning_rate=1.0e-3,
     critic_learning_rate=1.0e-3,
+    estimator_learning_rate=1.0e-4,
     schedule="fixed",
     desired_kl=None,
   )
@@ -125,6 +126,59 @@ def test_spv3_estimator_ppo_reports_two_physical_mse_terms() -> None:
 
   assert losses["estimator_root_height_mse"] >= 0.0
   assert losses["estimator_root_lin_vel_mse"] >= 0.0
+  assert losses["estimator_lr"] == 1.0e-4
+  estimator_parameters = set(actor.estimator.parameters())
+  assert estimator_parameters.intersection(algorithm.estimator_optimizer.state)
+  assert not estimator_parameters.intersection(algorithm.optimizer.state)
+
+
+def test_spv3_estimator_optimizer_checkpoint_is_optional_for_legacy_runs() -> None:
+  obs = _observations(2)
+  groups = {
+    "actor": ["actor_core", "estimator_history"],
+    "critic": ["policy", "priv"],
+  }
+
+  def make_algorithm(estimator_lr: float) -> SPV3EstimatorPPO:
+    actor = _actor(obs)
+    critic = MLPModel(
+      obs,
+      groups,
+      "critic",
+      1,
+      hidden_dims=(16, 8),
+      obs_normalization=False,
+    )
+    storage = RolloutStorage("rl", 2, 2, obs, [3], "cpu")
+    return SPV3EstimatorPPO(
+      actor,
+      critic,
+      storage,
+      device="cpu",
+      num_learning_epochs=1,
+      num_mini_batches=1,
+      actor_learning_rate=1.0e-3,
+      critic_learning_rate=1.0e-3,
+      estimator_learning_rate=estimator_lr,
+      schedule="fixed",
+      desired_kl=None,
+    )
+
+  source = make_algorithm(2.5e-5)
+  source.estimator_optimizer.param_groups[0]["lr"] = 3.0e-5
+  saved = source.save()
+
+  resumed = make_algorithm(1.0e-4)
+  resumed.load(saved, load_cfg=None, strict=True)
+  assert resumed.estimator_learning_rate == 3.0e-5
+  assert resumed.estimator_optimizer.param_groups[0]["lr"] == 3.0e-5
+
+  legacy = dict(saved)
+  legacy.pop(SPV3EstimatorPPO._ESTIMATOR_OPTIMIZER_STATE_KEY)
+  resumed_legacy = make_algorithm(1.0e-4)
+  resumed_legacy.load(legacy, load_cfg=None, strict=True)
+  assert resumed_legacy.estimator_learning_rate == 1.0e-4
+  assert resumed_legacy.estimator_optimizer.param_groups[0]["lr"] == 1.0e-4
 
 
 def test_spv3_privileged_targets_use_environment_frame_and_body_velocity() -> None:

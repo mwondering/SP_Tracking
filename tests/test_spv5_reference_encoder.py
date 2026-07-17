@@ -302,6 +302,7 @@ def test_spv5_task_exposes_only_encoded_reference_to_actor() -> None:
   assert prepared.agent.algorithm.class_name.endswith(
     ":SPV5ReferenceEncoderPPO"
   )
+  assert prepared.agent.algorithm.estimator_learning_rate == 1.0e-4
   assert len(prepared.agent.actor.keypoint_specs) == 13
   assert prepared.agent.actor.reference_encoder_hidden_dims == (512, 256, 128)
   randomization = cfg.task.command.command.student_motion_randomization

@@ -82,6 +82,7 @@ class SPV5ReferenceEncoderActorCfg(SPV3EstimatorActorCfg):
 
 @dataclass
 class SPV3EstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
+  estimator_learning_rate: float = 1.0e-4
   estimator_root_height_loss_coef: float = 1.0
   estimator_root_lin_vel_loss_coef: float = 1.0
 

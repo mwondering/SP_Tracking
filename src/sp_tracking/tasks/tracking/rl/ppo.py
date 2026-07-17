@@ -313,6 +313,11 @@ class SparseTrackSplitLrPPO(PPO):
           loss = loss + self.symmetry.mirror_loss_coeff * symmetry_loss
 
       self.optimizer.zero_grad()
+      zero_auxiliary_optimizers = getattr(
+        self, "_zero_auxiliary_optimizers", None
+      )
+      if callable(zero_auxiliary_optimizers):
+        zero_auxiliary_optimizers()
       loss.backward()
       if self.rnd:
         self.rnd.optimizer.zero_grad()
@@ -324,6 +329,11 @@ class SparseTrackSplitLrPPO(PPO):
 
       nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
       nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+      step_auxiliary_optimizers = getattr(
+        self, "_step_auxiliary_optimizers", None
+      )
+      if callable(step_auxiliary_optimizers):
+        step_auxiliary_optimizers()
       self.optimizer.step()
       if self.rnd:
         self.rnd.optimizer.step()
@@ -388,14 +398,39 @@ class SparseTrackSplitLrPPO(PPO):
 class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
   """PPO plus explicit SPV3 root-state estimator supervision."""
 
+  _ESTIMATOR_OPTIMIZER_STATE_KEY = "estimator_optimizer_state_dict"
+
   def __init__(
     self,
     *args,
+    estimator_learning_rate: float = 1.0e-4,
     estimator_root_height_loss_coef: float = 1.0,
     estimator_root_lin_vel_loss_coef: float = 1.0,
     **kwargs,
   ) -> None:
+    optimizer_name = str(kwargs.get("optimizer", "adam"))
     super().__init__(*args, **kwargs)
+    if not (
+      hasattr(self, "actor_learning_rate")
+      and hasattr(self, "critic_learning_rate")
+    ):
+      raise ValueError(
+        "SPV3EstimatorPPO requires actor_learning_rate and "
+        "critic_learning_rate so the estimator can be stepped independently"
+      )
+    estimator = getattr(self.actor, "estimator", None)
+    if not isinstance(estimator, nn.Module):
+      raise TypeError("SPV3EstimatorPPO requires actor.estimator to be a module")
+    self.estimator_learning_rate = float(estimator_learning_rate)
+    if self.estimator_learning_rate <= 0.0:
+      raise ValueError("estimator_learning_rate must be positive")
+    self._estimator_parameters = tuple(estimator.parameters())
+    if not self._estimator_parameters:
+      raise ValueError("actor.estimator has no trainable parameters")
+    self.estimator_optimizer = resolve_optimizer(optimizer_name)(
+      self._estimator_parameters,
+      lr=self.estimator_learning_rate,
+    )
     self.estimator_root_height_loss_coef = float(
       estimator_root_height_loss_coef
     )
@@ -418,6 +453,46 @@ class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
       "estimator_root_height_mse": height_mse,
       "estimator_root_lin_vel_mse": lin_vel_mse,
     }
+
+  def _step_auxiliary_optimizers(self) -> None:
+    """Step the estimator once and keep it out of the actor optimizer step.
+
+    The main optimizer deliberately retains its legacy two-group parameter
+    layout so checkpoints produced before the independent estimator optimizer
+    remain loadable.  Clearing estimator gradients after this step makes the
+    following main optimizer step skip those parameters.
+    """
+    self.estimator_optimizer.step()
+    for parameter in self._estimator_parameters:
+      parameter.grad = None
+
+  def _zero_auxiliary_optimizers(self) -> None:
+    self.estimator_optimizer.zero_grad()
+
+  def update(self) -> dict[str, float]:
+    result = super().update()
+    result["estimator_lr"] = float(
+      self.estimator_optimizer.param_groups[0]["lr"]
+    )
+    return result
+
+  def save(self) -> dict:
+    saved_dict = super().save()
+    saved_dict[self._ESTIMATOR_OPTIMIZER_STATE_KEY] = (
+      self.estimator_optimizer.state_dict()
+    )
+    return saved_dict
+
+  def load(self, loaded_dict: dict, load_cfg: dict | None, strict: bool) -> bool:
+    load_iteration = super().load(loaded_dict, load_cfg, strict)
+    load_optimizer = load_cfg is None or bool(load_cfg.get("optimizer", False))
+    estimator_state = loaded_dict.get(self._ESTIMATOR_OPTIMIZER_STATE_KEY)
+    if load_optimizer and isinstance(estimator_state, dict):
+      self.estimator_optimizer.load_state_dict(estimator_state)
+      self.estimator_learning_rate = float(
+        self.estimator_optimizer.param_groups[0]["lr"]
+      )
+    return load_iteration
 
 
 class SPV5ReferenceEncoderPPO(SPV3EstimatorPPO):
