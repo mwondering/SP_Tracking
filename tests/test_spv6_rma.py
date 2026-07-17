@@ -130,6 +130,15 @@ def test_spv6_actor_critic_latents_and_decoder_gradients() -> None:
   assert [value.shape[-1] for value in critic_latents] == [8, 32, 16]
   assert all(value.abs().max() <= 1.0 for value in (*actor_latents, *critic_latents))
   assert actor.get_latent(obs).shape[-1] == SPV5_POLICY_INPUT_DIM + SPV6_RMA_LATENT_DIM
+  history_layers = tuple(
+    module
+    for module in actor.rma_history_backbone.modules()
+    if isinstance(module, torch.nn.Linear)
+  )
+  assert [(layer.in_features, layer.out_features) for layer in history_layers] == [
+    (6100, 512),
+    (512, 256),
+  ]
   assert actor(obs).shape == (2, 3)
   assert critic(obs).shape == (2, 1)
 
@@ -151,6 +160,17 @@ def test_spv6_actor_critic_latents_and_decoder_gradients() -> None:
   assert any(parameter.grad is not None for parameter in critic.global_decoder.parameters())
   assert any(parameter.grad is not None for parameter in critic.push_decoder.parameters())
   assert "rma_push_mask_bce" in diagnostics
+
+
+def test_spv6_normalization_does_not_run_rma_encoder() -> None:
+  obs = _observations()
+  actor, _ = _models(obs)
+
+  def fail_if_called(_observations):
+    raise AssertionError("normalization redundantly ran the RMA encoder")
+
+  actor.rma_latents = fail_if_called
+  actor.update_normalization(obs)
 
 
 def test_recorded_push_exposes_only_the_current_step_delta() -> None:

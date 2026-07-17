@@ -151,7 +151,7 @@ class SparseTrackSplitLrPPO(PPO):
     mean_entropy = 0
     mean_rnd_loss = 0 if self.rnd else None
     mean_symmetry_loss = 0 if self.symmetry else None
-    mean_auxiliary_losses: dict[str, float] = {}
+    mean_auxiliary_losses: dict[str, torch.Tensor] = {}
 
     if self.actor.is_recurrent or self.critic.is_recurrent:
       generator = self.storage.recurrent_mini_batch_generator(
@@ -287,8 +287,11 @@ class SparseTrackSplitLrPPO(PPO):
         )
         loss = loss + auxiliary_loss
         for name, metric in auxiliary_metrics.items():
+          detached = metric.detach()
           mean_auxiliary_losses[name] = (
-            mean_auxiliary_losses.get(name, 0.0) + float(metric.detach().item())
+            mean_auxiliary_losses[name] + detached
+            if name in mean_auxiliary_losses
+            else detached.clone()
           )
 
       std_symmetry_loss = None
@@ -370,7 +373,7 @@ class SparseTrackSplitLrPPO(PPO):
         self.actor.std_symmetry_loss().detach().item()
       )
     for name, total in mean_auxiliary_losses.items():
-      loss_dict[name] = total / num_updates
+      loss_dict[name] = float((total / num_updates).item())
 
     self.storage.clear()
     return loss_dict

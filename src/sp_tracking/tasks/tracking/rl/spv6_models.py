@@ -28,7 +28,11 @@ from sp_tracking.tasks.tracking.mdp.spv6 import (
 )
 
 from .heft_models import DecayVecNorm, _make_mlp, _orthogonal_small_
-from .spv3_models import PROPRIO_TERM_DIMS
+from .spv3_models import (
+  PROPRIO_TERM_DIMS,
+  SPV3_ESTIMATOR_OUTPUT_DIM,
+  _identity_or_normalizer,
+)
 from .spv5_models import (
   SPV5_POLICY_INPUT_DIM,
   SPV5_REFERENCE_CACHE_DIM,
@@ -48,7 +52,7 @@ SPV6_RMA_LATENT_DIM = (
 
 
 class _FlatHistoryBackbone(nn.Module):
-  """Memory-bounded history encoder that never expands a per-frame feature map."""
+  """Memory-bounded flat encoder for actor and critic history windows."""
 
   def __init__(self, input_dim: int, hidden_dim: int, output_dim: int = 256):
     super().__init__()
@@ -109,6 +113,12 @@ class SPV6RmaActor(SPV5ReferenceEncoderActor):
         f"SPV6 nominal physics has {nominal_dim} values, "
         f"expected {SPV6_PHYSICS_DIM}"
       )
+    # SPV5 normalizes policy features only.  RMA latents stay in their raw
+    # tanh-bounded space and therefore need neither statistics nor a rollout
+    # encoder pass merely to update those statistics.
+    self.policy_normalizer = _identity_or_normalizer(
+      self.obs_normalization, SPV5_POLICY_INPUT_DIM
+    )
     self.rma_history_backbone = _FlatHistoryBackbone(
       self.estimator_history_length * sum(PROPRIO_TERM_DIMS), 512
     )
@@ -129,7 +139,10 @@ class SPV6RmaActor(SPV5ReferenceEncoderActor):
   def rma_latents(
     self, obs: TensorDict
   ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    history = self.history_normalizer(obs[self.estimator_history_group])
+    raw_history = obs[self.estimator_history_group]
+    history = self.history_normalizer(raw_history)
+    if torch.is_grad_enabled():
+      self._cached_normalized_history = (raw_history, history)
     history_feature = self.rma_history_backbone(history)
     # Physical calibration parameters deliberately bypass observation normalization.
     nominal_feature = self.rma_nominal_encoder(
@@ -140,6 +153,36 @@ class SPV6RmaActor(SPV5ReferenceEncoderActor):
       torch.tanh(self.rma_global_head(fused)),
       torch.tanh(self.rma_sensor_head(fused)),
       torch.tanh(self.rma_push_head(fused)),
+    )
+
+  def estimator_losses(
+    self, obs: TensorDict
+  ) -> tuple[torch.Tensor, torch.Tensor]:
+    cache = getattr(self, "_cached_normalized_history", None)
+    self._cached_normalized_history = None
+    raw_history = obs[self.estimator_history_group]
+    normalized_history = None
+    if cache is not None:
+      cached_raw, cached_normalized = cache
+      if (
+        cached_raw.shape == raw_history.shape
+        and cached_raw.stride() == raw_history.stride()
+        and cached_raw.storage_offset() == raw_history.storage_offset()
+        and cached_raw.data_ptr() == raw_history.data_ptr()
+      ):
+        normalized_history = cached_normalized
+    if normalized_history is None:
+      normalized_history = self.history_normalizer(raw_history)
+    estimate = self.estimator(normalized_history)
+    target = obs[self.estimator_target_group]
+    if target.shape[-1] != SPV3_ESTIMATOR_OUTPUT_DIM:
+      raise ValueError(
+        "SPV6 estimator target has "
+        f"{target.shape[-1]} values, expected {SPV3_ESTIMATOR_OUTPUT_DIM}"
+      )
+    return (
+      (estimate[..., :1] - target[..., :1]).square().mean(),
+      (estimate[..., 1:] - target[..., 1:]).square().mean(),
     )
 
   def get_latent(
@@ -163,7 +206,7 @@ class SPV6RmaActor(SPV5ReferenceEncoderActor):
     rma_latents = self.rma_latents(obs)
     self._cached_rma_latents = rma_latents
     rma = torch.cat(rma_latents, dim=-1)
-    return self.policy_normalizer(torch.cat((features, rma), dim=-1))
+    return torch.cat((self.policy_normalizer(features), rma), dim=-1)
 
   def cached_rma_latents(
     self, batch_size: int
@@ -192,11 +235,8 @@ class SPV6RmaActor(SPV5ReferenceEncoderActor):
       None,
       reference_cache=context[..., :SPV5_REFERENCE_CACHE_DIM],
     )
-    rma = torch.cat(self.rma_latents(obs), dim=-1)
     if self.obs_normalization:
-      self.policy_normalizer.update(  # type: ignore[attr-defined]
-        torch.cat((features, rma), dim=-1)
-      )
+      self.policy_normalizer.update(features)  # type: ignore[attr-defined]
 
   def as_onnx(self, verbose: bool = False) -> nn.Module:
     del verbose
@@ -447,7 +487,7 @@ class _SPV6ActorExport(_SPV5ActorExport):
       dim=-1,
     )
     return self.deterministic_output(
-      self.mlp(self.policy_normalizer(torch.cat((features, rma), dim=-1)))
+      self.mlp(torch.cat((self.policy_normalizer(features), rma), dim=-1))
     )
 
   @property
