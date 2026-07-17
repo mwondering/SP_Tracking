@@ -1,0 +1,40 @@
+defaults:
+  - spv5_heft_critic
+  - _self_
+
+observations:
+  # Raw calibrated parameters. They are static and deliberately bypass the
+  # normalizers used for the proprioceptive history and policy features.
+  rma_physics_nominal:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: parameters
+        term: spv6_physical_parameters
+        params:
+          mode: nominal
+          body_name: torso_link
+          geom_names: ${task.robot.foot_geom_pattern}
+
+  # Simulation-only parameters after reset domain randomization.
+  rma_physics_actual:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: parameters
+        term: spv6_physical_parameters
+        params:
+          mode: actual
+          body_name: torso_link
+          geom_names: ${task.robot.foot_geom_pattern}
+
+  # Exact interval-kick record, oldest -> newest after the observation
+  # manager's history buffer is flattened.
+  rma_push_history:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: push
+        term: spv6_push_event_state
+        params: {event_name: push_robot}
+        history_length: 50

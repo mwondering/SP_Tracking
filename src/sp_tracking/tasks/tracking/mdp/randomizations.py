@@ -521,6 +521,43 @@ class perturb_gravity:
     return self._gravity
 
 
+class recorded_push_by_setting_velocity:
+  """Instantaneous root-velocity kick with an observable per-step record."""
+
+  _COMPONENTS = ("x", "y", "z", "roll", "pitch", "yaw")
+
+  def __init__(self, cfg: EventTermCfg, env: "ManagerBasedRlEnv"):
+    self.env = env
+    self.asset = env.scene["robot"]
+    velocity_range = dict(cfg.params.get("velocity_range", {}))
+    ranges = [velocity_range.get(name, (0.0, 0.0)) for name in self._COMPONENTS]
+    self.low = torch.as_tensor(
+      [float(value[0]) for value in ranges], device=env.device
+    )
+    self.high = torch.as_tensor(
+      [float(value[1]) for value in ranges], device=env.device
+    )
+    self.last_delta = torch.zeros((env.num_envs, 6), device=env.device)
+    self.last_step = torch.full(
+      (env.num_envs,), -1, device=env.device, dtype=torch.long
+    )
+
+  def __call__(self, env: "ManagerBasedRlEnv", env_ids, **_: Any) -> None:
+    ids = _as_env_ids(env, env_ids)
+    if ids.numel() == 0:
+      return
+    delta = _uniform_range(self.low, self.high, ids.numel())
+    velocity = self.asset.data.root_link_vel_w[ids] + delta
+    self.asset.write_root_link_velocity_to_sim(velocity, env_ids=ids)
+    self.last_delta[ids] = delta
+    self.last_step[ids] = int(env.common_step_counter)
+
+  def observe(self, **_: Any) -> torch.Tensor:
+    active = self.last_step == int(self.env.common_step_counter)
+    delta = torch.where(active.unsqueeze(-1), self.last_delta, 0.0)
+    return torch.cat((delta, active.to(delta.dtype).unsqueeze(-1)), dim=-1)
+
+
 def sp_tracking_progress(env: "ManagerBasedRlEnv", env_ids, **_: Any) -> dict[str, float]:
   del env_ids
   return dict(getattr(env, "_sp_tracking_curriculum_state", {"progress": 0.0}))

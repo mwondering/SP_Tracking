@@ -42,6 +42,7 @@ from sp_tracking.tasks.tracking.mdp import spv2 as spv2_mdp
 from sp_tracking.tasks.tracking.mdp import spv3 as spv3_mdp
 from sp_tracking.tasks.tracking.mdp import spv4 as spv4_mdp
 from sp_tracking.tasks.tracking.mdp import spv5 as spv5_mdp
+from sp_tracking.tasks.tracking.mdp import spv6 as spv6_mdp
 from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
   MotionCommandCfg as LargeDatasetMotionCommandCfg,
 )
@@ -129,6 +130,8 @@ OBS_TERMS = {
   "spv5_reference_encoder_input": spv5_mdp.reference_encoder_input,
   "spv5_reference_encoder_target": spv5_mdp.reference_encoder_target,
   "spv5_robot_root_quat": spv5_mdp.robot_root_quat,
+  "spv6_physical_parameters": spv6_mdp.physical_parameters,
+  "spv6_push_event_state": spv6_mdp.push_event_state,
 }
 
 REWARD_TERMS = {
@@ -491,14 +494,18 @@ def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
   events = OrderedDict()
   if cfg.events.get("push_robot") and cfg.events.push_robot.enabled:
     events["push_robot"] = EventTermCfg(
-      func=mdp.push_by_setting_velocity,
+      func=(
+        sp_randomizations.recorded_push_by_setting_velocity
+        if bool(cfg.events.push_robot.get("record_history", False))
+        else mdp.push_by_setting_velocity
+      ),
       mode="interval",
       interval_range_s=tuple(cfg.events.push_robot.interval_range_s),
       params={"velocity_range": velocity_range},
     )
   if cfg.events.get("base_com") and cfg.events.base_com.enabled:
     events["base_com"] = EventTermCfg(
-      mode="startup",
+      mode=str(cfg.events.base_com.get("mode", "startup")),
       func=dr.body_com_offset,
       params={
         "asset_cfg": SceneEntityCfg("robot", body_names=_to_tuple(robot.base_com_body_names)),
@@ -508,7 +515,7 @@ def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
     )
   if cfg.events.get("base_mass") and cfg.events.base_mass.enabled:
     events["base_mass"] = EventTermCfg(
-      mode="startup",
+      mode=str(cfg.events.base_mass.get("mode", "startup")),
       func=dr.body_mass,
       params={
         "asset_cfg": SceneEntityCfg(
@@ -520,7 +527,7 @@ def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
     )
   if cfg.events.get("encoder_bias") and cfg.events.encoder_bias.enabled:
     events["encoder_bias"] = EventTermCfg(
-      mode="startup",
+      mode=str(cfg.events.encoder_bias.get("mode", "startup")),
       func=dr.encoder_bias,
       params={
         "asset_cfg": SceneEntityCfg("robot"),
@@ -529,7 +536,7 @@ def _build_events(cfg: DictConfig) -> dict[str, EventTermCfg]:
     )
   if cfg.events.get("foot_friction") and cfg.events.foot_friction.enabled:
     events["foot_friction"] = EventTermCfg(
-      mode="startup",
+      mode=str(cfg.events.foot_friction.get("mode", "startup")),
       func=dr.geom_friction,
       params={
         "asset_cfg": SceneEntityCfg("robot", geom_names=str(robot.foot_geom_pattern)),

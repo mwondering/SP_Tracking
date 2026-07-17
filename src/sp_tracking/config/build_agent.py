@@ -81,6 +81,23 @@ class SPV5ReferenceEncoderActorCfg(SPV3EstimatorActorCfg):
 
 
 @dataclass
+class SPV6RmaActorCfg(SPV5ReferenceEncoderActorCfg):
+  rma_physics_nominal_group: str = "rma_physics_nominal"
+  rma_global_latent_dim: int = 8
+  rma_sensor_latent_dim: int = 32
+  rma_push_latent_dim: int = 16
+
+
+@dataclass
+class SPV6RmaCriticCfg(HeftTeacherCriticCfg):
+  rma_physics_actual_group: str = "rma_physics_actual"
+  rma_push_history_group: str = "rma_push_history"
+  rma_global_latent_dim: int = 8
+  rma_sensor_latent_dim: int = 32
+  rma_push_latent_dim: int = 16
+
+
+@dataclass
 class SPV3EstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
   estimator_learning_rate: float = 1.0e-4
   estimator_root_height_loss_coef: float = 1.0
@@ -90,6 +107,15 @@ class SPV3EstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
 @dataclass
 class SPV5ReferenceEncoderPpoAlgorithmCfg(SPV3EstimatorPpoAlgorithmCfg):
   reference_encoder_loss_coef: float = 1.0
+
+
+@dataclass
+class SPV6RmaPpoAlgorithmCfg(SPV5ReferenceEncoderPpoAlgorithmCfg):
+  rma_global_alignment_coef: float = 1.0
+  rma_sensor_alignment_coef: float = 0.5
+  rma_push_alignment_coef: float = 1.0
+  rma_physics_reconstruction_coef: float = 0.1
+  rma_push_reconstruction_coef: float = 0.1
 
 
 def _to_container(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
@@ -131,13 +157,17 @@ def build_agent_cfg(
     actor_cls = SPV4KeyBodyActorCfg
   elif actor_class_name.endswith(":SPV5ReferenceEncoderActor"):
     actor_cls = SPV5ReferenceEncoderActorCfg
+  elif actor_class_name.endswith(":SPV6RmaActor"):
+    actor_cls = SPV6RmaActorCfg
   else:
     actor_cls = RslRlModelCfg
-  critic_cls = (
-    HeftTeacherCriticCfg
-    if str(critic_data.get("class_name", "")).endswith(":HeftTeacherCritic")
-    else RslRlModelCfg
-  )
+  critic_class_name = str(critic_data.get("class_name", ""))
+  if critic_class_name.endswith(":SPV6RmaCritic"):
+    critic_cls = SPV6RmaCriticCfg
+  elif critic_class_name.endswith(":HeftTeacherCritic"):
+    critic_cls = HeftTeacherCriticCfg
+  else:
+    critic_cls = RslRlModelCfg
   actor = actor_cls(**_filter_dataclass_kwargs(actor_cls, actor_data))
   critic = critic_cls(**_filter_dataclass_kwargs(critic_cls, critic_data))
   algorithm_data = dict(data.pop("algorithm"))
@@ -145,6 +175,8 @@ def build_agent_cfg(
   algorithm_class_name = str(algorithm_data.get("class_name", ""))
   if algorithm_class_name.endswith(":HeftTeacherPPO"):
     algorithm_cls = HeftTeacherPpoAlgorithmCfg
+  elif algorithm_class_name.endswith(":SPV6RmaPPO"):
+    algorithm_cls = SPV6RmaPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV3EstimatorPPO"):
     algorithm_cls = SPV3EstimatorPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV5ReferenceEncoderPPO"):
@@ -190,6 +222,8 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
         ":SPV3EstimatorActor",
         ":SPV4KeyBodyActor",
         ":SPV5ReferenceEncoderActor",
+        ":SPV6RmaActor",
+        ":SPV6RmaCritic",
       )
     ):
       for key in ("cnn_cfg", "rnn_type", "rnn_hidden_dim", "rnn_num_layers"):

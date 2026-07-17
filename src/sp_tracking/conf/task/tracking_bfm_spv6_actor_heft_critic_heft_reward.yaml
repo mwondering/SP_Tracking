@@ -1,0 +1,61 @@
+defaults:
+  - tracking_bfm_spv5_actor_heft_critic_heft_reward
+  - override obs: spv6_heft_critic
+  - _self_
+
+name: tracking_bfm_spv6_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv6_rma_actor_critic
+
+agent_overrides:
+  obs_groups:
+    actor:
+      - robot_root_quat
+      - estimator_history
+      - reference_encoder_input
+      - robot_key_body
+      - rma_physics_nominal
+    critic:
+      - policy
+      - priv
+      - rma_physics_actual
+      - rma_push_history
+  actor:
+    class_name: sp_tracking.tasks.tracking.rl.spv6_models:SPV6RmaActor
+    rma_physics_nominal_group: rma_physics_nominal
+    rma_global_latent_dim: 8
+    rma_sensor_latent_dim: 32
+    rma_push_latent_dim: 16
+  critic:
+    class_name: sp_tracking.tasks.tracking.rl.spv6_models:SPV6RmaCritic
+    hidden_dims: [1024, 512, 512]
+    activation: mish
+    obs_normalization: true
+    vecnorm_decay: 0.9999
+    rma_physics_actual_group: rma_physics_actual
+    rma_push_history_group: rma_push_history
+    rma_global_latent_dim: 8
+    rma_sensor_latent_dim: 32
+    rma_push_latent_dim: 16
+  algorithm:
+    class_name: sp_tracking.tasks.tracking.rl.ppo:SPV6RmaPPO
+    rma_global_alignment_coef: 1.0
+    rma_sensor_alignment_coef: 0.5
+    rma_push_alignment_coef: 1.0
+    rma_physics_reconstruction_coef: 0.1
+    rma_push_reconstruction_coef: 0.1
+
+# SPV6 resamples the static physical domain once per episode. The parent tasks
+# retain their original startup-only behavior.
+events:
+  push_robot:
+    record_history: true
+  base_com:
+    mode: reset
+  base_mass:
+    mode: reset
+  encoder_bias:
+    mode: reset
+  foot_friction:
+    mode: reset
+    ranges: [0.2, 2.5]

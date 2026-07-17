@@ -555,6 +555,70 @@ class SPV5ReferenceEncoderPPO(SPV3EstimatorPPO):
     )
 
 
+class SPV6RmaPPO(SPV5ReferenceEncoderPPO):
+  """SPV5 objectives plus asymmetric RMA alignment and reconstruction."""
+
+  def __init__(
+    self,
+    *args,
+    rma_global_alignment_coef: float = 1.0,
+    rma_sensor_alignment_coef: float = 0.5,
+    rma_push_alignment_coef: float = 1.0,
+    rma_physics_reconstruction_coef: float = 0.1,
+    rma_push_reconstruction_coef: float = 0.1,
+    **kwargs,
+  ) -> None:
+    super().__init__(*args, **kwargs)
+    self.rma_global_alignment_coef = float(rma_global_alignment_coef)
+    self.rma_sensor_alignment_coef = float(rma_sensor_alignment_coef)
+    self.rma_push_alignment_coef = float(rma_push_alignment_coef)
+    self.rma_physics_reconstruction_coef = float(
+      rma_physics_reconstruction_coef
+    )
+    self.rma_push_reconstruction_coef = float(rma_push_reconstruction_coef)
+
+  def _auxiliary_loss(self, observations):
+    base_loss, diagnostics = super()._auxiliary_loss(observations)
+    actor_latents = getattr(self.actor, "rma_latents", None)
+    critic_latents = getattr(self.critic, "rma_latents", None)
+    reconstruction_losses = getattr(self.critic, "reconstruction_losses", None)
+    if not callable(actor_latents) or not callable(critic_latents):
+      raise TypeError("SPV6RmaPPO requires actor and critic RMA latent methods")
+    if not callable(reconstruction_losses):
+      raise TypeError("SPV6RmaPPO requires critic reconstruction_losses()")
+    actor_global, actor_sensor, actor_push = actor_latents(observations)
+    critic_global, critic_sensor, critic_push = critic_latents(observations)
+    global_alignment = (
+      actor_global - critic_global.detach()
+    ).square().mean()
+    sensor_alignment = (
+      actor_sensor - critic_sensor.detach()
+    ).square().mean()
+    push_alignment = (actor_push - critic_push.detach()).square().mean()
+    physics_reconstruction, push_reconstruction, recon_diagnostics = (
+      reconstruction_losses(observations)
+    )
+    rma_loss = (
+      self.rma_global_alignment_coef * global_alignment
+      + self.rma_sensor_alignment_coef * sensor_alignment
+      + self.rma_push_alignment_coef * push_alignment
+      + self.rma_physics_reconstruction_coef * physics_reconstruction
+      + self.rma_push_reconstruction_coef * push_reconstruction
+    )
+    diagnostics.update(recon_diagnostics)
+    diagnostics.update(
+      {
+        "rma_alignment_global": global_alignment,
+        "rma_alignment_sensor": sensor_alignment,
+        "rma_alignment_push": push_alignment,
+        "rma_latent_global_std": critic_global.std(),
+        "rma_latent_sensor_std": critic_sensor.std(),
+        "rma_latent_push_std": critic_push.std(),
+      }
+    )
+    return base_loss + rma_loss, diagnostics
+
+
 def _schedule_value(schedule, progress: float) -> float:
   if isinstance(schedule, (int, float)):
     return float(schedule)

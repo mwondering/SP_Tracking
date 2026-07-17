@@ -128,6 +128,11 @@ TASK_SPECS = (
     "SPTracking-G1-BFM-SPV5Actor-HEFTCritic-HEFTReward",
     ("task=tracking_bfm_spv5_actor_heft_critic_heft_reward",),
   ),
+  TaskSpec(
+    "tracking_bfm_spv6_actor_heft_critic_heft_reward",
+    "SPTracking-G1-BFM-SPV6Actor-HEFTCritic-HEFTReward",
+    ("task=tracking_bfm_spv6_actor_heft_critic_heft_reward",),
+  ),
 )
 
 TASK_BY_CONFIG_NAME = {spec.config_name: spec for spec in TASK_SPECS}

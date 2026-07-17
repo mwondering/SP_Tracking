@@ -455,6 +455,9 @@ class SPV5ReferenceEncoderActor(SPV3EstimatorActor):
     policy_history_length: int = SPV2_POLICY_HISTORY_LENGTH,
     reference_fps: float = 50.0,
     keypoint_specs: Sequence[dict[str, Any]] = (),
+    extra_actor_groups: Sequence[str] = (),
+    extra_policy_input_dim: int = 0,
+    raw_actor_obs_extra_dim: int = 0,
   ) -> None:
     del actor_core_group
     self.robot_root_quat_group = str(robot_root_quat_group)
@@ -480,8 +483,11 @@ class SPV5ReferenceEncoderActor(SPV3EstimatorActor):
       extra_actor_groups=(
         self.reference_encoder_input_group,
         self.robot_key_body_group,
+        *(str(name) for name in extra_actor_groups),
       ),
-      extra_policy_input_dim=3 * SPV4_KEY_BODY_STATE_DIM,
+      extra_policy_input_dim=(
+        3 * SPV4_KEY_BODY_STATE_DIM + int(extra_policy_input_dim)
+      ),
       actor_core_expected_dim=SPV5_ROBOT_ROOT_QUAT_DIM,
     )
     expected_sizes = {
@@ -501,10 +507,11 @@ class SPV5ReferenceEncoderActor(SPV3EstimatorActor):
         f"SPV5 reference target has {target_dim} values, "
         f"expected {SPV5_REFERENCE_TARGET_DIM}"
       )
-    if self.obs_dim != SPV5_RAW_ACTOR_OBS_DIM:
+    expected_raw_obs_dim = SPV5_RAW_ACTOR_OBS_DIM + int(raw_actor_obs_extra_dim)
+    if self.obs_dim != expected_raw_obs_dim:
       raise RuntimeError(
         f"SPV5 raw actor observation has {self.obs_dim} values, "
-        f"expected {SPV5_RAW_ACTOR_OBS_DIM}"
+        f"expected {expected_raw_obs_dim}"
       )
 
     self.reference_input_normalizer = _identity_or_normalizer(
