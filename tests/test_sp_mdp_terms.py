@@ -118,6 +118,10 @@ def test_substep_cache_matches_source_joint_and_contact_aggregation() -> None:
   assert torch.equal(current, torch.tensor([[True, False]]))
   assert torch.equal(first_contact, torch.tensor([[True, False]]))
   assert torch.equal(first_air, torch.tensor([[False, False]]))
+  assert torch.equal(
+    sp_mdp.feet_contact_binary_state(env, "contact_forces"),
+    torch.tensor([[1.0, 0.0]]),
+  )
   assert torch.allclose(sp_mdp.joint_vel_l2(env), torch.tensor([-31.25]))
 
 

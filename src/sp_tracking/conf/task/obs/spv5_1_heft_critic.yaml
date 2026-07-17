@@ -1,0 +1,14 @@
+defaults:
+  - spv5_heft_critic
+  - _self_
+
+observations:
+  # Simulation-only classifier target.  It is retained in rollout storage for
+  # the auxiliary BCE loss but is absent from both actor and critic obs_groups.
+  foot_contact_target:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: feet_in_contact
+        term: feet_contact_binary_state
+        params: {sensor_name: contact_forces}

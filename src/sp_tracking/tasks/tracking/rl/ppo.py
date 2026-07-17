@@ -558,6 +558,87 @@ class SPV5ReferenceEncoderPPO(SPV3EstimatorPPO):
     )
 
 
+class SPV51ContactEstimatorPPO(SPV5ReferenceEncoderPPO):
+  """SPV5 objectives plus binary left/right foot-contact supervision."""
+
+  @staticmethod
+  def construct_algorithm(obs, env, cfg: dict, device: str):
+    from .spv5_1_models import (
+      SPV5_1_POLICY_CONTEXT_CACHE_DIM,
+      SPV5_1_POLICY_CONTEXT_CACHE_GROUP,
+    )
+
+    cache_device = obs.device
+    if cache_device is None:
+      cache_device = next(iter(obs.values())).device
+    obs.set(
+      SPV5_1_POLICY_CONTEXT_CACHE_GROUP,
+      torch.zeros(
+        (*obs.batch_size, SPV5_1_POLICY_CONTEXT_CACHE_DIM),
+        device=cache_device,
+      ),
+    )
+    algorithm = PPO.construct_algorithm(obs, env, cfg, device)
+    populate = getattr(algorithm.actor, "populate_policy_context_cache", None)
+    if not callable(populate):
+      raise TypeError(
+        "SPV51ContactEstimatorPPO requires an actor with "
+        "populate_policy_context_cache()"
+      )
+    populate(obs)
+    return algorithm
+
+  def __init__(
+    self,
+    *args,
+    estimator_foot_contact_loss_coef: float = 0.1,
+    **kwargs,
+  ) -> None:
+    super().__init__(*args, **kwargs)
+    self.estimator_foot_contact_loss_coef = float(
+      estimator_foot_contact_loss_coef
+    )
+
+  def _auxiliary_loss(
+    self, observations
+  ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    estimator_losses = getattr(
+      self.actor, "estimator_contact_losses", None
+    )
+    if not callable(estimator_losses):
+      raise TypeError(
+        "SPV51ContactEstimatorPPO requires an actor with "
+        "estimator_contact_losses()"
+      )
+    height_mse, lin_vel_mse, contact_bce, contact_diagnostics = (
+      estimator_losses(observations)
+    )
+    estimator_loss = (
+      self.estimator_root_height_loss_coef * height_mse
+      + self.estimator_root_lin_vel_loss_coef * lin_vel_mse
+      + self.estimator_foot_contact_loss_coef * contact_bce
+    )
+
+    reference_losses = getattr(self.actor, "reference_encoder_losses", None)
+    if not callable(reference_losses):
+      raise TypeError(
+        "SPV51ContactEstimatorPPO requires an actor with "
+        "reference_encoder_losses()"
+      )
+    reference_loss, reference_diagnostics = reference_losses(observations)
+    diagnostics = {
+      "estimator_root_height_mse": height_mse,
+      "estimator_root_lin_vel_mse": lin_vel_mse,
+      "estimator_foot_contact_bce": contact_bce,
+      **contact_diagnostics,
+      **reference_diagnostics,
+    }
+    return (
+      estimator_loss + self.reference_encoder_loss_coef * reference_loss,
+      diagnostics,
+    )
+
+
 class SPV6RmaPPO(SPV5ReferenceEncoderPPO):
   """SPV5 objectives plus asymmetric RMA alignment and reconstruction."""
 

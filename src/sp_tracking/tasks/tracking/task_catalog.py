@@ -129,6 +129,11 @@ TASK_SPECS = (
     ("task=tracking_bfm_spv5_actor_heft_critic_heft_reward",),
   ),
   TaskSpec(
+    "tracking_bfm_spv5_1_actor_heft_critic_heft_reward",
+    "SPTracking-G1-BFM-SPV5-1Actor-HEFTCritic-HEFTReward",
+    ("task=tracking_bfm_spv5_1_actor_heft_critic_heft_reward",),
+  ),
+  TaskSpec(
     "tracking_bfm_spv6_actor_heft_critic_heft_reward",
     "SPTracking-G1-BFM-SPV6Actor-HEFTCritic-HEFTReward",
     ("task=tracking_bfm_spv6_actor_heft_critic_heft_reward",),

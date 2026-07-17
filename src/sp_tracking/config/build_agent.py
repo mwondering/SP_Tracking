@@ -81,6 +81,11 @@ class SPV5ReferenceEncoderActorCfg(SPV3EstimatorActorCfg):
 
 
 @dataclass
+class SPV51ContactEstimatorActorCfg(SPV5ReferenceEncoderActorCfg):
+  foot_contact_target_group: str = "foot_contact_target"
+
+
+@dataclass
 class SPV6RmaActorCfg(SPV5ReferenceEncoderActorCfg):
   rma_physics_nominal_group: str = "rma_physics_nominal"
   rma_global_latent_dim: int = 8
@@ -119,6 +124,13 @@ class SPV3EstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
 @dataclass
 class SPV5ReferenceEncoderPpoAlgorithmCfg(SPV3EstimatorPpoAlgorithmCfg):
   reference_encoder_loss_coef: float = 1.0
+
+
+@dataclass
+class SPV51ContactEstimatorPpoAlgorithmCfg(
+  SPV5ReferenceEncoderPpoAlgorithmCfg
+):
+  estimator_foot_contact_loss_coef: float = 0.1
 
 
 @dataclass
@@ -167,6 +179,8 @@ def build_agent_cfg(
     actor_cls = SPV3EstimatorActorCfg
   elif actor_class_name.endswith(":SPV4KeyBodyActor"):
     actor_cls = SPV4KeyBodyActorCfg
+  elif actor_class_name.endswith(":SPV51ContactEstimatorActor"):
+    actor_cls = SPV51ContactEstimatorActorCfg
   elif actor_class_name.endswith(":SPV5ReferenceEncoderActor"):
     actor_cls = SPV5ReferenceEncoderActorCfg
   elif actor_class_name.endswith(":SPV6RmaActor"):
@@ -193,6 +207,8 @@ def build_agent_cfg(
     algorithm_cls = HeftTeacherPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV6RmaPPO"):
     algorithm_cls = SPV6RmaPpoAlgorithmCfg
+  elif algorithm_class_name.endswith(":SPV51ContactEstimatorPPO"):
+    algorithm_cls = SPV51ContactEstimatorPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV3EstimatorPPO"):
     algorithm_cls = SPV3EstimatorPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV5ReferenceEncoderPPO"):
@@ -238,6 +254,7 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
         ":SPV3EstimatorActor",
         ":SPV4KeyBodyActor",
         ":SPV5ReferenceEncoderActor",
+        ":SPV51ContactEstimatorActor",
         ":SPV6RmaActor",
         ":SPV6RmaCritic",
         ":SPV61DirectActor",

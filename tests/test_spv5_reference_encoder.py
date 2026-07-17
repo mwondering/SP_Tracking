@@ -26,7 +26,16 @@ from sp_tracking.tasks.tracking.rl.spv5_models import (
   SPV5ReferenceKinematics,
   _support_angvel_from_quat,
 )
-from sp_tracking.tasks.tracking.rl.ppo import SPV5ReferenceEncoderPPO
+from sp_tracking.tasks.tracking.rl.spv5_1_models import (
+  SPV5_1_POLICY_CONTEXT_CACHE_DIM,
+  SPV5_1_POLICY_CONTEXT_CACHE_GROUP,
+  SPV5_1_POLICY_INPUT_DIM,
+  SPV51ContactEstimatorActor,
+)
+from sp_tracking.tasks.tracking.rl.ppo import (
+  SPV5ReferenceEncoderPPO,
+  SPV51ContactEstimatorPPO,
+)
 
 
 KEYPOINT_SPECS = (
@@ -104,6 +113,39 @@ def _actor(obs: TensorDict) -> SPV5ReferenceEncoderActor:
     3,
     hidden_dims=(32, 16),
     estimator_hidden_dims=(16, 8),
+    reference_encoder_hidden_dims=(32, 16),
+    obs_normalization=False,
+    distribution_cfg={
+      "class_name": "GaussianDistribution",
+      "init_std": 1.0,
+      "std_type": "scalar",
+    },
+    keypoint_specs=KEYPOINT_SPECS,
+  )
+
+
+def _spv5_1_observations(num_envs: int = 2) -> TensorDict:
+  obs = _observations(num_envs)
+  target = torch.tensor((1.0, 0.0)).repeat(num_envs, 1)
+  obs.set("foot_contact_target", target)
+  return obs
+
+
+def _spv5_1_actor(obs: TensorDict) -> SPV51ContactEstimatorActor:
+  return SPV51ContactEstimatorActor(
+    obs,
+    {
+      "actor": [
+        "robot_root_quat",
+        "estimator_history",
+        "reference_encoder_input",
+        "robot_key_body",
+      ]
+    },
+    "actor",
+    3,
+    hidden_dims=(32, 16),
+    estimator_hidden_dims=(16, 8, 4),
     reference_encoder_hidden_dims=(32, 16),
     obs_normalization=False,
     distribution_cfg={
@@ -318,3 +360,107 @@ def test_spv5_task_exposes_only_encoded_reference_to_actor() -> None:
   assert "actor_core" not in env.observations
   assert "ref_key_body" not in env.observations
   assert "key_body_error" not in env.observations
+
+
+def test_spv5_1_contact_estimator_cache_policy_and_export_contract() -> None:
+  obs = _spv5_1_observations()
+  actor = _spv5_1_actor(obs)
+
+  root, contact_logits = actor.estimate_root_and_contact(obs)
+  assert root.shape == (2, 4)
+  assert contact_logits.shape == (2, 2)
+  assert actor.get_latent(obs).shape == (2, SPV5_1_POLICY_INPUT_DIM)
+  uncached_output = actor(obs)
+
+  context = actor.populate_policy_context_cache(obs)
+  assert context.shape == (2, SPV5_1_POLICY_CONTEXT_CACHE_DIM)
+  assert SPV5_1_POLICY_CONTEXT_CACHE_GROUP in obs
+  torch.testing.assert_close(actor(obs), uncached_output)
+
+  flat = torch.cat([obs[name] for name in actor.obs_groups], dim=-1)
+  exported = actor.as_onnx()
+  assert exported.get_dummy_inputs()[0].shape == (1, SPV5_RAW_ACTOR_OBS_DIM)
+  torch.testing.assert_close(exported(flat), uncached_output)
+
+
+def test_spv5_1_contact_estimator_losses_train_both_heads_only_explicitly() -> None:
+  obs = _spv5_1_observations()
+  actor = _spv5_1_actor(obs)
+
+  actor.zero_grad()
+  actor(obs).sum().backward()
+  assert all(parameter.grad is None for parameter in actor.estimator.parameters())
+
+  actor.zero_grad()
+  height_mse, lin_vel_mse, contact_bce, diagnostics = (
+    actor.estimator_contact_losses(obs)
+  )
+  (height_mse + lin_vel_mse + contact_bce).backward()
+  assert any(
+    parameter.grad is not None
+    for parameter in actor.estimator.shared_backbone.parameters()
+  )
+  assert any(
+    parameter.grad is not None
+    for parameter in actor.estimator.root_head.parameters()
+  )
+  assert any(
+    parameter.grad is not None
+    for parameter in actor.estimator.contact_head.parameters()
+  )
+  assert set(diagnostics) == {
+    "estimator_foot_contact_accuracy",
+    "estimator_foot_contact_precision",
+    "estimator_foot_contact_recall",
+    "estimator_foot_contact_f1",
+    "estimator_foot_contact_target_rate",
+    "estimator_foot_contact_pred_rate",
+  }
+
+
+def test_spv5_1_ppo_reports_contact_classification_terms() -> None:
+  obs = _spv5_1_observations()
+  actor = _spv5_1_actor(obs)
+  algorithm = object.__new__(SPV51ContactEstimatorPPO)
+  algorithm.actor = actor
+  algorithm.estimator_root_height_loss_coef = 1.0
+  algorithm.estimator_root_lin_vel_loss_coef = 1.0
+  algorithm.estimator_foot_contact_loss_coef = 0.1
+  algorithm.reference_encoder_loss_coef = 1.0
+
+  total, diagnostics = algorithm._auxiliary_loss(obs)
+
+  assert total.ndim == 0
+  assert "estimator_foot_contact_bce" in diagnostics
+  assert "estimator_foot_contact_accuracy" in diagnostics
+  assert "estimator_root_height_mse" in diagnostics
+  assert "reference_encoder_mse" in diagnostics
+
+
+def test_spv5_1_task_adds_only_a_simulation_contact_target() -> None:
+  with initialize_config_module(
+    version_base=None, config_module="sp_tracking.conf"
+  ):
+    cfg = compose(
+      config_name="train",
+      overrides=["task=tracking_bfm_spv5_1_actor_heft_critic_heft_reward"],
+    )
+  prepared = prepare_train_cfg(cfg)
+  env = build_env_cfg(cfg.task)
+
+  assert "foot_contact_target" in env.observations
+  assert "foot_contact_target" not in prepared.agent.obs_groups["actor"]
+  assert "foot_contact_target" not in prepared.agent.obs_groups["critic"]
+  assert prepared.agent.actor.class_name.endswith(
+    ":SPV51ContactEstimatorActor"
+  )
+  assert prepared.agent.actor.foot_contact_target_group == (
+    "foot_contact_target"
+  )
+  assert prepared.agent.algorithm.class_name.endswith(
+    ":SPV51ContactEstimatorPPO"
+  )
+  assert prepared.agent.algorithm.estimator_foot_contact_loss_coef == 0.1
+  assert env.events["base_com"].mode == "startup"
+  assert env.events["base_mass"].mode == "startup"
+  assert env.events["foot_friction"].mode == "startup"

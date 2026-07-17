@@ -1145,6 +1145,36 @@ def feet_contact_state(
   )
 
 
+def feet_contact_binary_state(
+  env: "ManagerBasedRlEnv", sensor_name: str
+) -> torch.Tensor:
+  """Return one binary supervision target for each SP foot.
+
+  Prefer the control-step majority vote collected by ``substep_tracking_cache``
+  so the target uses the same physical samples as the proprioceptive history.
+  The contact sensor fallback keeps the term usable in task variants that do
+  not install that optional cache.
+  """
+  cache = _substep_cache(env)
+  if cache is not None:
+    in_contact, _, _ = cache.contact_state()
+  else:
+    sensor: ContactSensor = env.scene[sensor_name]
+    contact_time = sensor.data.current_contact_time
+    if contact_time is None:
+      raise RuntimeError(
+        "feet_contact_binary_state requires contact timing data"
+      )
+    in_contact = contact_time > env.physics_dt
+  expected = (env.num_envs, len(SP_FEET_BODY_NAMES))
+  if in_contact.shape != expected:
+    raise RuntimeError(
+      "feet_contact_binary_state must contain one value per SP foot; "
+      f"expected={expected}, got={tuple(in_contact.shape)}"
+    )
+  return in_contact.float()
+
+
 def target_feet_contact_state_obs(
   env: "ManagerBasedRlEnv", command_name: str
 ) -> torch.Tensor:

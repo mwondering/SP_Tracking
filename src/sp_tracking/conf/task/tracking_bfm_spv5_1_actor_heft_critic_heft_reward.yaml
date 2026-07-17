@@ -1,0 +1,19 @@
+defaults:
+  - tracking_bfm_spv5_actor_heft_critic_heft_reward
+  - override obs: spv5_1_heft_critic
+  - _self_
+
+name: tracking_bfm_spv5_1_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv5_1_contact_estimator_actor_heft_critic
+
+# SPV5-1 keeps SPV5's startup DR and reference encoder unchanged.  The only
+# extra actor information is the two contact probabilities inferred from the
+# existing 50-frame proprioceptive/torque history.
+agent_overrides:
+  actor:
+    class_name: sp_tracking.tasks.tracking.rl.spv5_1_models:SPV51ContactEstimatorActor
+    foot_contact_target_group: foot_contact_target
+  algorithm:
+    class_name: sp_tracking.tasks.tracking.rl.ppo:SPV51ContactEstimatorPPO
+    estimator_foot_contact_loss_coef: 0.1

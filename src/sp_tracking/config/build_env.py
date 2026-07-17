@@ -94,6 +94,7 @@ OBS_TERMS = {
   "body_z_termination_obs": sp_mdp.body_z_termination_obs,
   "gravity_dir_termination_obs": sp_mdp.gravity_dir_termination_obs,
   "feet_contact_state": sp_mdp.feet_contact_state,
+  "feet_contact_binary_state": sp_mdp.feet_contact_binary_state,
   "target_feet_contact_state_obs": sp_mdp.target_feet_contact_state_obs,
   "domain_motor_params_implicit": sp_mdp.domain_motor_params_implicit,
   "domain_perturb_body_materials": sp_mdp.domain_perturb_body_materials,
