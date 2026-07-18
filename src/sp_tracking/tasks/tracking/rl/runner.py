@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import sqlite3
 import time
 from pathlib import Path
 from typing import Iterable, cast
@@ -643,6 +644,7 @@ class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     # which is insufficient to rebuild observations/rewards for local play.
     self.checkpoint_cfg = checkpoint_cfg
     self._launch_script_artifact_uploaded = False
+    self._gradient_diagnostics_db: sqlite3.Connection | None = None
     self._nonfinite_tracer = (
       _FirstNonfiniteSimulationTracer(self.env) if debug_nonfinite_state else None
     )
@@ -750,6 +752,140 @@ class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     record_mean = getattr(action_term, "record_policy_mean", None)
     if callable(record_mean):
       record_mean(mean)
+
+  def _gradient_diagnostics_connection(
+    self, records: list[dict[str, int | float | None]]
+  ) -> sqlite3.Connection | None:
+    if self.gpu_global_rank != 0 or not records or self.logger.log_dir is None:
+      return None
+    if self._gradient_diagnostics_db is not None:
+      return self._gradient_diagnostics_db
+    database_path = Path(self.logger.log_dir) / "gradient_diagnostics.sqlite"
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(database_path)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA synchronous=NORMAL")
+    columns = ["iteration", *records[0].keys()]
+    definitions = []
+    for column in columns:
+      sql_type = (
+        "INTEGER"
+        if column in {
+          "iteration",
+          "global_update_step",
+          "learning_epoch",
+          "minibatch_index",
+          "simple_sample_count",
+          "hard_sample_count",
+        }
+        else "REAL"
+      )
+      primary = " PRIMARY KEY" if column == "global_update_step" else ""
+      definitions.append(f'"{column}" {sql_type}{primary}')
+    connection.execute(
+      "CREATE TABLE IF NOT EXISTS minibatch_gradients "
+      f"({', '.join(definitions)})"
+    )
+    connection.execute(
+      "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)"
+    )
+    connection.execute(
+      "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
+      ("schema_version", "1"),
+    )
+    connection.commit()
+    self._gradient_diagnostics_db = connection
+    return connection
+
+  @staticmethod
+  def _gradient_diagnostics_summary(
+    records: list[dict[str, int | float | None]],
+  ) -> dict[str, dict[str, float]]:
+    if not records:
+      return {}
+    ignored = {"global_update_step", "learning_epoch", "minibatch_index"}
+    summary: dict[str, dict[str, float]] = {}
+    for key in records[0]:
+      if key in ignored:
+        continue
+      values = [
+        float(record[key])
+        for record in records
+        if record.get(key) is not None and math.isfinite(float(record[key]))
+      ]
+      if not values:
+        continue
+      tensor = torch.tensor(values, dtype=torch.float64)
+      summary[key] = {
+        "mean": float(tensor.mean().item()),
+        "std": float(tensor.std(unbiased=False).item()),
+        "min": float(tensor.min().item()),
+        "max": float(tensor.max().item()),
+      }
+    return summary
+
+  def _flush_policy_gradient_diagnostics(
+    self, iteration: int
+  ) -> dict[str, dict[str, float]]:
+    drain = getattr(self.alg, "drain_gradient_diagnostics", None)
+    if not callable(drain):
+      return {}
+    records = drain()
+    if self.gpu_global_rank != 0 or not records:
+      return {}
+    connection = self._gradient_diagnostics_connection(records)
+    if connection is not None:
+      columns = ["iteration", *records[0].keys()]
+      quoted_columns = ", ".join(f'"{column}"' for column in columns)
+      placeholders = ", ".join("?" for _ in columns)
+      rows = [
+        (iteration, *(record[column] for column in records[0].keys()))
+        for record in records
+      ]
+      with connection:
+        connection.executemany(
+          "INSERT OR REPLACE INTO minibatch_gradients "
+          f"({quoted_columns}) VALUES ({placeholders})",
+          rows,
+        )
+    summary = self._gradient_diagnostics_summary(records)
+    writer = self.logger.writer
+    if writer is not None:
+      for metric, aggregates in summary.items():
+        for statistic, value in aggregates.items():
+          writer.add_scalar(
+            f"GradientDiagnostics/{metric}/{statistic}", value, iteration
+          )
+    return summary
+
+  @staticmethod
+  def _print_policy_gradient_summary(
+    iteration: int, summary: dict[str, dict[str, float]]
+  ) -> None:
+    if not summary:
+      return
+
+    def mean(name: str) -> float:
+      return summary.get(name, {}).get("mean", float("nan"))
+
+    print(
+      "Gradient diagnostics "
+      f"iteration={iteration} "
+      f"actor_norm(simple/hard)={mean('actor_simple_grad_norm'):.4g}/"
+      f"{mean('actor_hard_grad_norm'):.4g} "
+      f"actor_cos={mean('actor_grad_cosine'):.4f} "
+      f"critic_norm(simple/hard)={mean('critic_simple_grad_norm'):.4g}/"
+      f"{mean('critic_hard_grad_norm'):.4g} "
+      f"critic_cos={mean('critic_grad_cosine'):.4f}",
+      flush=True,
+    )
+
+  def _close_gradient_diagnostics(self) -> None:
+    if self._gradient_diagnostics_db is None:
+      return
+    self._gradient_diagnostics_db.commit()
+    self._gradient_diagnostics_db.close()
+    self._gradient_diagnostics_db = None
 
   def _write_large_dataset_snapshot(self, iteration: int) -> None:
     unwrapped_env = getattr(self.env, "unwrapped", None)
@@ -972,6 +1108,7 @@ class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
       _bootstrap_debug(f"iteration {it}: before alg.update")
       loss_dict = self.alg.update()
       _bootstrap_debug(f"iteration {it}: after alg.update")
+      gradient_diagnostics_summary = self._flush_policy_gradient_diagnostics(it)
 
       stop = time.time()
       learn_time = stop - start
@@ -993,6 +1130,7 @@ class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
       self._log_large_dataset_timing(
         it=it, collect_time=collect_time, learn_time=learn_time
       )
+      self._print_policy_gradient_summary(it, gradient_diagnostics_summary)
 
       if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
         _bootstrap_debug(f"iteration {it}: before save")
@@ -1002,6 +1140,8 @@ class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     if self.logger.writer is not None:
       _bootstrap_debug("before final save")
       self.save(os.path.join(self.logger.log_dir, "checkpoint_final.pt"))
+    self._close_gradient_diagnostics()
+    if self.logger.writer is not None:
       self.logger.stop_logging_writer()
       _bootstrap_debug("after final save")
     _bootstrap_debug("learn done")

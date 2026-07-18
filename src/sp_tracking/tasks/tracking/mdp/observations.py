@@ -50,6 +50,29 @@ def _anchor_pose(
   )
 
 
+def gradient_test_motion_label(
+  env: ManagerBasedRlEnv, command_name: str
+) -> torch.Tensor:
+  """Return the behavior-time simple/hard label without policy exposure."""
+  command = cast(MotionCommand, env.command_manager.get_term(command_name))
+  label = getattr(command, "gradient_test_motion_label", None)
+  if not isinstance(label, torch.Tensor):
+    raise RuntimeError(
+      "gradient_test_motion_label requires a gradient-test motion command"
+    )
+  return label.to(dtype=torch.float32).unsqueeze(-1)
+
+
+def gradient_test_motion_phase(
+  env: ManagerBasedRlEnv, command_name: str
+) -> torch.Tensor:
+  """Return normalized phase for later within-motion conflict analysis."""
+  command = cast(MotionCommand, env.command_manager.get_term(command_name))
+  denominator = (command.motion_length - 1).clamp_min(1).to(torch.float32)
+  phase = command.time_steps.to(torch.float32) / denominator
+  return phase.clamp(0.0, 1.0).unsqueeze(-1)
+
+
 def reference_joint_state_window(
   env: ManagerBasedRlEnv,
   command_name: str,

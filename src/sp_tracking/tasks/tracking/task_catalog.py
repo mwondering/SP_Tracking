@@ -15,6 +15,7 @@ class TaskSpec:
   config_name: str
   task_id: TaskId
   hydra_overrides: tuple[str, ...]
+  is_experiment: bool = False
 
 
 TASK_SPECS = (
@@ -147,6 +148,12 @@ TASK_SPECS = (
     "tracking_bfm_spv6_0_actor_heft_critic_heft_reward",
     "SPTracking-G1-BFM-SPV6-0Actor-HEFTCritic-HEFTReward",
     ("task=tracking_bfm_spv6_0_actor_heft_critic_heft_reward",),
+  ),
+  TaskSpec(
+    "test_policy_gradients",
+    "SPTracking-G1-TestPolicyGradients",
+    ("task=test_policy_gradients",),
+    is_experiment=True,
   ),
 )
 

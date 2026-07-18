@@ -370,7 +370,11 @@ def test_onnx_export_keeps_original_input_contract(tmp_path) -> None:
   assert output_path.with_suffix(".json").is_file()
 
 
-@pytest.mark.parametrize("task_spec", TASK_SPECS, ids=lambda spec: spec.config_name)
+@pytest.mark.parametrize(
+  "task_spec",
+  [spec for spec in TASK_SPECS if not spec.is_experiment],
+  ids=lambda spec: spec.config_name,
+)
 def test_every_catalog_task_accepts_the_same_sapg_switch(task_spec) -> None:
   overrides = [
     *task_spec.hydra_overrides,

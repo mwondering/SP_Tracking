@@ -108,6 +108,11 @@ their previous model, optimizer and update paths. Configuration, algorithm
 semantics, checkpoint behavior and current limitations are documented in
 [docs/sapg.md](docs/sapg.md).
 
+The two-motion SPV5 gradient-conflict experiment is available as
+`SPTracking-G1-TestPolicyGradients`. Its three-run protocol, exact gradient
+definitions, SQLite schema, and analysis guidance are documented in
+[docs/policy_gradient_diagnostics.md](docs/policy_gradient_diagnostics.md).
+
 The three observation ablations use the BFM XML and add only the reference
 caches, semantic keypoint views, contact sensing, and policy-mean history needed
 to construct HEFT observations. They retain the BFM MLP actor family, PPO/Adam,
@@ -147,6 +152,7 @@ profile.
 | `SPTracking-G1-BFM-SPV6Actor-HEFTCritic-HEFTReward` | SPV6: SPV5 + actor-inferred 56-D RMA latent from nominal physics and 50-frame proprioception | HEFT base + actual physics/push latent | HEFT | RMA alignment and privileged reconstruction training |
 | `SPTracking-G1-BFM-SPV6-0Actor-HEFTCritic-HEFTReward` | SPV6-0 oracle: SPV5 startup DR + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT | Controlled SPV5 + oracle-information ablation; no DR encoder or reconstruction loss |
 | `SPTracking-G1-BFM-SPV6-1Actor-HEFTCritic-HEFTReward` | SPV6-1 oracle: SPV5 + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT | Diagnostic upper bound; no DR encoder, latent alignment, or reconstruction loss |
+| `SPTracking-G1-TestPolicyGradients` | SPV5 small-network actor plus rollout-only simple/hard label | `policy + priv` small-network critic | HEFT | Two explicit NPZ files; fixed per-rank 50/50 assignment and minibatch gradient diagnostics |
 
 Every BFM-XML task above except the already-HEFT-reward SPV tasks also has an
 additive HEFT-reward variant with the same public naming grammar, for example:

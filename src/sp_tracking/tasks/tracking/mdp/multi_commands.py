@@ -56,6 +56,30 @@ class RewindCfg:
   max_steps: int = 0
 
 
+def gradient_test_motion_assignment(
+  mode: Literal["simple", "hard", "mixed"],
+  env_ids: torch.Tensor,
+  num_envs: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+  """Return loader indices and stable task labels for diagnostic runs."""
+  if mode == "simple":
+    return torch.zeros_like(env_ids), torch.zeros_like(env_ids)
+  if mode == "hard":
+    return torch.zeros_like(env_ids), torch.ones_like(env_ids)
+  if mode != "mixed":
+    raise ValueError(
+      "gradient_test_mode must be one of 'simple', 'hard', or 'mixed', "
+      f"got {mode!r}"
+    )
+  if num_envs % 2:
+    raise ValueError(
+      "mixed gradient diagnostics require an even number of environments "
+      f"per rank, got {num_envs}"
+    )
+  assignment = (env_ids >= num_envs // 2).long()
+  return assignment, assignment
+
+
 def apply_reset_ground_clearance(
   root_pos: torch.Tensor,
   body_pos_w: torch.Tensor,
@@ -667,6 +691,9 @@ class MultiMotionCommand(CommandTerm):
     # 初始化状态变量
     self.time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
     self.motion_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+    self.gradient_test_motion_label = torch.zeros(
+      self.num_envs, dtype=torch.long, device=self.device
+    )
     self.motion_length = torch.zeros(
       self.num_envs, dtype=torch.long, device=self.device
     )
@@ -1354,6 +1381,44 @@ class MultiMotionCommand(CommandTerm):
 
   def _resolve_motion_files(self) -> list[str]:
     """Resolve multi-motion inputs from ``motion_path`` or a single ``motion_file``."""
+    gradient_test_mode = self.cfg.gradient_test_mode
+    if gradient_test_mode is not None:
+      simple_file = os.fspath(self.cfg.gradient_test_simple_motion_file)
+      hard_file = os.fspath(self.cfg.gradient_test_hard_motion_file)
+      if gradient_test_mode not in {"simple", "hard", "mixed"}:
+        raise ValueError(
+          "gradient_test_mode must be one of 'simple', 'hard', or 'mixed', "
+          f"got {gradient_test_mode!r}"
+        )
+      required_files = {
+        "simple": (("simple", simple_file),),
+        "hard": (("hard", hard_file),),
+        "mixed": (("simple", simple_file), ("hard", hard_file)),
+      }[gradient_test_mode]
+      for label, path in required_files:
+        if not path:
+          raise ValueError(f"gradient-test {label} motion file is required")
+        if not os.path.isfile(path):
+          raise FileNotFoundError(
+            f"Invalid gradient-test {label} motion file: {path}"
+          )
+        if not path.lower().endswith(".npz"):
+          raise ValueError(
+            f"gradient-test {label} motion must be a .npz file: {path}"
+          )
+      if gradient_test_mode == "mixed" and os.path.realpath(
+        simple_file
+      ) == os.path.realpath(hard_file):
+        raise ValueError("gradient-test simple and hard motions must be different files")
+      # Every distributed rank must see both tasks.  The normal multi-motion
+      # path shards files by rank, which would make the per-task gradients
+      # undefined on each local PPO minibatch.
+      if gradient_test_mode == "simple":
+        return [simple_file]
+      if gradient_test_mode == "hard":
+        return [hard_file]
+      return [simple_file, hard_file]
+
     motion_path = os.fspath(self.cfg.motion_path)
     motion_file = os.fspath(self.cfg.motion_file)
     if motion_path and motion_file:
@@ -2256,12 +2321,19 @@ class MultiMotionCommand(CommandTerm):
       return
     sample_env_ids = self._prepare_reset_sampling(env_ids)
     if sample_env_ids.numel() > 0:
-      motion_indices = torch.randint(
-        0,
-        self.motion.num_files,
-        (len(sample_env_ids),),
-        device=self.device,
-      )
+      gradient_test_mode = self.cfg.gradient_test_mode
+      if gradient_test_mode is not None:
+        motion_indices, semantic_labels = gradient_test_motion_assignment(
+          gradient_test_mode, sample_env_ids, self.num_envs
+        )
+        self.gradient_test_motion_label[sample_env_ids] = semantic_labels
+      else:
+        motion_indices = torch.randint(
+          0,
+          self.motion.num_files,
+          (len(sample_env_ids),),
+          device=self.device,
+        )
       if self.cfg.sampling_mode == "start":
         self.motion_idx[sample_env_ids] = motion_indices
         self.motion_length[sample_env_ids] = self.motion.file_lengths[motion_indices]
@@ -2455,6 +2527,12 @@ class MultiMotionCommandCfg(CommandTermCfg):
   motion_path: str = ""
   motion_file: str = ""
   extra_reference_motion_file: str = ""
+  # Optional two-motion diagnostic mode.  These fields are inert for every
+  # existing task.  When enabled, each rank loads the same explicit files and
+  # environment-to-motion assignment remains fixed across resets.
+  gradient_test_mode: Literal["simple", "hard", "mixed"] | None = None
+  gradient_test_simple_motion_file: str = ""
+  gradient_test_hard_motion_file: str = ""
   motion_type: Literal["isaaclab", "mujoco"] = "isaaclab"
   fk_from_joint_pos: bool = False
   # Kept separate from body FK so tasks can ablate either preprocessing path.

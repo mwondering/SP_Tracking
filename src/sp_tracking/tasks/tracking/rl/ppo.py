@@ -231,7 +231,12 @@ class SparseTrackSplitLrPPO(PPO):
     mean_symmetry_loss = 0 if self.symmetry else None
     mean_auxiliary_losses: dict[str, torch.Tensor] = {}
 
-    if self.actor.is_recurrent or self.critic.is_recurrent:
+    custom_generator = getattr(
+      self, "_policy_gradient_mini_batch_generator", None
+    )
+    if callable(custom_generator):
+      generator = custom_generator()
+    elif self.actor.is_recurrent or self.critic.is_recurrent:
       generator = self.storage.recurrent_mini_batch_generator(
         self.num_mini_batches,
         self.num_learning_epochs,
@@ -242,7 +247,7 @@ class SparseTrackSplitLrPPO(PPO):
         self.num_learning_epochs,
       )
 
-    for batch in generator:
+    for update_index, batch in enumerate(generator):
       original_batch_size = batch.observations.batch_size[0]
       valid_mask = None
       get_valid_mask = getattr(self, "_heft_valid_mask", None)
@@ -337,12 +342,13 @@ class SparseTrackSplitLrPPO(PPO):
         )
         value_losses = (values - batch.returns).pow(2)
         value_losses_clipped = (value_clipped - batch.returns).pow(2)
-        value_loss = torch.max(value_losses, value_losses_clipped).mean()
+        value_terms = torch.max(value_losses, value_losses_clipped)
+        value_loss = value_terms.mean()
       else:
-        value_errors = (batch.returns - values).pow(2)
+        value_terms = (batch.returns - values).pow(2)
         if valid_mask is not None:
-          value_errors = value_errors * valid_mask
-        value_loss = value_errors.mean()
+          value_terms = value_terms * valid_mask
+        value_loss = value_terms.mean()
       if mirrored_values is not None:
         mirror_targets = batch.returns[:original_batch_size]
         mirror_errors = (mirror_targets - mirrored_values).pow(2)
@@ -350,6 +356,20 @@ class SparseTrackSplitLrPPO(PPO):
           mirror_errors = mirror_errors * valid_mask
         value_loss = 0.5 * (
           value_loss + mirror_errors.mean()
+        )
+
+      diagnose_gradient_batch = getattr(
+        self, "_diagnose_policy_gradient_batch", None
+      )
+      if callable(diagnose_gradient_batch):
+        diagnose_gradient_batch(
+          batch=batch,
+          surrogate_terms=surrogate_terms[:original_batch_size],
+          value_terms=value_terms[:original_batch_size],
+          actions_log_prob=actions_log_prob[:original_batch_size],
+          ratio=ratio[:original_batch_size],
+          entropy=entropy,
+          update_index=update_index,
         )
 
       loss = (

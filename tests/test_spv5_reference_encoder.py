@@ -3,6 +3,7 @@ from __future__ import annotations
 from hydra import compose, initialize_config_module
 import torch
 from rsl_rl.models import MLPModel
+from rsl_rl.storage import RolloutStorage
 from tensordict import TensorDict
 
 from sp_tracking.config.build_env import build_env_cfg
@@ -36,6 +37,9 @@ from sp_tracking.tasks.tracking.rl.spv5_1_models import (
 from sp_tracking.tasks.tracking.rl.ppo import (
   SPV5ReferenceEncoderPPO,
   SPV51ContactEstimatorPPO,
+)
+from sp_tracking.tasks.tracking.rl.policy_gradient_diagnostics import (
+  PolicyGradientDiagnosticsPPO,
 )
 from sp_tracking.tasks.tracking.rl.sapg.conditioning import (
   BlockGaussianDistribution,
@@ -339,6 +343,65 @@ def test_spv5_ppo_reports_estimator_and_reference_mse_terms() -> None:
     "reference_root_rot6d_mse",
     "reference_joint_pos_mse",
   }
+
+
+def test_policy_gradient_diagnostics_runs_inside_full_spv5_ppo_update() -> None:
+  obs = _observations(4)
+  obs.set("critic_obs", torch.randn(4, 5))
+  obs.set(
+    "gradient_motion_label", torch.tensor([[0.0], [0.0], [1.0], [1.0]])
+  )
+  obs.set("gradient_motion_phase", torch.rand(4, 1))
+  actor = _actor(obs)
+  critic = MLPModel(
+    obs,
+    {"critic": ["critic_obs"]},
+    "critic",
+    1,
+    hidden_dims=(16, 8),
+    obs_normalization=False,
+  )
+  storage = RolloutStorage("rl", 4, 1, obs, [3], "cpu")
+  algorithm = PolicyGradientDiagnosticsPPO(
+    actor,
+    critic,
+    storage,
+    device="cpu",
+    num_learning_epochs=1,
+    num_mini_batches=2,
+    learning_rate=1.0e-3,
+    actor_learning_rate=1.0e-3,
+    critic_learning_rate=1.0e-3,
+    estimator_learning_rate=1.0e-4,
+    schedule="fixed",
+    desired_kl=None,
+  )
+  assert set(actor.distribution.parameters()).issubset(
+    set(algorithm._gradient_actor_parameters)
+  )
+  algorithm.act(obs)
+  next_obs = _observations(4)
+  next_obs.set("critic_obs", torch.randn(4, 5))
+  next_obs.set("gradient_motion_label", obs["gradient_motion_label"].clone())
+  next_obs.set("gradient_motion_phase", torch.rand(4, 1))
+  algorithm.process_env_step(
+    next_obs,
+    torch.tensor([1.0, 0.5, -0.25, -0.5]),
+    torch.zeros(4),
+    {},
+  )
+  algorithm.compute_returns(next_obs)
+
+  losses = algorithm.update()
+  records = algorithm.drain_gradient_diagnostics()
+
+  assert losses["estimator_root_height_mse"] >= 0.0
+  assert losses["reference_encoder_mse"] >= 0.0
+  assert len(records) == 2
+  assert all(record["simple_sample_count"] == 1 for record in records)
+  assert all(record["hard_sample_count"] == 1 for record in records)
+  assert all(record["actor_grad_cosine"] is not None for record in records)
+  assert all(record["critic_grad_cosine"] is not None for record in records)
 
 
 def test_spv5_task_exposes_only_encoded_reference_to_actor() -> None:

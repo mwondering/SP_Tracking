@@ -158,7 +158,8 @@ def test_every_catalog_task_matches_declared_semantics() -> None:
   original_catalog_tasks = {
     spec.config_name
     for spec in TASK_SPECS
-    if not spec.config_name.endswith("_heft_reward")
+    if not spec.is_experiment
+    and not spec.config_name.endswith("_heft_reward")
   }
   assert original_catalog_tasks == set(EXPECTED_TASK_SEMANTICS)
 

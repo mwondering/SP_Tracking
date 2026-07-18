@@ -1,5 +1,6 @@
-from pathlib import Path
+import os
 import subprocess
+from pathlib import Path
 
 def test_tracking_bfm_training_script_contract() -> None:
   root = Path(__file__).resolve().parents[1]
@@ -38,6 +39,50 @@ def test_tracking_bfm_multigpu_script_uses_torchrun() -> None:
   assert 'cmd+=("task_id=${TASK_ID}")' in contents
   assert "launch_script_path=" in contents
   assert '"$@"' in contents
+
+
+def test_policy_gradient_launcher_accepts_sp_train_overrides(
+  tmp_path: Path,
+) -> None:
+  root = Path(__file__).resolve().parents[1]
+  script = root / "scripts" / "train_test_policy_gradients.sh"
+  simple = tmp_path / "simple.npz"
+  hard = tmp_path / "hard.npz"
+  simple.touch()
+  hard.touch()
+  environment = os.environ.copy()
+  environment.update(
+    {
+      "SP_TRACKING_DRY_RUN": "1",
+      "SP_TRACKING_GRADIENT_GPU_GROUPS": "0;1;2",
+    }
+  )
+
+  completed = subprocess.run(
+    (
+      str(script),
+      "uv",
+      "run",
+      "sp-train",
+      "task_id=SPTracking-G1-TestPolicyGradients",
+      "task.gradient_test.mode=mixed",
+      f"task.gradient_test.simple_motion_file={simple}",
+      f"task.gradient_test.hard_motion_file={hard}",
+      "agent.run_name=gradient_mixed",
+      "agent.seed=7",
+    ),
+    check=True,
+    capture_output=True,
+    env=environment,
+    text=True,
+  )
+
+  assert completed.stdout.count("task_id=SPTracking-G1-TestPolicyGradients") == 3
+  for index, mode in enumerate(("simple", "hard", "mixed")):
+    assert f"[launcher] {mode} GPUs={index}" in completed.stdout
+    assert f"task.gradient_test.mode={mode}" in completed.stdout
+    assert f"agent.run_name=gradient_{mode}" in completed.stdout
+  assert completed.stdout.count("agent.seed=7") == 3
 
 
 def test_tracking_bfm_play_script_contract() -> None:

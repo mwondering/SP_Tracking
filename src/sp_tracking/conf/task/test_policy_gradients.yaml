@@ -1,0 +1,58 @@
+defaults:
+  - tracking_bfm_spv5_actor_heft_critic_heft_reward
+  - _self_
+
+name: test_policy_gradients
+num_envs: 16384
+
+gradient_test:
+  mode: mixed
+  simple_motion_file: ""
+  hard_motion_file: ""
+
+# Preserve the SPV5 observation/reward/termination contract while making the
+# two task identities a rollout-only diagnostic side channel.
+obs:
+  observations:
+    gradient_motion_label:
+      concatenate_terms: true
+      enable_corruption: false
+      terms:
+        - name: label
+          term: gradient_test_motion_label
+          params: {command_name: motion}
+    gradient_motion_phase:
+      concatenate_terms: true
+      enable_corruption: false
+      terms:
+        - name: phase
+          term: gradient_test_motion_phase
+          params: {command_name: motion}
+
+command:
+  command:
+    gradient_test_mode: ${task.gradient_test.mode}
+    gradient_test_simple_motion_file: ${task.gradient_test.simple_motion_file}
+    gradient_test_hard_motion_file: ${task.gradient_test.hard_motion_file}
+    sampling_mode: uniform
+    adaptive_pre_failure_sample_window_steps: 0
+    rewind:
+      enabled: false
+
+agent_overrides:
+  max_iterations: 300000
+  actor:
+    hidden_dims: [512, 256, 128]
+    estimator_hidden_dims: [512, 256, 128]
+    reference_encoder_hidden_dims: [512, 256, 128]
+  critic:
+    hidden_dims: [512, 256, 128]
+  algorithm:
+    class_name: sp_tracking.tasks.tracking.rl.policy_gradient_diagnostics:PolicyGradientDiagnosticsPPO
+    # Smaller minibatches keep the four diagnostic autograd passes tractable
+    # with 16,384 environments per rank.
+    num_mini_batches: 16
+    gradient_motion_label_group: gradient_motion_label
+    gradient_motion_phase_group: gradient_motion_phase
+    gradient_stratified_minibatches: true
+    gradient_diagnostics_eps: 1.0e-12

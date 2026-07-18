@@ -61,6 +61,8 @@ OBS_TERMS = {
   "motion_ref_ang_vel": mdp.motion_ref_ang_vel,
   "motion_anchor_pos_b": mdp.motion_anchor_pos_b,
   "motion_anchor_ori_b": mdp.motion_anchor_ori_b,
+  "gradient_test_motion_label": mdp.gradient_test_motion_label,
+  "gradient_test_motion_phase": mdp.gradient_test_motion_phase,
   "robot_body_pos_b": mdp.robot_body_pos_b,
   "robot_body_ori_b": mdp.robot_body_ori_b,
   "builtin_sensor": mjlab_mdp.builtin_sensor,
@@ -328,6 +330,17 @@ def _build_command(cfg: DictConfig):
     "motion_path": str(command_cfg.get("motion_path", "")),
     "motion_file": str(command_cfg.get("motion_file", "")),
     "extra_reference_motion_file": str(command_cfg.get("extra_reference_motion_file", "")),
+    "gradient_test_mode": (
+      str(command_cfg.gradient_test_mode)
+      if command_cfg.get("gradient_test_mode") is not None
+      else None
+    ),
+    "gradient_test_simple_motion_file": str(
+      command_cfg.get("gradient_test_simple_motion_file", "")
+    ),
+    "gradient_test_hard_motion_file": str(
+      command_cfg.get("gradient_test_hard_motion_file", "")
+    ),
     "motion_type": str(command_cfg.motion_type),
     "fk_from_joint_pos": bool(command_cfg.get("fk_from_joint_pos", False)),
     "recompute_joint_vel_from_joint_pos": bool(

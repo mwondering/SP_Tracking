@@ -134,6 +134,16 @@ class SPV5ReferenceEncoderPpoAlgorithmCfg(SPV3EstimatorPpoAlgorithmCfg):
 
 
 @dataclass
+class PolicyGradientDiagnosticsPpoAlgorithmCfg(
+  SPV5ReferenceEncoderPpoAlgorithmCfg
+):
+  gradient_motion_label_group: str = "gradient_motion_label"
+  gradient_motion_phase_group: str = "gradient_motion_phase"
+  gradient_stratified_minibatches: bool = True
+  gradient_diagnostics_eps: float = 1.0e-12
+
+
+@dataclass
 class SPV51ContactEstimatorPpoAlgorithmCfg(
   SPV5ReferenceEncoderPpoAlgorithmCfg
 ):
@@ -219,6 +229,8 @@ def build_agent_cfg(
     algorithm_data["class_name"] = algorithm_class_name
   if algorithm_class_name.endswith(":HeftTeacherPPO"):
     algorithm_cls = HeftTeacherPpoAlgorithmCfg
+  elif algorithm_class_name.endswith(":PolicyGradientDiagnosticsPPO"):
+    algorithm_cls = PolicyGradientDiagnosticsPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV6RmaPPO"):
     algorithm_cls = SPV6RmaPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV51ContactEstimatorPPO"):

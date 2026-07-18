@@ -53,7 +53,8 @@ def test_every_non_sp_task_has_a_registered_heft_reward_variant() -> None:
   original_names = {
     spec.config_name
     for spec in TASK_SPECS
-    if not spec.config_name.endswith("_heft_reward")
+    if not spec.is_experiment
+    and not spec.config_name.endswith("_heft_reward")
   }
   assert original_names == {
     "tracking_bfm",
