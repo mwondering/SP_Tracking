@@ -93,6 +93,17 @@ class SPV51ContactEstimatorActorCfg(SPV5ReferenceEncoderActorCfg):
 
 
 @dataclass
+class SPV51ContactEstimatorMoEActorCfg(SPV51ContactEstimatorActorCfg):
+  moe_context_hidden_dim: int = 1285
+  moe_hidden_dim: int = 256
+  moe_num_experts: int = 16
+  moe_top_k: int = 8
+  moe_expansion: int = 4
+  moe_router_temperature: float = 1.0
+  moe_router_init_std: float = 1.0e-2
+
+
+@dataclass
 class SPV6RmaActorCfg(SPV5ReferenceEncoderActorCfg):
   rma_physics_nominal_group: str = "rma_physics_nominal"
   rma_global_latent_dim: int = 8
@@ -151,6 +162,17 @@ class SPV51ContactEstimatorPpoAlgorithmCfg(
 
 
 @dataclass
+class SPV51ContactEstimatorMoEPpoAlgorithmCfg(
+  SPV51ContactEstimatorPpoAlgorithmCfg
+):
+  moe_balance_loss_coef: float = 3.0e-3
+  moe_confidence_loss_coef: float = 3.0e-4
+  moe_confidence_warmup_updates: int = 5000
+  moe_confidence_ramp_updates: int = 10000
+  moe_collect_chunk_size: int = 4096
+
+
+@dataclass
 class SPV6RmaPpoAlgorithmCfg(SPV5ReferenceEncoderPpoAlgorithmCfg):
   rma_global_alignment_coef: float = 1.0
   rma_sensor_alignment_coef: float = 0.5
@@ -196,6 +218,8 @@ def build_agent_cfg(
     actor_cls = SPV3EstimatorActorCfg
   elif actor_class_name.endswith(":SPV4KeyBodyActor"):
     actor_cls = SPV4KeyBodyActorCfg
+  elif actor_class_name.endswith(":SPV51ContactEstimatorMoEActor"):
+    actor_cls = SPV51ContactEstimatorMoEActorCfg
   elif actor_class_name.endswith(":SPV51ContactEstimatorActor"):
     actor_cls = SPV51ContactEstimatorActorCfg
   elif actor_class_name.endswith(":SPV5ReferenceEncoderActor"):
@@ -233,6 +257,8 @@ def build_agent_cfg(
     algorithm_cls = PolicyGradientDiagnosticsPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV6RmaPPO"):
     algorithm_cls = SPV6RmaPpoAlgorithmCfg
+  elif algorithm_class_name.endswith(":SPV51ContactEstimatorMoEPPO"):
+    algorithm_cls = SPV51ContactEstimatorMoEPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV51ContactEstimatorPPO"):
     algorithm_cls = SPV51ContactEstimatorPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV3EstimatorPPO"):
@@ -288,6 +314,7 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
         ":SPV4KeyBodyActor",
         ":SPV5ReferenceEncoderActor",
         ":SPV51ContactEstimatorActor",
+        ":SPV51ContactEstimatorMoEActor",
         ":SPV6RmaActor",
         ":SPV6RmaCritic",
         ":SPV61DirectActor",

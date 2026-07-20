@@ -29,6 +29,7 @@ from .spv5_models import (
   _pack_reference_cache,
   _spv5_policy_features,
 )
+from .residual_moe import ObservationConditionedResidualMoE
 
 
 SPV5_1_CONTACT_DIM = 2
@@ -336,6 +337,56 @@ class SPV51ContactEstimatorActor(SPV5ReferenceEncoderActor):
 
   def as_jit(self) -> nn.Module:
     return _SPV51ActorExport(self)
+
+
+class SPV51ContactEstimatorMoEActor(SPV51ContactEstimatorActor):
+  """SPV5-1 actor whose policy MLP is replaced by a residual MoE core."""
+
+  def __init__(
+    self,
+    obs: TensorDict,
+    obs_groups: dict[str, list[str]],
+    obs_set: str,
+    output_dim: int,
+    *,
+    moe_context_hidden_dim: int = 1285,
+    moe_hidden_dim: int = 256,
+    moe_num_experts: int = 16,
+    moe_top_k: int = 8,
+    moe_expansion: int = 4,
+    moe_router_temperature: float = 1.0,
+    moe_router_init_std: float = 1.0e-2,
+    **kwargs,
+  ) -> None:
+    super().__init__(obs, obs_groups, obs_set, output_dim, **kwargs)
+    baseline_parameter_count = sum(
+      parameter.numel() for parameter in self.mlp.parameters()
+    )
+    policy_output_dim = (
+      self.distribution.input_dim
+      if self.distribution is not None
+      else int(output_dim)
+    )
+    self.mlp = ObservationConditionedResidualMoE(
+      self.policy_input_dim,
+      policy_output_dim,
+      context_hidden_dim=moe_context_hidden_dim,
+      hidden_dim=moe_hidden_dim,
+      num_experts=moe_num_experts,
+      top_k=moe_top_k,
+      expansion=moe_expansion,
+      router_temperature=moe_router_temperature,
+      router_init_std=moe_router_init_std,
+    )
+    self.baseline_policy_parameter_count = baseline_parameter_count
+
+  def routing_probabilities(self, obs: TensorDict) -> torch.Tensor:
+    """Return dense probabilities over all experts for routing losses."""
+    return self.mlp.routing_probabilities(self.get_latent(obs))
+
+  @property
+  def moe_policy_parameter_count(self) -> int:
+    return self.mlp.dense_parameter_count
 
 
 class _SPV51ActorExport(_SPV5ActorExport):

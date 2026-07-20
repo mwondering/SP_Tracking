@@ -1,0 +1,28 @@
+defaults:
+  - tracking_bfm_spv5_1_actor_heft_critic_heft_reward
+  - _self_
+
+name: tracking_bfm_spv5_1_moe_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv5_1_contact_estimator_residual_moe_actor_heft_critic
+
+# Equal-parameter residual MoE validation profile.  The deployable SPV5-1
+# observation contract and supervised contact estimator remain unchanged;
+# only the policy MLP and its PPO-side routing regularizers are replaced.
+agent_overrides:
+  actor:
+    class_name: sp_tracking.tasks.tracking.rl.spv5_1_models:SPV51ContactEstimatorMoEActor
+    moe_context_hidden_dim: 1285
+    moe_hidden_dim: 256
+    moe_num_experts: 16
+    moe_top_k: 8
+    moe_expansion: 4
+    moe_router_temperature: 1.0
+    moe_router_init_std: 0.01
+  algorithm:
+    class_name: sp_tracking.tasks.tracking.rl.ppo:SPV51ContactEstimatorMoEPPO
+    moe_balance_loss_coef: 0.003
+    moe_confidence_loss_coef: 0.0003
+    moe_confidence_warmup_updates: 5000
+    moe_confidence_ramp_updates: 10000
+    moe_collect_chunk_size: 4096

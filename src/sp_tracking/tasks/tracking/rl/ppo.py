@@ -230,6 +230,13 @@ class SparseTrackSplitLrPPO(PPO):
     mean_rnd_loss = 0 if self.rnd else None
     mean_symmetry_loss = 0 if self.symmetry else None
     mean_auxiliary_losses: dict[str, torch.Tensor] = {}
+    collect_auxiliary_metrics: dict[str, torch.Tensor] = {}
+
+    prepare_collect_auxiliary = getattr(
+      self, "_prepare_collect_auxiliary_loss", None
+    )
+    if callable(prepare_collect_auxiliary):
+      collect_auxiliary_metrics = prepare_collect_auxiliary()
 
     custom_generator = getattr(
       self, "_policy_gradient_mini_batch_generator", None
@@ -419,6 +426,11 @@ class SparseTrackSplitLrPPO(PPO):
       )
       if callable(zero_auxiliary_optimizers):
         zero_auxiliary_optimizers()
+      backward_collect_auxiliary = getattr(
+        self, "_backward_collect_auxiliary_loss", None
+      )
+      if update_index == 0 and callable(backward_collect_auxiliary):
+        backward_collect_auxiliary()
       loss.backward()
       if self.rnd:
         self.rnd.optimizer.zero_grad()
@@ -472,6 +484,8 @@ class SparseTrackSplitLrPPO(PPO):
       )
     for name, total in mean_auxiliary_losses.items():
       loss_dict[name] = float((total / num_updates).item())
+    for name, value in collect_auxiliary_metrics.items():
+      loss_dict[name] = float(value.detach().item())
 
     self.storage.clear()
     return loss_dict
@@ -735,6 +749,175 @@ class SPV51ContactEstimatorPPO(SPV5ReferenceEncoderPPO):
       estimator_loss + self.reference_encoder_loss_coef * reference_loss,
       diagnostics,
     )
+
+
+class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
+  """SPV5-1 supervision plus collect-level residual-MoE routing losses."""
+
+  _MOE_ROUTER_STATE_KEY = "spv5_1_moe_router_state"
+
+  def __init__(
+    self,
+    *args,
+    moe_balance_loss_coef: float = 3.0e-3,
+    moe_confidence_loss_coef: float = 3.0e-4,
+    moe_confidence_warmup_updates: int = 5000,
+    moe_confidence_ramp_updates: int = 10000,
+    moe_collect_chunk_size: int = 4096,
+    **kwargs,
+  ) -> None:
+    super().__init__(*args, **kwargs)
+    if hasattr(self, "_sapg_runtime"):
+      raise ValueError("SPV5-1 residual MoE does not support SAPG")
+    if moe_balance_loss_coef < 0.0 or moe_confidence_loss_coef < 0.0:
+      raise ValueError("MoE routing loss coefficients must be non-negative")
+    if moe_confidence_warmup_updates < 0:
+      raise ValueError("MoE confidence warm-up must be non-negative")
+    if moe_confidence_ramp_updates < 0:
+      raise ValueError("MoE confidence ramp must be non-negative")
+    if moe_collect_chunk_size <= 0:
+      raise ValueError("MoE collect chunk size must be positive")
+    routing_probabilities = getattr(self.actor, "routing_probabilities", None)
+    if not callable(routing_probabilities):
+      raise TypeError(
+        "SPV51ContactEstimatorMoEPPO requires an actor with "
+        "routing_probabilities()"
+      )
+
+    self.moe_balance_loss_coef = float(moe_balance_loss_coef)
+    self.moe_confidence_loss_coef = float(moe_confidence_loss_coef)
+    self.moe_confidence_warmup_updates = int(
+      moe_confidence_warmup_updates
+    )
+    self.moe_confidence_ramp_updates = int(moe_confidence_ramp_updates)
+    self.moe_collect_chunk_size = int(moe_collect_chunk_size)
+    self.moe_update_count = 0
+    self._moe_balance_gradient: torch.Tensor | None = None
+    self._moe_balance_global_count = 0.0
+
+  def _confidence_coefficient(self) -> float:
+    if self.moe_update_count < self.moe_confidence_warmup_updates:
+      return 0.0
+    if self.moe_confidence_ramp_updates == 0:
+      return self.moe_confidence_loss_coef
+    progress = (
+      self.moe_update_count - self.moe_confidence_warmup_updates
+    ) / self.moe_confidence_ramp_updates
+    return self.moe_confidence_loss_coef * min(max(progress, 0.0), 1.0)
+
+  def _auxiliary_loss(
+    self, observations
+  ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    base_loss, diagnostics = super()._auxiliary_loss(observations)
+    probabilities = self.actor.routing_probabilities(observations)
+    safe_probabilities = probabilities.clamp_min(1.0e-8)
+    entropy = -(
+      probabilities * safe_probabilities.log()
+    ).sum(dim=-1).mean()
+    confidence_coefficient = self._confidence_coefficient()
+    diagnostics.update(
+      {
+        "router_entropy": entropy,
+        "router_top1_probability": probabilities.max(dim=-1).values.mean(),
+        "router_confidence_coef": entropy.new_tensor(
+          confidence_coefficient
+        ),
+      }
+    )
+    return base_loss + confidence_coefficient * entropy, diagnostics
+
+  def _collect_observation_chunks(self):
+    steps = int(getattr(self.storage, "step", 0))
+    if steps <= 0:
+      raise RuntimeError("Cannot compute MoE balance loss from an empty rollout")
+    observations = self.storage.observations[:steps].flatten(0, 1)
+    total = int(observations.batch_size[0])
+    for start in range(0, total, self.moe_collect_chunk_size):
+      yield observations[start : start + self.moe_collect_chunk_size]
+
+  @torch.no_grad()
+  def _prepare_collect_auxiliary_loss(self) -> dict[str, torch.Tensor]:
+    local_sum: torch.Tensor | None = None
+    local_count = 0
+    for observations in self._collect_observation_chunks():
+      probabilities = self.actor.routing_probabilities(observations)
+      chunk_sum = probabilities.sum(dim=0, dtype=torch.float64)
+      local_sum = chunk_sum if local_sum is None else local_sum + chunk_sum
+      local_count += int(probabilities.shape[0])
+    if local_sum is None or local_count == 0:
+      raise RuntimeError("MoE collect contains no routing probabilities")
+
+    packed = torch.cat(
+      (local_sum, local_sum.new_tensor((float(local_count),)))
+    )
+    if self.is_multi_gpu:
+      torch.distributed.all_reduce(packed, op=torch.distributed.ReduceOp.SUM)
+    global_sum = packed[:-1]
+    global_count = packed[-1]
+    mean_probability = global_sum / global_count
+    safe_mean = mean_probability.clamp_min(1.0e-12)
+    num_experts = int(mean_probability.numel())
+    log_uniform = -mean_probability.new_tensor(float(num_experts)).log()
+    balance_kl = (
+      mean_probability * (safe_mean.log() - log_uniform)
+    ).sum()
+
+    # For KL(mean(q) || uniform), dL/dmean(q) is log(mean(q)/U)+1.
+    # Keeping this small vector allows exact chunked backpropagation without
+    # retaining the entire rollout's context-encoder graph in memory.
+    self._moe_balance_gradient = (
+      safe_mean.log() - log_uniform + 1.0
+    ).to(dtype=next(self.actor.parameters()).dtype)
+    self._moe_balance_global_count = float(global_count.item())
+    usage_entropy = -(mean_probability * safe_mean.log()).sum()
+    return {
+      "router_balance_kl": balance_kl,
+      "router_effective_experts": usage_entropy.exp(),
+      "router_collect_usage_min": mean_probability.min(),
+      "router_collect_usage_max": mean_probability.max(),
+    }
+
+  def _backward_collect_auxiliary_loss(self) -> None:
+    if self.moe_balance_loss_coef == 0.0:
+      return
+    if self._moe_balance_gradient is None:
+      raise RuntimeError("MoE balance statistics were not prepared")
+    if self._moe_balance_global_count <= 0.0:
+      raise RuntimeError("MoE global collect count must be positive")
+
+    world_size = self.gpu_world_size if self.is_multi_gpu else 1
+    scale = (
+      self.moe_balance_loss_coef
+      * float(world_size)
+      / self._moe_balance_global_count
+    )
+    gradient = self._moe_balance_gradient
+    for observations in self._collect_observation_chunks():
+      probabilities = self.actor.routing_probabilities(observations)
+      surrogate = scale * (probabilities * gradient).sum()
+      surrogate.backward()
+    self._moe_balance_gradient = None
+    self._moe_balance_global_count = 0.0
+
+  def update(self) -> dict[str, float]:
+    result = super().update()
+    self.moe_update_count += 1
+    result["router_update_count"] = float(self.moe_update_count)
+    return result
+
+  def save(self) -> dict:
+    saved_dict = super().save()
+    saved_dict[self._MOE_ROUTER_STATE_KEY] = {
+      "update_count": int(self.moe_update_count),
+    }
+    return saved_dict
+
+  def load(self, loaded_dict: dict, load_cfg: dict | None, strict: bool) -> bool:
+    load_iteration = super().load(loaded_dict, load_cfg, strict)
+    state = loaded_dict.get(self._MOE_ROUTER_STATE_KEY, {})
+    if isinstance(state, dict):
+      self.moe_update_count = int(state.get("update_count", 0))
+    return load_iteration
 
 
 class SPV6RmaPPO(SPV5ReferenceEncoderPPO):

@@ -33,6 +33,7 @@ from sp_tracking.tasks.tracking.rl.spv5_1_models import (
   SPV5_1_POLICY_CONTEXT_CACHE_GROUP,
   SPV5_1_POLICY_INPUT_DIM,
   SPV51ContactEstimatorActor,
+  SPV51ContactEstimatorMoEActor,
 )
 from sp_tracking.tasks.tracking.rl.ppo import (
   SPV5ReferenceEncoderPPO,
@@ -158,6 +159,37 @@ def _spv5_1_actor(obs: TensorDict) -> SPV51ContactEstimatorActor:
     hidden_dims=(32, 16),
     estimator_hidden_dims=(16, 8, 4),
     reference_encoder_hidden_dims=(32, 16),
+    obs_normalization=False,
+    distribution_cfg={
+      "class_name": "GaussianDistribution",
+      "init_std": 1.0,
+      "std_type": "scalar",
+    },
+    keypoint_specs=KEYPOINT_SPECS,
+  )
+
+
+def _spv5_1_moe_actor(obs: TensorDict) -> SPV51ContactEstimatorMoEActor:
+  return SPV51ContactEstimatorMoEActor(
+    obs,
+    {
+      "actor": [
+        "robot_root_quat",
+        "estimator_history",
+        "reference_encoder_input",
+        "robot_key_body",
+      ]
+    },
+    "actor",
+    3,
+    hidden_dims=(32, 16),
+    estimator_hidden_dims=(16, 8, 4),
+    reference_encoder_hidden_dims=(32, 16),
+    moe_context_hidden_dim=16,
+    moe_hidden_dim=8,
+    moe_num_experts=4,
+    moe_top_k=2,
+    moe_expansion=2,
     obs_normalization=False,
     distribution_cfg={
       "class_name": "GaussianDistribution",
@@ -477,6 +509,34 @@ def test_spv5_1_contact_estimator_cache_policy_and_export_contract() -> None:
   exported = actor.as_onnx()
   assert exported.get_dummy_inputs()[0].shape == (1, SPV5_RAW_ACTOR_OBS_DIM)
   torch.testing.assert_close(exported(flat), uncached_output)
+
+
+def test_spv5_1_moe_preserves_cache_policy_and_export_contract(tmp_path) -> None:
+  obs = _spv5_1_observations()
+  actor = _spv5_1_moe_actor(obs)
+
+  probabilities = actor.routing_probabilities(obs)
+  assert probabilities.shape == (2, 4)
+  torch.testing.assert_close(probabilities.sum(dim=-1), torch.ones(2))
+  uncached_output = actor(obs)
+
+  actor.populate_policy_context_cache(obs)
+  torch.testing.assert_close(actor(obs), uncached_output)
+
+  flat = torch.cat([obs[name] for name in actor.obs_groups], dim=-1)
+  exported = actor.as_onnx()
+  torch.testing.assert_close(exported(flat), uncached_output)
+  onnx_path = tmp_path / "spv5_1_moe.onnx"
+  torch.onnx.export(
+    exported,
+    (flat[:1],),
+    str(onnx_path),
+    opset_version=18,
+    input_names=exported.input_names,
+    output_names=exported.output_names,
+    dynamo=False,
+  )
+  assert onnx_path.is_file()
 
 
 def test_spv5_1_contact_estimator_losses_train_both_heads_only_explicitly() -> None:
