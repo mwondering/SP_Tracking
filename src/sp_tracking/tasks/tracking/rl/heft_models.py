@@ -12,6 +12,9 @@ from rsl_rl.modules.distribution import GaussianDistribution
 from rsl_rl.utils import unpad_trajectories
 from tensordict import TensorDict
 
+from .residual_moe import ObservationConditionedResidualMoE
+
+
 def _make_mlp(input_dim: int, hidden_dims: Sequence[int], output_dim: int) -> nn.Sequential:
   layers: list[nn.Module] = []
   current = int(input_dim)
@@ -216,6 +219,67 @@ class HeftTeacherCritic(_HeftModelBase):
 
   def adamw_only_parameters(self):
     return self.mlp[-1].parameters()
+
+
+class HeftTeacherMoECritic(HeftTeacherCritic):
+  """HEFT critic whose value MLP is replaced by a residual MoE core."""
+
+  def __init__(
+    self,
+    obs: TensorDict,
+    obs_groups: dict[str, list[str]],
+    obs_set: str,
+    output_dim: int,
+    hidden_dims: Sequence[int] = (1024, 512, 512),
+    activation: str = "mish",
+    obs_normalization: bool = True,
+    distribution_cfg: dict | None = None,
+    vecnorm_decay: float = 0.9999,
+    moe_context_hidden_dim: int = 1472,
+    moe_hidden_dim: int = 608,
+    moe_num_experts: int = 8,
+    moe_top_k: int = 2,
+    moe_expansion: int = 4,
+    moe_router_temperature: float = 1.5,
+    moe_router_init_std: float = 1.0e-2,
+    moe_output_init_gain: float = 1.0e-2,
+  ) -> None:
+    del hidden_dims
+    super().__init__(
+      obs,
+      obs_groups,
+      obs_set,
+      output_dim,
+      hidden_dims=(),
+      activation=activation,
+      obs_normalization=obs_normalization,
+      distribution_cfg=distribution_cfg,
+      vecnorm_decay=vecnorm_decay,
+    )
+    self.mlp = ObservationConditionedResidualMoE(
+      self.obs_dim,
+      output_dim,
+      context_hidden_dim=moe_context_hidden_dim,
+      hidden_dim=moe_hidden_dim,
+      num_experts=moe_num_experts,
+      top_k=moe_top_k,
+      expansion=moe_expansion,
+      router_temperature=moe_router_temperature,
+      router_init_std=moe_router_init_std,
+      output_init_gain=moe_output_init_gain,
+    )
+
+  def routing_probabilities(self, obs: TensorDict) -> torch.Tensor:
+    """Return dense probabilities over all experts for routing losses."""
+    normalized = self.obs_normalizer(self._flat_obs(obs))
+    return self.mlp.routing_probabilities(normalized)
+
+  @property
+  def moe_value_parameter_count(self) -> int:
+    return self.mlp.dense_parameter_count
+
+  def adamw_only_parameters(self):
+    return self.mlp.output.parameters()
 
 
 class _HeftActorExport(nn.Module):

@@ -58,6 +58,18 @@ class HeftTeacherCriticCfg(RslRlModelCfg):
 
 
 @dataclass
+class HeftTeacherMoECriticCfg(HeftTeacherCriticCfg):
+  moe_context_hidden_dim: int = 1472
+  moe_hidden_dim: int = 608
+  moe_num_experts: int = 8
+  moe_top_k: int = 2
+  moe_expansion: int = 4
+  moe_router_temperature: float = 1.5
+  moe_router_init_std: float = 1.0e-2
+  moe_output_init_gain: float = 1.0e-2
+
+
+@dataclass
 class SPV3EstimatorActorCfg(RslRlModelCfg):
   estimator_hidden_dims: tuple[int, ...] = (512, 256, 128)
   estimator_activation: str = "elu"
@@ -167,6 +179,7 @@ class SPV51ContactEstimatorPpoAlgorithmCfg(
 class SPV51ContactEstimatorMoEPpoAlgorithmCfg(
   SPV51ContactEstimatorPpoAlgorithmCfg
 ):
+  moe_target: str = "actor"
   moe_balance_loss_coef: float = 3.0e-3
   moe_confidence_loss_coef: float = 3.0e-4
   moe_confidence_warmup_updates: int = 5000
@@ -237,6 +250,8 @@ def build_agent_cfg(
     critic_cls = SPV6RmaCriticCfg
   elif critic_class_name.endswith(":SPV61DirectCritic"):
     critic_cls = SPV61DirectCriticCfg
+  elif critic_class_name.endswith(":HeftTeacherMoECritic"):
+    critic_cls = HeftTeacherMoECriticCfg
   elif critic_class_name.endswith(":HeftTeacherCritic"):
     critic_cls = HeftTeacherCriticCfg
   else:
@@ -312,6 +327,7 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
       (
         ":HeftTeacherActor",
         ":HeftTeacherCritic",
+        ":HeftTeacherMoECritic",
         ":SPV3EstimatorActor",
         ":SPV4KeyBodyActor",
         ":SPV5ReferenceEncoderActor",

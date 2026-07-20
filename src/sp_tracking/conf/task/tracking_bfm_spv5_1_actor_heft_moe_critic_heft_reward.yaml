@@ -1,0 +1,31 @@
+defaults:
+  - tracking_bfm_spv5_1_actor_heft_critic_heft_reward
+  - _self_
+
+name: tracking_bfm_spv5_1_actor_heft_moe_critic_heft_reward
+variant:
+  observation_profile: spv5_1_contact_estimator_actor_heft_residual_moe_critic
+
+# Critic-only counterpart to the SPV5-1 MoE actor profile.  The deployable
+# actor and its supervised estimators stay unchanged; only the HEFT value MLP
+# and the target of PPO's routing regularizers are replaced.
+agent_overrides:
+  critic:
+    class_name: sp_tracking.tasks.tracking.rl.heft_models:HeftTeacherMoECritic
+    moe_context_hidden_dim: 1472
+    moe_hidden_dim: 608
+    moe_num_experts: 8
+    moe_top_k: 2
+    moe_expansion: 4
+    moe_router_temperature: 1.5
+    moe_router_init_std: 0.01
+    moe_output_init_gain: 0.01
+  algorithm:
+    class_name: sp_tracking.tasks.tracking.rl.ppo:SPV51ContactEstimatorMoEPPO
+    estimator_max_grad_norm: 1.0
+    moe_target: critic
+    moe_balance_loss_coef: 0.01
+    moe_confidence_loss_coef: 0.0
+    moe_confidence_warmup_updates: 5000
+    moe_confidence_ramp_updates: 10000
+    moe_collect_chunk_size: 4096

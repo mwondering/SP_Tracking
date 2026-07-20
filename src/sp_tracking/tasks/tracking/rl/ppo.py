@@ -793,6 +793,7 @@ class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
   def __init__(
     self,
     *args,
+    moe_target: str = "actor",
     moe_balance_loss_coef: float = 1.0e-2,
     moe_confidence_loss_coef: float = 0.0,
     moe_confidence_warmup_updates: int = 5000,
@@ -811,11 +812,16 @@ class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
       raise ValueError("MoE confidence ramp must be non-negative")
     if moe_collect_chunk_size <= 0:
       raise ValueError("MoE collect chunk size must be positive")
-    routing_probabilities = getattr(self.actor, "routing_probabilities", None)
+    self.moe_target = str(moe_target).lower()
+    if self.moe_target not in {"actor", "critic"}:
+      raise ValueError("MoE target must be either 'actor' or 'critic'")
+    routing_probabilities = getattr(
+      self._moe_router_model(), "routing_probabilities", None
+    )
     if not callable(routing_probabilities):
       raise TypeError(
-        "SPV51ContactEstimatorMoEPPO requires an actor with "
-        "routing_probabilities()"
+        "SPV51ContactEstimatorMoEPPO requires its MoE target "
+        f"({self.moe_target}) to define routing_probabilities()"
       )
 
     self.moe_balance_loss_coef = float(moe_balance_loss_coef)
@@ -828,6 +834,11 @@ class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
     self.moe_update_count = 0
     self._moe_balance_gradient: torch.Tensor | None = None
     self._moe_balance_global_count = 0.0
+
+  def _moe_router_model(self) -> nn.Module:
+    if getattr(self, "moe_target", "actor") == "critic":
+      return self.critic
+    return self.actor
 
   def _confidence_coefficient(self) -> float:
     if self.moe_update_count < self.moe_confidence_warmup_updates:
@@ -843,7 +854,9 @@ class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
     self, observations
   ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     base_loss, diagnostics = super()._auxiliary_loss(observations)
-    probabilities = self.actor.routing_probabilities(observations)
+    probabilities = self._moe_router_model().routing_probabilities(
+      observations
+    )
     safe_probabilities = probabilities.clamp_min(1.0e-8)
     entropy = -(
       probabilities * safe_probabilities.log()
@@ -874,7 +887,9 @@ class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
     local_sum: torch.Tensor | None = None
     local_count = 0
     for observations in self._collect_observation_chunks():
-      probabilities = self.actor.routing_probabilities(observations)
+      probabilities = self._moe_router_model().routing_probabilities(
+        observations
+      )
       chunk_sum = probabilities.sum(dim=0, dtype=torch.float64)
       local_sum = chunk_sum if local_sum is None else local_sum + chunk_sum
       local_count += int(probabilities.shape[0])
@@ -901,7 +916,7 @@ class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
     # retaining the entire rollout's context-encoder graph in memory.
     self._moe_balance_gradient = (
       safe_mean.log() - log_uniform + 1.0
-    ).to(dtype=next(self.actor.parameters()).dtype)
+    ).to(dtype=next(self._moe_router_model().parameters()).dtype)
     self._moe_balance_global_count = float(global_count.item())
     usage_entropy = -(mean_probability * safe_mean.log()).sum()
     return {
@@ -927,7 +942,9 @@ class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
     )
     gradient = self._moe_balance_gradient
     for observations in self._collect_observation_chunks():
-      probabilities = self.actor.routing_probabilities(observations)
+      probabilities = self._moe_router_model().routing_probabilities(
+        observations
+      )
       surrogate = scale * (probabilities * gradient).sum()
       surrogate.backward()
     self._moe_balance_gradient = None

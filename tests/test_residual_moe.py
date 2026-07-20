@@ -8,6 +8,7 @@ import torch.nn as nn
 from tensordict import TensorDict
 
 from sp_tracking.scripts.train import prepare_train_cfg
+from sp_tracking.tasks.tracking.rl.heft_models import HeftTeacherMoECritic
 from sp_tracking.tasks.tracking.rl.ppo import SPV51ContactEstimatorMoEPPO
 from sp_tracking.tasks.tracking.rl.residual_moe import (
   LayerNormResidualBlock,
@@ -86,6 +87,32 @@ def test_default_moe_policy_matches_30m_parameter_budget() -> None:
   assert abs(model.dense_parameter_count - target_count) / target_count < 3.0e-3
 
 
+def test_heft_moe_critic_routes_critic_observations() -> None:
+  observations = TensorDict(
+    {
+      "policy": torch.randn(5, 7),
+      "priv": torch.randn(5, 3),
+    },
+    batch_size=[5],
+  )
+  critic = HeftTeacherMoECritic(
+    observations,
+    {"critic": ["policy", "priv"]},
+    "critic",
+    1,
+    moe_context_hidden_dim=12,
+    moe_hidden_dim=8,
+    moe_num_experts=4,
+    moe_top_k=2,
+    moe_expansion=2,
+  )
+
+  probabilities = critic.routing_probabilities(observations)
+  assert critic(observations).shape == (5, 1)
+  assert probabilities.shape == (5, 4)
+  torch.testing.assert_close(probabilities.sum(dim=-1), torch.ones(5))
+
+
 class _ToyRouter(nn.Module):
   def __init__(self) -> None:
     super().__init__()
@@ -156,6 +183,7 @@ def test_collect_balance_loss_chunked_gradient_matches_full_rollout() -> None:
   )
   algorithm = object.__new__(SPV51ContactEstimatorMoEPPO)
   algorithm.actor = actor
+  algorithm.moe_target = "actor"
   algorithm.storage = SimpleNamespace(step=2, observations=observations)
   algorithm.moe_collect_chunk_size = 3
   algorithm.moe_balance_loss_coef = 0.003
@@ -187,6 +215,34 @@ def test_collect_balance_loss_chunked_gradient_matches_full_rollout() -> None:
   )
 
 
+def test_collect_balance_loss_targets_critic_only_when_configured() -> None:
+  observations = TensorDict(
+    {
+      "router_input": torch.tensor(
+        [[[1.0, 0.0], [0.0, 1.0]], [[1.0, 1.0], [-1.0, 0.5]]]
+      )
+    },
+    batch_size=[2, 2],
+  )
+  algorithm = object.__new__(SPV51ContactEstimatorMoEPPO)
+  algorithm.actor = nn.Linear(2, 2)
+  algorithm.critic = _ToyRouter()
+  algorithm.moe_target = "critic"
+  algorithm.storage = SimpleNamespace(step=2, observations=observations)
+  algorithm.moe_collect_chunk_size = 3
+  algorithm.moe_balance_loss_coef = 0.003
+  algorithm.is_multi_gpu = False
+  algorithm.gpu_world_size = 1
+  algorithm._moe_balance_gradient = None
+  algorithm._moe_balance_global_count = 0.0
+
+  algorithm._prepare_collect_auxiliary_loss()
+  algorithm._backward_collect_auxiliary_loss()
+
+  assert algorithm.actor.weight.grad is None
+  assert algorithm.critic.linear.weight.grad is not None
+
+
 def test_confidence_schedule_has_warmup_and_linear_ramp() -> None:
   algorithm = object.__new__(SPV51ContactEstimatorMoEPPO)
   algorithm.moe_confidence_loss_coef = 3.0e-4
@@ -199,6 +255,15 @@ def test_confidence_schedule_has_warmup_and_linear_ramp() -> None:
   assert algorithm._confidence_coefficient() == 1.5e-4
   algorithm.moe_update_count = 15000
   assert algorithm._confidence_coefficient() == 3.0e-4
+
+
+def test_moe_router_target_can_select_critic_only() -> None:
+  algorithm = object.__new__(SPV51ContactEstimatorMoEPPO)
+  algorithm.actor = nn.Linear(2, 2)
+  algorithm.critic = _ToyRouter()
+  algorithm.moe_target = "critic"
+
+  assert algorithm._moe_router_model() is algorithm.critic
 
 
 def test_spv5_1_moe_task_exposes_closed_first_version_config() -> None:
@@ -225,6 +290,39 @@ def test_spv5_1_moe_task_exposes_closed_first_version_config() -> None:
   assert prepared.agent.algorithm.class_name.endswith(
     ":SPV51ContactEstimatorMoEPPO"
   )
+  assert prepared.agent.algorithm.moe_target == "actor"
   assert prepared.agent.algorithm.moe_balance_loss_coef == 0.01
   assert prepared.agent.algorithm.moe_confidence_loss_coef == 0.0
   assert prepared.agent.algorithm.estimator_max_grad_norm == 1.0
+
+
+def test_spv5_1_critic_only_moe_task_keeps_actor_dense() -> None:
+  with initialize_config_module(
+    version_base=None, config_module="sp_tracking.conf"
+  ):
+    cfg = compose(
+      config_name="train",
+      overrides=[
+        "task=tracking_bfm_spv5_1_actor_heft_moe_critic_heft_reward"
+      ],
+    )
+  prepared = prepare_train_cfg(cfg)
+
+  assert prepared.agent.actor.class_name.endswith(
+    ":SPV51ContactEstimatorActor"
+  )
+  assert prepared.agent.critic.class_name.endswith(
+    ":HeftTeacherMoECritic"
+  )
+  assert prepared.agent.critic.moe_num_experts == 8
+  assert prepared.agent.critic.moe_top_k == 2
+  assert prepared.agent.critic.moe_context_hidden_dim == 1472
+  assert prepared.agent.critic.moe_hidden_dim == 608
+  assert prepared.agent.critic.moe_router_temperature == 1.5
+  assert prepared.agent.critic.moe_output_init_gain == 0.01
+  assert prepared.agent.algorithm.class_name.endswith(
+    ":SPV51ContactEstimatorMoEPPO"
+  )
+  assert prepared.agent.algorithm.moe_target == "critic"
+  assert prepared.agent.algorithm.moe_balance_loss_coef == 0.01
+  assert prepared.agent.algorithm.moe_confidence_loss_coef == 0.0

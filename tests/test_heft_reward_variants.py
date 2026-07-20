@@ -47,6 +47,7 @@ SPV_FINETUNE_REWARD_TASKS = (
   "tracking_bfm_spv5_actor_heft_critic_heft_reward",
   "tracking_bfm_spv5_1_actor_heft_critic_heft_reward",
   "tracking_bfm_spv5_1_moe_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv5_1_actor_heft_moe_critic_heft_reward",
   "tracking_bfm_spv6_actor_heft_critic_heft_reward",
   "tracking_bfm_spv6_1_actor_heft_critic_heft_reward",
   "tracking_bfm_spv6_0_actor_heft_critic_heft_reward",
