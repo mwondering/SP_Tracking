@@ -9,6 +9,7 @@ from rsl_rl.utils.log_writer import LogWriter
 from sp_tracking.scripts import train as train_module
 from sp_tracking.scripts.train import (
   _copy_launch_script_to_log_dir,
+  _make_shared_log_dir,
   _resolve_resume_path,
   _resolve_runtime_device,
   _serialize_checkpoint_cfg,
@@ -16,7 +17,10 @@ from sp_tracking.scripts.train import (
   normalize_task_id_argv,
   prepare_train_cfg,
 )
-from sp_tracking.tasks.tracking.rl.runner import _upload_launch_script_artifact
+from sp_tracking.tasks.tracking.rl.runner import (
+  SpTrackingOnPolicyRunner,
+  _upload_launch_script_artifact,
+)
 from sp_tracking.tasks.tracking.task_catalog import (
   TASK_BY_CONFIG_NAME,
   TASK_BY_ID,
@@ -184,6 +188,77 @@ def test_save_resolved_cfg_writes_cfg_and_config(tmp_path: Path) -> None:
   assert (tmp_path / "cfg.yaml").exists()
   assert (tmp_path / "config.yaml").exists()
   assert "num_envs: 4" in (tmp_path / "cfg.yaml").read_text()
+
+
+def test_distributed_ranks_share_rank_zero_log_dir(monkeypatch, tmp_path: Path) -> None:
+  cfg = OmegaConf.create({"log_root": str(tmp_path)})
+  agent_cfg = SimpleNamespace(experiment_name="exp", run_name="test")
+  rank_zero_path = tmp_path / "exp" / "rank-zero-run"
+  generated: list[Path] = []
+  broadcast_value: dict[str, str] = {}
+
+  def make_log_dir(_cfg, _agent_cfg) -> Path:
+    generated.append(rank_zero_path)
+    return rank_zero_path
+
+  def broadcast_object_list(values, src: int) -> None:
+    assert src == 0
+    if values[0] is not None:
+      broadcast_value["path"] = values[0]
+    else:
+      values[0] = broadcast_value["path"]
+
+  monkeypatch.setattr(train_module, "_make_log_dir", make_log_dir)
+  monkeypatch.setattr(
+    train_module.torch.distributed, "is_initialized", lambda: True
+  )
+  monkeypatch.setattr(
+    train_module.torch.distributed,
+    "broadcast_object_list",
+    broadcast_object_list,
+  )
+
+  rank_zero = _make_shared_log_dir(
+    cfg, agent_cfg, rank=0, world_size=4
+  )
+  rank_one = _make_shared_log_dir(
+    cfg, agent_cfg, rank=1, world_size=4
+  )
+
+  assert rank_zero == rank_one == rank_zero_path
+  assert generated == [rank_zero_path]
+
+
+def test_runner_reuses_preinitialized_torchrun_process_group(monkeypatch) -> None:
+  monkeypatch.setenv("WORLD_SIZE", "4")
+  monkeypatch.setenv("RANK", "2")
+  monkeypatch.setenv("LOCAL_RANK", "2")
+  monkeypatch.setattr(
+    train_module.torch.distributed, "is_initialized", lambda: True
+  )
+  monkeypatch.setattr(
+    train_module.torch.distributed, "get_world_size", lambda: 4
+  )
+  monkeypatch.setattr(train_module.torch.distributed, "get_rank", lambda: 2)
+  selected_devices: list[int] = []
+  monkeypatch.setattr(
+    train_module.torch.cuda, "set_device", selected_devices.append
+  )
+
+  runner = object.__new__(SpTrackingOnPolicyRunner)
+  runner.cfg = {}
+  runner.device = "cuda:2"
+  runner._configure_multi_gpu()
+
+  assert runner.gpu_world_size == 4
+  assert runner.gpu_global_rank == 2
+  assert runner.gpu_local_rank == 2
+  assert runner.cfg["multi_gpu"] == {
+    "global_rank": 2,
+    "local_rank": 2,
+    "world_size": 4,
+  }
+  assert selected_devices == [2]
 
 
 def test_serialize_checkpoint_cfg_is_a_resolved_mapping() -> None:

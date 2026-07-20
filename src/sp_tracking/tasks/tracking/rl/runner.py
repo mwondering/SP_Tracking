@@ -625,6 +625,42 @@ def _format_nonfinite_action_diagnostics(env: object, actions: torch.Tensor) -> 
 class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
   env: RslRlVecEnvWrapper
 
+  def _configure_multi_gpu(self) -> None:
+    """Reuse the process group initialized by the training entry point."""
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if world_size <= 1 or not torch.distributed.is_initialized():
+      super()._configure_multi_gpu()
+      return
+
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    global_rank = int(os.environ.get("RANK", "0"))
+    distributed_world_size = torch.distributed.get_world_size()
+    distributed_rank = torch.distributed.get_rank()
+    if distributed_world_size != world_size or distributed_rank != global_rank:
+      raise RuntimeError(
+        "Preinitialized distributed process group does not match torchrun "
+        f"environment: group=({distributed_rank}, {distributed_world_size}), "
+        f"environment=({global_rank}, {world_size})"
+      )
+    if self.device != f"cuda:{local_rank}":
+      raise ValueError(
+        f"Device '{self.device}' does not match expected device for "
+        f"local rank '{local_rank}'."
+      )
+    if local_rank >= world_size or global_rank >= world_size:
+      raise ValueError("Distributed rank must be smaller than world size")
+
+    self.gpu_world_size = world_size
+    self.is_distributed = True
+    self.gpu_local_rank = local_rank
+    self.gpu_global_rank = global_rank
+    self.cfg["multi_gpu"] = {
+      "global_rank": global_rank,
+      "local_rank": local_rank,
+      "world_size": world_size,
+    }
+    torch.cuda.set_device(local_rank)
+
   def __init__(
     self,
     env: VecEnv,

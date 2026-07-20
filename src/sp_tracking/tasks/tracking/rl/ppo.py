@@ -793,8 +793,8 @@ class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
   def __init__(
     self,
     *args,
-    moe_balance_loss_coef: float = 3.0e-3,
-    moe_confidence_loss_coef: float = 3.0e-4,
+    moe_balance_loss_coef: float = 1.0e-2,
+    moe_confidence_loss_coef: float = 0.0,
     moe_confidence_warmup_updates: int = 5000,
     moe_confidence_ramp_updates: int = 10000,
     moe_collect_chunk_size: int = 4096,

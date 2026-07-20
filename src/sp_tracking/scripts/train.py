@@ -10,6 +10,7 @@ from typing import Any
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
+import torch
 
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
@@ -139,6 +140,46 @@ def _make_log_dir(cfg: DictConfig, agent_cfg: RslRlOnPolicyRunnerCfg) -> Path:
   return log_root_path / log_dir_name
 
 
+def _initialize_distributed_runtime(
+  device: str, rank: int, world_size: int
+) -> None:
+  """Initialize torch.distributed before ranks choose a shared log directory."""
+  if world_size <= 1 or torch.distributed.is_initialized():
+    return
+  backend = "nccl" if device.startswith("cuda:") else "gloo"
+  if backend == "nccl":
+    torch.cuda.set_device(int(device.removeprefix("cuda:")))
+  torch.distributed.init_process_group(
+    backend=backend,
+    rank=int(rank),
+    world_size=int(world_size),
+  )
+
+
+def _make_shared_log_dir(
+  cfg: DictConfig,
+  agent_cfg: RslRlOnPolicyRunnerCfg,
+  *,
+  rank: int,
+  world_size: int,
+) -> Path:
+  """Create a timestamped path on rank zero and broadcast it to all ranks."""
+  if world_size <= 1:
+    return _make_log_dir(cfg, agent_cfg)
+  if not torch.distributed.is_initialized():
+    raise RuntimeError(
+      "torch.distributed must be initialized before synchronizing log_dir"
+    )
+  shared_path: list[str | None] = [
+    str(_make_log_dir(cfg, agent_cfg)) if rank == 0 else None
+  ]
+  torch.distributed.broadcast_object_list(shared_path, src=0)
+  value = shared_path[0]
+  if not value:
+    raise RuntimeError("Rank zero did not broadcast a log directory")
+  return Path(value)
+
+
 def _copy_launch_script_to_log_dir(
   log_dir: Path, launch_script_path: str | os.PathLike[str] | None
 ) -> Path | None:
@@ -198,7 +239,7 @@ def _resolve_resume_path(
 
 def run_train(cfg: DictConfig) -> None:
   prepared = prepare_train_cfg(cfg)
-  device, _rank, world_size = _resolve_runtime_device(cfg.get("gpu_ids", [0]))
+  device, rank, world_size = _resolve_runtime_device(cfg.get("gpu_ids", [0]))
   configure_torch_backends()
 
   env = ManagerBasedRlEnv(
@@ -215,11 +256,21 @@ def run_train(cfg: DictConfig) -> None:
     prepared.agent.max_iterations = max(
       int(total_frames) // max(global_frames_per_iteration, 1), 1
     )
-  log_dir = _make_log_dir(cfg, prepared.agent)
-  _save_resolved_cfg(log_dir, cfg)
-  launch_script_artifact_path = _copy_launch_script_to_log_dir(
-    log_dir, cfg.get("launch_script_path")
+  _initialize_distributed_runtime(device, rank, world_size)
+  log_dir = _make_shared_log_dir(
+    cfg,
+    prepared.agent,
+    rank=rank,
+    world_size=world_size,
   )
+  launch_script_artifact_path = None
+  if rank == 0:
+    _save_resolved_cfg(log_dir, cfg)
+    launch_script_artifact_path = _copy_launch_script_to_log_dir(
+      log_dir, cfg.get("launch_script_path")
+    )
+  if world_size > 1:
+    torch.distributed.barrier()
   task_cfg = cfg.get("task", {})
   runner = SpTrackingOnPolicyRunner(
     wrapped_env,

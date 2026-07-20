@@ -78,17 +78,12 @@ def test_moe_action_head_starts_at_baseline_output_scale() -> None:
   )
 
 
-def test_default_moe_policy_matches_spv5_1_mlp_parameter_budget() -> None:
+def test_default_moe_policy_matches_30m_parameter_budget() -> None:
   model = ObservationConditionedResidualMoE(1651, 29)
-  baseline_dims = (1651, 2048, 2048, 1024, 1024, 512, 256, 128, 29)
-  baseline_count = sum(
-    input_dim * output_dim + output_dim
-    for input_dim, output_dim in zip(baseline_dims, baseline_dims[1:])
-  )
+  target_count = 30_000_000
 
-  assert baseline_count == 11_420_189
-  assert model.dense_parameter_count == 11_420_257
-  assert abs(model.dense_parameter_count - baseline_count) / baseline_count < 1.0e-4
+  assert model.dense_parameter_count == 30_080_989
+  assert abs(model.dense_parameter_count - target_count) / target_count < 3.0e-3
 
 
 class _ToyRouter(nn.Module):
@@ -223,11 +218,13 @@ def test_spv5_1_moe_task_exposes_closed_first_version_config() -> None:
   )
   assert prepared.agent.actor.moe_num_experts == 16
   assert prepared.agent.actor.moe_top_k == 8
-  assert prepared.agent.actor.moe_hidden_dim == 256
+  assert prepared.agent.actor.moe_context_hidden_dim == 1280
+  assert prepared.agent.actor.moe_hidden_dim == 448
+  assert prepared.agent.actor.moe_router_temperature == 1.5
   assert prepared.agent.actor.moe_output_init_gain == 0.05
   assert prepared.agent.algorithm.class_name.endswith(
     ":SPV51ContactEstimatorMoEPPO"
   )
-  assert prepared.agent.algorithm.moe_balance_loss_coef == 0.003
-  assert prepared.agent.algorithm.moe_confidence_loss_coef == 0.0003
+  assert prepared.agent.algorithm.moe_balance_loss_coef == 0.01
+  assert prepared.agent.algorithm.moe_confidence_loss_coef == 0.0
   assert prepared.agent.algorithm.estimator_max_grad_norm == 1.0
