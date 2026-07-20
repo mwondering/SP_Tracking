@@ -82,7 +82,7 @@ def test_default_moe_policy_matches_30m_parameter_budget() -> None:
   model = ObservationConditionedResidualMoE(1651, 29)
   target_count = 30_000_000
 
-  assert model.dense_parameter_count == 30_080_989
+  assert model.dense_parameter_count == 30_020_989
   assert abs(model.dense_parameter_count - target_count) / target_count < 3.0e-3
 
 
@@ -216,10 +216,10 @@ def test_spv5_1_moe_task_exposes_closed_first_version_config() -> None:
   assert prepared.agent.actor.class_name.endswith(
     ":SPV51ContactEstimatorMoEActor"
   )
-  assert prepared.agent.actor.moe_num_experts == 16
-  assert prepared.agent.actor.moe_top_k == 8
-  assert prepared.agent.actor.moe_context_hidden_dim == 1280
-  assert prepared.agent.actor.moe_hidden_dim == 448
+  assert prepared.agent.actor.moe_num_experts == 8
+  assert prepared.agent.actor.moe_top_k == 2
+  assert prepared.agent.actor.moe_context_hidden_dim == 1472
+  assert prepared.agent.actor.moe_hidden_dim == 608
   assert prepared.agent.actor.moe_router_temperature == 1.5
   assert prepared.agent.actor.moe_output_init_gain == 0.05
   assert prepared.agent.algorithm.class_name.endswith(

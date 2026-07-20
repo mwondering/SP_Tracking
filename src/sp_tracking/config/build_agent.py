@@ -94,10 +94,10 @@ class SPV51ContactEstimatorActorCfg(SPV5ReferenceEncoderActorCfg):
 
 @dataclass
 class SPV51ContactEstimatorMoEActorCfg(SPV51ContactEstimatorActorCfg):
-  moe_context_hidden_dim: int = 1280
-  moe_hidden_dim: int = 448
-  moe_num_experts: int = 16
-  moe_top_k: int = 8
+  moe_context_hidden_dim: int = 1472
+  moe_hidden_dim: int = 608
+  moe_num_experts: int = 8
+  moe_top_k: int = 2
   moe_expansion: int = 4
   moe_router_temperature: float = 1.5
   moe_router_init_std: float = 1.0e-2

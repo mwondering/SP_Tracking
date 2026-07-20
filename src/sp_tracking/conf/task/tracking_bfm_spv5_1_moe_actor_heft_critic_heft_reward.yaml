@@ -12,10 +12,10 @@ variant:
 agent_overrides:
   actor:
     class_name: sp_tracking.tasks.tracking.rl.spv5_1_models:SPV51ContactEstimatorMoEActor
-    moe_context_hidden_dim: 1280
-    moe_hidden_dim: 448
-    moe_num_experts: 16
-    moe_top_k: 8
+    moe_context_hidden_dim: 1472
+    moe_hidden_dim: 608
+    moe_num_experts: 8
+    moe_top_k: 2
     moe_expansion: 4
     moe_router_temperature: 1.5
     moe_router_init_std: 0.01
