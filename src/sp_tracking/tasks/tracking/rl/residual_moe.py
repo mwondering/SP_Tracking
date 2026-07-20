@@ -70,6 +70,7 @@ class ObservationConditionedResidualMoE(nn.Module):
     expansion: int = 4,
     router_temperature: float = 1.0,
     router_init_std: float = 1.0e-2,
+    output_init_gain: float = 5.0e-2,
   ) -> None:
     super().__init__()
     input_dim = int(input_dim)
@@ -91,6 +92,8 @@ class ObservationConditionedResidualMoE(nn.Module):
       raise ValueError("router_temperature must be positive")
     if router_init_std <= 0.0:
       raise ValueError("router_init_std must be positive")
+    if output_init_gain <= 0.0:
+      raise ValueError("output_init_gain must be positive")
 
     self.input_dim = input_dim
     self.output_dim = output_dim
@@ -120,6 +123,11 @@ class ObservationConditionedResidualMoE(nn.Module):
     # initial state.  A small random router keeps q close to uniform while
     # allowing the selected set to vary with observation content.
     nn.init.normal_(self.router.weight, mean=0.0, std=float(router_init_std))
+    # RMSNorm fixes the feature RMS near one.  Default Linear initialization
+    # would therefore produce action means roughly ten times wider than the
+    # original SPV5-1 MLP.  Match the baseline startup scale explicitly.
+    nn.init.orthogonal_(self.output.weight, gain=float(output_init_gain))
+    nn.init.zeros_(self.output.bias)
 
   def _shared_features(self, value: torch.Tensor) -> torch.Tensor:
     return self.shared_block(self.context_encoder(value))

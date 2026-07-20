@@ -356,6 +356,7 @@ class SPV51ContactEstimatorMoEActor(SPV51ContactEstimatorActor):
     moe_expansion: int = 4,
     moe_router_temperature: float = 1.0,
     moe_router_init_std: float = 1.0e-2,
+    moe_output_init_gain: float = 5.0e-2,
     **kwargs,
   ) -> None:
     super().__init__(obs, obs_groups, obs_set, output_dim, **kwargs)
@@ -377,6 +378,7 @@ class SPV51ContactEstimatorMoEActor(SPV51ContactEstimatorActor):
       expansion=moe_expansion,
       router_temperature=moe_router_temperature,
       router_init_std=moe_router_init_std,
+      output_init_gain=moe_output_init_gain,
     )
     self.baseline_policy_parameter_count = baseline_parameter_count
 

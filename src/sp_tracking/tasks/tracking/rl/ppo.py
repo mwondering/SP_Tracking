@@ -440,8 +440,21 @@ class SparseTrackSplitLrPPO(PPO):
       if self.is_multi_gpu:
         self.reduce_parameters()
 
-      nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+      actor_parameters_for_clipping = getattr(
+        self, "_actor_parameters_for_gradient_clipping", None
+      )
+      actor_parameters = (
+        actor_parameters_for_clipping()
+        if callable(actor_parameters_for_clipping)
+        else self.actor.parameters()
+      )
+      nn.utils.clip_grad_norm_(actor_parameters, self.max_grad_norm)
       nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+      clip_auxiliary_gradients = getattr(
+        self, "_clip_auxiliary_gradients", None
+      )
+      if callable(clip_auxiliary_gradients):
+        clip_auxiliary_gradients()
       step_auxiliary_optimizers = getattr(
         self, "_step_auxiliary_optimizers", None
       )
@@ -521,6 +534,7 @@ class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
     estimator_learning_rate: float = 1.0e-4,
     estimator_root_height_loss_coef: float = 1.0,
     estimator_root_lin_vel_loss_coef: float = 1.0,
+    estimator_max_grad_norm: float = 1.0,
     **kwargs,
   ) -> None:
     optimizer_name = str(kwargs.get("optimizer", "adam"))
@@ -552,6 +566,12 @@ class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
     self.estimator_root_lin_vel_loss_coef = float(
       estimator_root_lin_vel_loss_coef
     )
+    self.estimator_max_grad_norm = float(estimator_max_grad_norm)
+    if self.estimator_max_grad_norm <= 0.0:
+      raise ValueError("estimator_max_grad_norm must be positive")
+    self._estimator_parameter_ids = {
+      id(parameter) for parameter in self._estimator_parameters
+    }
 
   def _auxiliary_loss(
     self, observations
@@ -580,6 +600,20 @@ class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
     self.estimator_optimizer.step()
     for parameter in self._estimator_parameters:
       parameter.grad = None
+
+  def _actor_parameters_for_gradient_clipping(self):
+    """Exclude independently optimized estimator parameters from actor clip."""
+    return (
+      parameter
+      for parameter in self.actor.parameters()
+      if id(parameter) not in self._estimator_parameter_ids
+    )
+
+  def _clip_auxiliary_gradients(self) -> None:
+    """Clip estimator gradients independently from the policy network."""
+    nn.utils.clip_grad_norm_(
+      self._estimator_parameters, self.estimator_max_grad_norm
+    )
 
   def _zero_auxiliary_optimizers(self) -> None:
     self.estimator_optimizer.zero_grad()

@@ -101,6 +101,7 @@ class SPV51ContactEstimatorMoEActorCfg(SPV51ContactEstimatorActorCfg):
   moe_expansion: int = 4
   moe_router_temperature: float = 1.0
   moe_router_init_std: float = 1.0e-2
+  moe_output_init_gain: float = 5.0e-2
 
 
 @dataclass
@@ -137,6 +138,7 @@ class SPV3EstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
   estimator_learning_rate: float = 1.0e-4
   estimator_root_height_loss_coef: float = 1.0
   estimator_root_lin_vel_loss_coef: float = 1.0
+  estimator_max_grad_norm: float = 1.0
 
 
 @dataclass

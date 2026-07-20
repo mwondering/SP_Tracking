@@ -264,8 +264,21 @@ def update_sapg(algorithm) -> dict[str, float]:
     loss.backward()
     if algorithm.is_multi_gpu:
       algorithm.reduce_parameters()
-    nn.utils.clip_grad_norm_(algorithm.actor.parameters(), algorithm.max_grad_norm)
+    actor_parameters_for_clipping = getattr(
+      algorithm, "_actor_parameters_for_gradient_clipping", None
+    )
+    actor_parameters = (
+      actor_parameters_for_clipping()
+      if callable(actor_parameters_for_clipping)
+      else algorithm.actor.parameters()
+    )
+    nn.utils.clip_grad_norm_(actor_parameters, algorithm.max_grad_norm)
     nn.utils.clip_grad_norm_(algorithm.critic.parameters(), algorithm.max_grad_norm)
+    clip_auxiliary_gradients = getattr(
+      algorithm, "_clip_auxiliary_gradients", None
+    )
+    if callable(clip_auxiliary_gradients):
+      clip_auxiliary_gradients()
     step_auxiliary_optimizers = getattr(
       algorithm, "_step_auxiliary_optimizers", None
     )

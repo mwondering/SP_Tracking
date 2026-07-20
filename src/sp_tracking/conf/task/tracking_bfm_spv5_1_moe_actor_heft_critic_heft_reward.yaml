@@ -19,8 +19,10 @@ agent_overrides:
     moe_expansion: 4
     moe_router_temperature: 1.0
     moe_router_init_std: 0.01
+    moe_output_init_gain: 0.05
   algorithm:
     class_name: sp_tracking.tasks.tracking.rl.ppo:SPV51ContactEstimatorMoEPPO
+    estimator_max_grad_norm: 1.0
     moe_balance_loss_coef: 0.003
     moe_confidence_loss_coef: 0.0003
     moe_confidence_warmup_updates: 5000

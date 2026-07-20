@@ -57,6 +57,27 @@ def test_residual_blocks_use_bias_free_orthogonal_linears_and_layer_norm() -> No
   )
 
 
+def test_moe_action_head_starts_at_baseline_output_scale() -> None:
+  model = ObservationConditionedResidualMoE(
+    11,
+    3,
+    context_hidden_dim=13,
+    hidden_dim=8,
+    num_experts=4,
+    top_k=2,
+    expansion=2,
+    output_init_gain=0.05,
+  )
+
+  torch.testing.assert_close(model.output.bias, torch.zeros(3))
+  torch.testing.assert_close(
+    model.output.weight @ model.output.weight.T,
+    torch.eye(3) * 0.05**2,
+    atol=1.0e-7,
+    rtol=1.0e-5,
+  )
+
+
 def test_default_moe_policy_matches_spv5_1_mlp_parameter_budget() -> None:
   model = ObservationConditionedResidualMoE(1651, 29)
   baseline_dims = (1651, 2048, 2048, 1024, 1024, 512, 256, 128, 29)
@@ -77,6 +98,52 @@ class _ToyRouter(nn.Module):
 
   def routing_probabilities(self, observations: TensorDict) -> torch.Tensor:
     return torch.softmax(self.linear(observations["router_input"]), dim=-1)
+
+
+class _ActorWithIndependentEstimator(nn.Module):
+  def __init__(self) -> None:
+    super().__init__()
+    self.policy = nn.Linear(2, 2)
+    self.estimator = nn.Linear(2, 2)
+
+
+def test_estimator_gradient_clipping_is_independent_from_actor() -> None:
+  actor = _ActorWithIndependentEstimator()
+  algorithm = object.__new__(SPV51ContactEstimatorMoEPPO)
+  algorithm.actor = actor
+  algorithm._estimator_parameters = tuple(actor.estimator.parameters())
+  algorithm._estimator_parameter_ids = {
+    id(parameter) for parameter in algorithm._estimator_parameters
+  }
+  algorithm.estimator_max_grad_norm = 1.0
+  for parameter in actor.parameters():
+    parameter.grad = torch.full_like(parameter, 100.0)
+
+  estimator_gradients_before = tuple(
+    parameter.grad.clone() for parameter in algorithm._estimator_parameters
+  )
+  actor_parameters = tuple(
+    algorithm._actor_parameters_for_gradient_clipping()
+  )
+  assert {id(parameter) for parameter in actor_parameters}.isdisjoint(
+    algorithm._estimator_parameter_ids
+  )
+  nn.utils.clip_grad_norm_(actor_parameters, max_norm=1.0)
+  for parameter, expected in zip(
+    algorithm._estimator_parameters, estimator_gradients_before
+  ):
+    torch.testing.assert_close(parameter.grad, expected)
+
+  algorithm._clip_auxiliary_gradients()
+  estimator_norm = torch.linalg.vector_norm(
+    torch.cat(
+      [
+        parameter.grad.flatten()
+        for parameter in algorithm._estimator_parameters
+      ]
+    )
+  )
+  torch.testing.assert_close(estimator_norm, torch.tensor(1.0))
 
 
 def test_collect_balance_loss_chunked_gradient_matches_full_rollout() -> None:
@@ -157,8 +224,10 @@ def test_spv5_1_moe_task_exposes_closed_first_version_config() -> None:
   assert prepared.agent.actor.moe_num_experts == 16
   assert prepared.agent.actor.moe_top_k == 8
   assert prepared.agent.actor.moe_hidden_dim == 256
+  assert prepared.agent.actor.moe_output_init_gain == 0.05
   assert prepared.agent.algorithm.class_name.endswith(
     ":SPV51ContactEstimatorMoEPPO"
   )
   assert prepared.agent.algorithm.moe_balance_loss_coef == 0.003
   assert prepared.agent.algorithm.moe_confidence_loss_coef == 0.0003
+  assert prepared.agent.algorithm.estimator_max_grad_norm == 1.0
