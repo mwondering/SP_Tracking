@@ -143,17 +143,17 @@ profile.
 | `SPTracking-G1-BFM-TeacherActor-BFMCritic` | raw `policy + priv` | BFM `critic` | BFM | BFM XML/runtime + HEFT observation support |
 | `SPTracking-G1-BFM-WBTeleopActor-BFMCritic` | deployable WBTeleop `actor` (886-D) | BFM `critic` | BFM | BFM XML + complete BFM runtime |
 | `SPTracking-G1-BFM-WBTeleopActor-HEFTCritic` | deployable WBTeleop `actor` (886-D) | `policy + priv` | BFM | BFM XML/runtime + HEFT observation support |
-| `SPTracking-G1-BFM-SPV1Actor-HEFTCritic-HEFTReward` | heading-invariant SPV1 `actor` (1786-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
-| `SPTracking-G1-BFM-SPV2Actor-HEFTCritic-HEFTReward` | Compact SPV2: 5-frame history, +4 future, HEFT root rotation (1056-D) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
-| `SPTracking-G1-BFM-SPV3Actor-HEFTCritic-HEFTReward` | SPV3: SPV2 + supervised MLP root-state estimator (6546-D deploy input, 1064-D policy input) | `policy + priv` | HEFT | BFM XML/runtime + measured joint-torque sensors |
-| `SPTracking-G1-BFM-SPV4Actor-HEFTCritic-HEFTReward` | SPV4: SPV3 + current root-frame robot/reference/error states for 13 HEFT key bodies (1649-D policy input) | `policy + priv` | HEFT | Privileged BFM simulator body state; not directly deployable |
-| `SPTracking-G1-BFM-SPV5Actor-HEFTCritic-HEFTReward` | SPV5: supervised 50-frame noisy qpos encoder + HEFT-style FK into the SPV4 information layout (1649-D policy input) | `policy + priv` | HEFT | Reference side is deployment-compatible; robot key-body state retains SPV4's runtime requirement |
-| `SPTracking-G1-BFM-SPV5-1Actor-HEFTCritic-HEFTReward` | SPV5-1: SPV5 + a shared root/contact estimator whose two foot-contact probabilities extend the policy input to 1651-D | `policy + priv` | HEFT | Contact labels are simulation-only; deployment still uses the same 50-frame proprioception and torque history |
-| `SPTracking-G1-BFM-SPV5-1MoEActor-HEFTCritic-HEFTReward` | 30M-parameter SPV5-1 residual MoE with 16 experts, top-8 observation-conditioned routing, block-internal LayerNorm, and post-mixture RMSNorm | `policy + priv` | HEFT | No motion/task ID; collect-level load balance is enabled and routing confidence loss is disabled by default |
-| `SPTracking-G1-BFM-SPV6Actor-HEFTCritic-HEFTReward` | SPV6: SPV5 + actor-inferred 56-D RMA latent from nominal physics and 50-frame proprioception | HEFT base + actual physics/push latent | HEFT | RMA alignment and privileged reconstruction training |
-| `SPTracking-G1-BFM-SPV6-0Actor-HEFTCritic-HEFTReward` | SPV6-0 oracle: SPV5 startup DR + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT | Controlled SPV5 + oracle-information ablation; no DR encoder or reconstruction loss |
-| `SPTracking-G1-BFM-SPV6-1Actor-HEFTCritic-HEFTReward` | SPV6-1 oracle: SPV5 + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT | Diagnostic upper bound; no DR encoder, latent alignment, or reconstruction loss |
-| `SPTracking-G1-TestPolicyGradients` | SPV5 small-network actor plus rollout-only simple/hard label | `policy + priv` small-network critic | HEFT | Two explicit NPZ files; fixed per-rank 50/50 assignment and minibatch gradient diagnostics |
+| `SPTracking-G1-BFM-SPV1Actor-HEFTCritic-HEFTReward` | heading-invariant SPV1 `actor` (1786-D) | `policy + priv` | HEFT finetune | BFM XML/runtime + measured joint-torque sensors |
+| `SPTracking-G1-BFM-SPV2Actor-HEFTCritic-HEFTReward` | Compact SPV2: 5-frame history, +4 future, HEFT root rotation (1056-D) | `policy + priv` | HEFT finetune | BFM XML/runtime + measured joint-torque sensors |
+| `SPTracking-G1-BFM-SPV3Actor-HEFTCritic-HEFTReward` | SPV3: SPV2 + supervised MLP root-state estimator (6546-D deploy input, 1064-D policy input) | `policy + priv` | HEFT finetune | BFM XML/runtime + measured joint-torque sensors |
+| `SPTracking-G1-BFM-SPV4Actor-HEFTCritic-HEFTReward` | SPV4: SPV3 + current root-frame robot/reference/error states for 13 HEFT key bodies (1649-D policy input) | `policy + priv` | HEFT finetune | Privileged BFM simulator body state; not directly deployable |
+| `SPTracking-G1-BFM-SPV5Actor-HEFTCritic-HEFTReward` | SPV5: supervised 50-frame noisy qpos encoder + HEFT-style FK into the SPV4 information layout (1649-D policy input) | `policy + priv` | HEFT finetune | Reference side is deployment-compatible; robot key-body state retains SPV4's runtime requirement |
+| `SPTracking-G1-BFM-SPV5-1Actor-HEFTCritic-HEFTReward` | SPV5-1: SPV5 + a shared root/contact estimator whose two foot-contact probabilities extend the policy input to 1651-D | `policy + priv` | HEFT finetune | Contact labels are simulation-only; deployment still uses the same 50-frame proprioception and torque history |
+| `SPTracking-G1-BFM-SPV5-1MoEActor-HEFTCritic-HEFTReward` | 30M-parameter SPV5-1 residual MoE with 16 experts, top-8 observation-conditioned routing, block-internal LayerNorm, and post-mixture RMSNorm | `policy + priv` | HEFT finetune | No motion/task ID; collect-level load balance is enabled and routing confidence loss is disabled by default |
+| `SPTracking-G1-BFM-SPV6Actor-HEFTCritic-HEFTReward` | SPV6: SPV5 + actor-inferred 56-D RMA latent from nominal physics and 50-frame proprioception | HEFT base + actual physics/push latent | HEFT finetune | RMA alignment and privileged reconstruction training |
+| `SPTracking-G1-BFM-SPV6-0Actor-HEFTCritic-HEFTReward` | SPV6-0 oracle: SPV5 startup DR + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT finetune | Controlled SPV5 + oracle-information ablation; no DR encoder or reconstruction loss |
+| `SPTracking-G1-BFM-SPV6-1Actor-HEFTCritic-HEFTReward` | SPV6-1 oracle: SPV5 + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT finetune | Diagnostic upper bound; no DR encoder, latent alignment, or reconstruction loss |
+| `SPTracking-G1-TestPolicyGradients` | SPV5 small-network actor plus rollout-only simple/hard label | `policy + priv` small-network critic | HEFT finetune | Two explicit NPZ files; fixed per-rank 50/50 assignment and minibatch gradient diagnostics |
 
 Every BFM-XML task above except the already-HEFT-reward SPV tasks also has an
 additive HEFT-reward variant with the same public naming grammar, for example:
@@ -187,6 +187,12 @@ terms from the source pretrain config. Its locomotion group starts at factor
 scaling as the source. On the BFM XML, missing SP-only bodies are represented
 by kinematically exact semantic points: the hand includes the 5 mm wrist-chain
 correction and the toe is the ankle-roll frame plus 0.1 m along local x.
+
+SPV1 and every descendant instead select the HEFT finetune reward profile. It
+keeps the same ten tracking terms, applies the seven locomotion terms at full
+weight from the first step, raises `action_rate_l2` from `0.02` to `0.1`, and
+does not include the pretrain locomotion-group scheduler. Non-SPV HEFT-reward
+ablations continue to use the pretrain profile above.
 
 All three ablations use a raw-observation BFM `MLPModel` actor with no adapter
 or privileged encoder. The BFM and teacher actors retain parameter-matched

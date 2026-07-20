@@ -274,7 +274,7 @@ def test_spv1_task_has_exact_actor_critic_reward_and_sensor_contract() -> None:
     "critic": ("policy", "priv"),
   }
   assert prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")
-  assert cfg.task.variant.reward_profile == "heft_tracking_bfm"
+  assert cfg.task.variant.reward_profile == "heft_finetune_tracking_bfm"
   assert "root_pos_tracking" in env.rewards
   assert env.metrics["substep_tracking_cache"].params[
     "joint_torque_sensor_prefix"
@@ -347,7 +347,7 @@ def test_spv2_has_compact_actor_and_heft_critic_contract() -> None:
     "critic": ("policy", "priv"),
   }
   assert prepared.agent.critic.class_name.endswith(":HeftTeacherCritic")
-  assert cfg.task.variant.reward_profile == "heft_tracking_bfm"
+  assert cfg.task.variant.reward_profile == "heft_finetune_tracking_bfm"
   assert tuple(env.commands["motion"].reference_cache_steps["joint_vel"]) == tuple(
     range(5)
   )

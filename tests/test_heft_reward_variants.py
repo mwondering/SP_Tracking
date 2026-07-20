@@ -39,6 +39,40 @@ PARENT_BY_HEFT_REWARD = {
   ),
 }
 
+SPV_FINETUNE_REWARD_TASKS = (
+  "tracking_bfm_spv1_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv2_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv3_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv4_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv5_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv5_1_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv5_1_moe_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv6_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv6_1_actor_heft_critic_heft_reward",
+  "tracking_bfm_spv6_0_actor_heft_critic_heft_reward",
+  "test_policy_gradients",
+)
+
+HEFT_FINETUNE_REWARD_WEIGHTS = {
+  "root_pos_tracking": 0.5,
+  "root_rot_tracking": 0.5,
+  "root_vel_tracking": 1.0,
+  "root_ang_vel_tracking": 1.0,
+  "keypoint_pos_tracking": 2.0,
+  "keypoint_vel_tracking": 1.0,
+  "keypoint_rot_tracking": 2.0,
+  "keypoint_angvel_tracking": 1.0,
+  "joint_pos_tracking": 1.0,
+  "joint_vel_tracking": 0.5,
+  "survival": 3.0,
+  "joint_vel_l2": 5.0e-4,
+  "action_rate_l2": 0.1,
+  "feet_air_time_ref": 5.0,
+  "feet_air_time_ref_dense": 1.0,
+  "joint_pos_limits": 1.0,
+  "joint_torque_limits": 0.01,
+}
+
 
 def _compose(task_name: str):
   with initialize_config_module(version_base=None, config_module="sp_tracking.conf"):
@@ -141,6 +175,19 @@ def test_bfm_heft_reward_terms_match_complete_sp_heft_reward() -> None:
       params.pop("keypoint_specs", None)
       params.pop("toe_specs", None)
       assert params == sp_term.params
+
+
+def test_every_spv_task_uses_heft_finetune_reward_weights() -> None:
+  for task_name in SPV_FINETUNE_REWARD_TASKS:
+    cfg = _compose(task_name)
+    env = build_env_cfg(cfg.task)
+
+    assert cfg.task.variant.reward_profile == "heft_finetune_tracking_bfm"
+    assert tuple(env.rewards) == tuple(HEFT_FINETUNE_REWARD_WEIGHTS)
+    assert {
+      name: term.weight for name, term in env.rewards.items()
+    } == HEFT_FINETUNE_REWARD_WEIGHTS
+    assert "loco_reward_group_schedule" not in env.rewards
 
 
 def test_heft_reward_manager_can_forward_every_configured_param() -> None:

@@ -1,0 +1,32 @@
+# HEFT finetune reward applied to the BFM XML through semantic keypoints.
+# Tracking terms are unchanged from pretrain.  The locomotion group uses its
+# full finetune weights from the first step, including the stronger action-rate
+# penalty, and therefore has no pretrain 0.5 -> 1.0 reward schedule.
+rewards:
+  - {name: root_pos_tracking, term: root_pos_tracking, weight: 0.5, params: {command_name: motion, sigma: [0.3]}}
+  - {name: root_rot_tracking, term: root_rot_tracking, weight: 0.5, params: {command_name: motion, sigma: [0.4]}}
+  - {name: root_vel_tracking, term: root_vel_tracking, weight: 1.0, params: {command_name: motion, sigma: [1.0]}}
+  - {name: root_ang_vel_tracking, term: root_ang_vel_tracking, weight: 1.0, params: {command_name: motion, sigma: [3.0]}}
+  - {name: keypoint_pos_tracking, term: keypoint_pos_tracking, weight: 2.0, params: {command_name: motion, sigma: [0.3], keypoint_specs: "${task.obs.semantic_keypoints.heft}"}}
+  - {name: keypoint_vel_tracking, term: keypoint_vel_tracking, weight: 1.0, params: {command_name: motion, sigma: [1.0], keypoint_specs: "${task.obs.semantic_keypoints.heft}"}}
+  - {name: keypoint_rot_tracking, term: keypoint_rot_tracking, weight: 2.0, params: {command_name: motion, sigma: [0.4], keypoint_specs: "${task.obs.semantic_keypoints.heft}"}}
+  - {name: keypoint_angvel_tracking, term: keypoint_angvel_tracking, weight: 1.0, params: {command_name: motion, sigma: [3.0], keypoint_specs: "${task.obs.semantic_keypoints.heft}"}}
+  - {name: joint_pos_tracking, term: joint_pos_tracking, weight: 1.0, params: {command_name: motion, sigma: [0.5]}}
+  - {name: joint_vel_tracking, term: joint_vel_tracking, weight: 0.5, params: {command_name: motion, sigma: [3.0]}}
+  - {name: survival, term: survival, weight: 3.0}
+  - {name: joint_vel_l2, term: joint_vel_l2, weight: 0.0005}
+  - {name: action_rate_l2, term: action_rate_l2_sp, weight: 0.1}
+  - {name: feet_air_time_ref, term: feet_air_time_ref, weight: 5.0, params: {command_name: motion, sensor_name: contact_forces, thres: 0.5}}
+  - name: feet_air_time_ref_dense
+    term: feet_air_time_ref_dense
+    weight: 1.0
+    params:
+      command_name: motion
+      sensor_name: contact_forces
+      toe_specs: "${task.obs.semantic_keypoints.feet_toes}"
+      air_h_low: 0.035
+      air_h_high: 0.155
+      contact_h_low: 0.035
+      contact_h_high: 0.125
+  - {name: joint_pos_limits, term: joint_pos_limits_sp, weight: 1.0, params: {joint_names: ".*", soft_factor: 0.9}}
+  - {name: joint_torque_limits, term: joint_torque_limits, weight: 0.01, params: {joint_names: ".*", soft_factor: 0.75}}
