@@ -151,6 +151,7 @@ profile.
 | `SPTracking-G1-BFM-SPV5-1Actor-HEFTCritic-HEFTReward` | SPV5-1: SPV5 + a shared root/contact estimator whose two foot-contact probabilities extend the policy input to 1651-D | `policy + priv` | HEFT finetune | Contact labels are simulation-only; deployment still uses the same 50-frame proprioception and torque history |
 | `SPTracking-G1-BFM-SPV5-1MoEActor-HEFTCritic-HEFTReward` | 30M-parameter SPV5-1 residual MoE with 8 experts, top-2 observation-conditioned routing, block-internal LayerNorm, and post-mixture RMSNorm | `policy + priv` | HEFT finetune | No motion/task ID; collect-level load balance is enabled and routing confidence loss is disabled by default |
 | `SPTracking-G1-BFM-SPV5-1Actor-HEFTMoECritic-HEFTReward` | Standard SPV5-1 actor (1651-D policy input) | HEFT critic with an 8-expert, top-2 observation-conditioned residual MoE | HEFT finetune | MoE routing regularization targets only the critic; the deployable actor is unchanged |
+| `SPTracking-G1-BFM-SPV5-2Actor-HEFTCritic-HEFTReward` | SPV5-2: height/contact estimator only; root-linear-velocity estimate and error are removed (1645-D policy input) | `policy + priv` | HEFT finetune | Torque history reads the latest sensor value at 50 Hz with uniform ±2 N·m training noise |
 | `SPTracking-G1-BFM-SPV6Actor-HEFTCritic-HEFTReward` | SPV6: SPV5 + actor-inferred 56-D RMA latent from nominal physics and 50-frame proprioception | HEFT base + actual physics/push latent | HEFT finetune | RMA alignment and privileged reconstruction training |
 | `SPTracking-G1-BFM-SPV6-0Actor-HEFTCritic-HEFTReward` | SPV6-0 oracle: SPV5 startup DR + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT finetune | Controlled SPV5 + oracle-information ablation; no DR encoder or reconstruction loss |
 | `SPTracking-G1-BFM-SPV6-1Actor-HEFTCritic-HEFTReward` | SPV6-1 oracle: SPV5 + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT finetune | Diagnostic upper bound; no DR encoder, latent alignment, or reconstruction loss |
@@ -265,6 +266,14 @@ semantic key-body states are rebuilt from the decoded qpos through the BFM G1
 kinematic tree. PPO gradients are detached at both the reference encoder and
 the SPV3 root estimator. Their separately logged supervised losses are the
 only gradients that update those networks.
+
+SPV5-2 retains SPV5-1's height and binary foot-contact heads but deletes the
+three-dimensional root-linear-velocity head, its simulation target, its MSE,
+and the six corresponding policy features (estimate plus reference error).
+It also replaces the four-physics-substep torque average with the latest
+`jointactuatorfrc` sample once per 20 ms control step. A bounded uniform
+`[-2, 2] N·m` perturbation is applied during training to reduce sensitivity to
+the real torque-sensing and actuator-model mismatch.
 
 ## Checkpoints, Resume, and Deployment Export
 

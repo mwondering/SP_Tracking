@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import torch
 
@@ -193,8 +193,16 @@ def _instant_joint_torque(
 def joint_torque(
   env: ManagerBasedRlEnv,
   sensor_prefix: str = SPV1_JOINT_TORQUE_SENSOR_PREFIX,
+  sample_mode: Literal["substep_average", "latest"] = "substep_average",
 ) -> torch.Tensor:
-  """Mean jointactuatorfrc sensor measurement over the latest control step."""
+  """Read joint torque as a substep mean or one control-rate latest sample."""
+  if sample_mode == "latest":
+    return _instant_joint_torque(env, sensor_prefix)
+  if sample_mode != "substep_average":
+    raise ValueError(
+      "joint_torque sample_mode must be 'substep_average' or 'latest', "
+      f"got {sample_mode!r}"
+    )
   cache = getattr(env, "_sp_substep_tracking_cache", None)
   get_average = getattr(cache, "joint_torque_average", None)
   if callable(get_average):

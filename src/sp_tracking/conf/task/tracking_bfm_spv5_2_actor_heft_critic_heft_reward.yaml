@@ -1,0 +1,17 @@
+defaults:
+  - tracking_bfm_spv5_1_actor_heft_critic_heft_reward
+  - override obs: spv5_2_heft_critic
+  - _self_
+
+name: tracking_bfm_spv5_2_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv5_2_height_contact_estimator_actor_heft_critic
+
+# SPV5-2 removes the three-dimensional root-linear-velocity estimate and its
+# three-dimensional reference error.  Height/contact estimation, the denoised
+# reference encoder, and SPV5-1's conservative auxiliary/critic LRs remain.
+agent_overrides:
+  actor:
+    class_name: sp_tracking.tasks.tracking.rl.spv5_2_models:SPV52HeightContactEstimatorActor
+  algorithm:
+    class_name: sp_tracking.tasks.tracking.rl.ppo:SPV52HeightContactEstimatorPPO

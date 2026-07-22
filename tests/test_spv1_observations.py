@@ -231,6 +231,14 @@ def test_substep_cache_averages_joint_torque_sensor_measurements() -> None:
     cache.joint_torque_average(), torch.tensor([[2.5, 25.0]])
   )
   torch.testing.assert_close(spv1.joint_torque(env), torch.tensor([[2.5, 25.0]]))
+  torch.testing.assert_close(
+    spv1.joint_torque(
+      env,
+      sensor_prefix="tau_",
+      sample_mode="latest",
+    ),
+    torch.tensor([[4.0, 40.0]]),
+  )
 
 
 def test_spv1_task_has_exact_actor_critic_reward_and_sensor_contract() -> None:

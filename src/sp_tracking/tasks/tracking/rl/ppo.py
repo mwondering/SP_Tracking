@@ -812,6 +812,74 @@ class SPV51ContactEstimatorPPO(SPV5ReferenceEncoderPPO):
     )
 
 
+class SPV52HeightContactEstimatorPPO(SPV51ContactEstimatorPPO):
+  """SPV5-2 supervision with no root-linear-velocity prediction or loss."""
+
+  @staticmethod
+  def construct_algorithm(obs, env, cfg: dict, device: str):
+    from .spv5_2_models import (
+      SPV5_2_POLICY_CONTEXT_CACHE_DIM,
+      SPV5_2_POLICY_CONTEXT_CACHE_GROUP,
+    )
+
+    cache_device = obs.device
+    if cache_device is None:
+      cache_device = next(iter(obs.values())).device
+    obs.set(
+      SPV5_2_POLICY_CONTEXT_CACHE_GROUP,
+      torch.zeros(
+        (*obs.batch_size, SPV5_2_POLICY_CONTEXT_CACHE_DIM),
+        device=cache_device,
+      ),
+    )
+    algorithm = SparseTrackSplitLrPPO.construct_algorithm(
+      obs, env, cfg, device
+    )
+    populate = getattr(algorithm.actor, "populate_policy_context_cache", None)
+    if not callable(populate):
+      raise TypeError(
+        "SPV52HeightContactEstimatorPPO requires an actor with "
+        "populate_policy_context_cache()"
+      )
+    populate(obs)
+    return algorithm
+
+  def _auxiliary_loss(
+    self, observations
+  ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    estimator_losses = getattr(self.actor, "height_contact_losses", None)
+    if not callable(estimator_losses):
+      raise TypeError(
+        "SPV52HeightContactEstimatorPPO requires an actor with "
+        "height_contact_losses()"
+      )
+    height_mse, contact_bce, contact_diagnostics = estimator_losses(
+      observations
+    )
+    estimator_loss = (
+      self.estimator_root_height_loss_coef * height_mse
+      + self.estimator_foot_contact_loss_coef * contact_bce
+    )
+
+    reference_losses = getattr(self.actor, "reference_encoder_losses", None)
+    if not callable(reference_losses):
+      raise TypeError(
+        "SPV52HeightContactEstimatorPPO requires an actor with "
+        "reference_encoder_losses()"
+      )
+    reference_loss, reference_diagnostics = reference_losses(observations)
+    diagnostics = {
+      "estimator_root_height_mse": height_mse,
+      "estimator_foot_contact_bce": contact_bce,
+      **contact_diagnostics,
+      **reference_diagnostics,
+    }
+    return (
+      estimator_loss + self.reference_encoder_loss_coef * reference_loss,
+      diagnostics,
+    )
+
+
 class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
   """SPV5-1 supervision plus collect-level residual-MoE routing losses."""
 

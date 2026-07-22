@@ -35,9 +35,16 @@ from sp_tracking.tasks.tracking.rl.spv5_1_models import (
   SPV51ContactEstimatorActor,
   SPV51ContactEstimatorMoEActor,
 )
+from sp_tracking.tasks.tracking.rl.spv5_2_models import (
+  SPV5_2_POLICY_CONTEXT_CACHE_DIM,
+  SPV5_2_POLICY_CONTEXT_CACHE_GROUP,
+  SPV5_2_POLICY_INPUT_DIM,
+  SPV52HeightContactEstimatorActor,
+)
 from sp_tracking.tasks.tracking.rl.ppo import (
   SPV5ReferenceEncoderPPO,
   SPV51ContactEstimatorPPO,
+  SPV52HeightContactEstimatorPPO,
 )
 from sp_tracking.tasks.tracking.rl.policy_gradient_diagnostics import (
   PolicyGradientDiagnosticsPPO,
@@ -190,6 +197,38 @@ def _spv5_1_moe_actor(obs: TensorDict) -> SPV51ContactEstimatorMoEActor:
     moe_num_experts=4,
     moe_top_k=2,
     moe_expansion=2,
+    obs_normalization=False,
+    distribution_cfg={
+      "class_name": "GaussianDistribution",
+      "init_std": 1.0,
+      "std_type": "scalar",
+    },
+    keypoint_specs=KEYPOINT_SPECS,
+  )
+
+
+def _spv5_2_observations(num_envs: int = 2) -> TensorDict:
+  obs = _spv5_1_observations(num_envs)
+  obs.set("estimator_target", torch.randn(num_envs, 1))
+  return obs
+
+
+def _spv5_2_actor(obs: TensorDict) -> SPV52HeightContactEstimatorActor:
+  return SPV52HeightContactEstimatorActor(
+    obs,
+    {
+      "actor": [
+        "robot_root_quat",
+        "estimator_history",
+        "reference_encoder_input",
+        "robot_key_body",
+      ]
+    },
+    "actor",
+    3,
+    hidden_dims=(32, 16),
+    estimator_hidden_dims=(16, 8, 4),
+    reference_encoder_hidden_dims=(32, 16),
     obs_normalization=False,
     distribution_cfg={
       "class_name": "GaussianDistribution",
@@ -626,3 +665,93 @@ def test_spv5_1_task_adds_only_a_simulation_contact_target() -> None:
   assert env.events["base_com"].mode == "startup"
   assert env.events["base_mass"].mode == "startup"
   assert env.events["foot_friction"].mode == "startup"
+
+
+def test_spv5_2_removes_velocity_estimator_from_policy_and_export() -> None:
+  obs = _spv5_2_observations()
+  actor = _spv5_2_actor(obs)
+
+  height, contact_logits = actor.estimate_height_and_contact(obs)
+  assert height.shape == (2, 1)
+  assert contact_logits.shape == (2, 2)
+  assert not hasattr(actor.estimator, "root_head")
+  assert actor.get_latent(obs).shape == (2, SPV5_2_POLICY_INPUT_DIM)
+  uncached_output = actor(obs)
+
+  context = actor.populate_policy_context_cache(obs)
+  assert context.shape == (2, SPV5_2_POLICY_CONTEXT_CACHE_DIM)
+  assert SPV5_2_POLICY_CONTEXT_CACHE_GROUP in obs
+  torch.testing.assert_close(actor(obs), uncached_output)
+
+  flat = torch.cat([obs[name] for name in actor.obs_groups], dim=-1)
+  exported = actor.as_onnx()
+  assert exported.get_dummy_inputs()[0].shape == (1, SPV5_RAW_ACTOR_OBS_DIM)
+  assert exported.input_names == ["spv5_2_observation"]
+  torch.testing.assert_close(exported(flat), uncached_output)
+
+
+def test_spv5_2_auxiliary_loss_has_no_velocity_term() -> None:
+  obs = _spv5_2_observations()
+  actor = _spv5_2_actor(obs)
+  algorithm = object.__new__(SPV52HeightContactEstimatorPPO)
+  algorithm.actor = actor
+  algorithm.estimator_root_height_loss_coef = 1.0
+  algorithm.estimator_foot_contact_loss_coef = 0.1
+  algorithm.reference_encoder_loss_coef = 1.0
+
+  actor.zero_grad()
+  actor(obs).sum().backward()
+  assert all(parameter.grad is None for parameter in actor.estimator.parameters())
+
+  actor.zero_grad()
+  total, diagnostics = algorithm._auxiliary_loss(obs)
+  total.backward()
+  assert any(
+    parameter.grad is not None
+    for parameter in actor.estimator.height_head.parameters()
+  )
+  assert any(
+    parameter.grad is not None
+    for parameter in actor.estimator.contact_head.parameters()
+  )
+  assert "estimator_root_height_mse" in diagnostics
+  assert "estimator_foot_contact_bce" in diagnostics
+  assert "estimator_root_lin_vel_mse" not in diagnostics
+
+
+def test_spv5_2_task_uses_latest_50hz_noisy_torque_and_height_target() -> None:
+  with initialize_config_module(
+    version_base=None, config_module="sp_tracking.conf"
+  ):
+    cfg = compose(
+      config_name="train",
+      overrides=["task=tracking_bfm_spv5_2_actor_heft_critic_heft_reward"],
+    )
+  prepared = prepare_train_cfg(cfg)
+  env = build_env_cfg(cfg.task)
+  torque = env.observations["estimator_history"].terms["joint_torque"]
+  estimator_target = env.observations["estimator_target"]
+
+  assert prepared.agent.actor.class_name.endswith(
+    ":SPV52HeightContactEstimatorActor"
+  )
+  assert prepared.agent.algorithm.class_name.endswith(
+    ":SPV52HeightContactEstimatorPPO"
+  )
+  assert not hasattr(
+    prepared.agent.algorithm, "estimator_root_lin_vel_loss_coef"
+  )
+  assert prepared.agent.algorithm.estimator_learning_rate == 5.0e-5
+  assert (
+    prepared.agent.algorithm.use_checkpoint_estimator_learning_rate is False
+  )
+  assert prepared.agent.algorithm.critic_learning_rate == 5.0e-4
+  assert prepared.agent.algorithm.adaptive_critic_learning_rate is False
+  assert tuple(estimator_target.terms) == ("root_height",)
+  assert torque.history_length == 50
+  assert torque.params["sample_mode"] == "latest"
+  assert torque.noise.n_min == -2.0
+  assert torque.noise.n_max == 2.0
+  assert env.decimation == 4
+  assert env.sim.mujoco.timestep == 0.005
+  assert 1.0 / (env.decimation * env.sim.mujoco.timestep) == 50.0

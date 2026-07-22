@@ -178,6 +178,18 @@ class SPV51ContactEstimatorPpoAlgorithmCfg(
 
 
 @dataclass
+class SPV52HeightContactEstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
+  """SPV5-2 auxiliary objectives, intentionally excluding velocity MSE."""
+
+  estimator_learning_rate: float = 1.0e-4
+  use_checkpoint_estimator_learning_rate: bool = True
+  estimator_root_height_loss_coef: float = 1.0
+  estimator_foot_contact_loss_coef: float = 0.1
+  estimator_max_grad_norm: float = 1.0
+  reference_encoder_loss_coef: float = 1.0
+
+
+@dataclass
 class SPV51ContactEstimatorMoEPpoAlgorithmCfg(
   SPV51ContactEstimatorPpoAlgorithmCfg
 ):
@@ -239,6 +251,8 @@ def build_agent_cfg(
     actor_cls = SPV51ContactEstimatorMoEActorCfg
   elif actor_class_name.endswith(":SPV51ContactEstimatorActor"):
     actor_cls = SPV51ContactEstimatorActorCfg
+  elif actor_class_name.endswith(":SPV52HeightContactEstimatorActor"):
+    actor_cls = SPV51ContactEstimatorActorCfg
   elif actor_class_name.endswith(":SPV5ReferenceEncoderActor"):
     actor_cls = SPV5ReferenceEncoderActorCfg
   elif actor_class_name.endswith(":SPV6RmaActor"):
@@ -283,6 +297,8 @@ def build_agent_cfg(
     algorithm_cls = SPV6RmaPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV51ContactEstimatorMoEPPO"):
     algorithm_cls = SPV51ContactEstimatorMoEPpoAlgorithmCfg
+  elif algorithm_class_name.endswith(":SPV52HeightContactEstimatorPPO"):
+    algorithm_cls = SPV52HeightContactEstimatorPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV51ContactEstimatorPPO"):
     algorithm_cls = SPV51ContactEstimatorPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV3EstimatorPPO"):
@@ -340,6 +356,7 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
         ":SPV5ReferenceEncoderActor",
         ":SPV51ContactEstimatorActor",
         ":SPV51ContactEstimatorMoEActor",
+        ":SPV52HeightContactEstimatorActor",
         ":SPV6RmaActor",
         ":SPV6RmaCritic",
         ":SPV61DirectActor",

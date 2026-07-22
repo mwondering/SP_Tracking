@@ -1,0 +1,46 @@
+defaults:
+  - spv5_1_heft_critic
+  - _self_
+
+observations:
+  estimator_history:
+    concatenate_terms: true
+    enable_corruption: true
+    terms:
+      - name: joint_pos
+        term: spv1_joint_pos
+        params: {command_name: motion, biased: true, noise_std: 0.01}
+        history_length: 50
+      - name: joint_vel
+        term: spv1_joint_vel
+        params: {command_name: motion, noise_std: 0.5}
+        history_length: 50
+      - name: projected_gravity
+        term: spv1_projected_gravity
+        params: {command_name: motion, noise_std: 0.05}
+        history_length: 50
+      - name: base_ang_vel
+        term: spv1_base_ang_vel
+        params:
+          {command_name: motion, sensor_name: robot/imu_ang_vel, noise_std: 0.2}
+        history_length: 50
+      - name: last_action
+        term: last_action
+        history_length: 50
+      # One latest sensor sample per 20 ms control step (50 Hz), matching the
+      # deployment stream.  The deliberately large bounded noise covers joint
+      # torque sensing/model mismatch without changing the deploy input shape.
+      - name: joint_torque
+        term: spv1_joint_torque
+        params: {sample_mode: latest}
+        noise: [-2.0, 2.0]
+        history_length: 50
+
+  # SPV5-2 supervises height only; root linear velocity is absent from both
+  # the estimator output and rollout targets.
+  estimator_target:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: root_height
+        term: spv3_root_height_gt
