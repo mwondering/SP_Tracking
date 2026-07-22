@@ -21,6 +21,7 @@ class SplitLrPpoAlgorithmCfg(SapgPpoAlgorithmCfg):
 
   actor_learning_rate: float | None = None
   critic_learning_rate: float | None = None
+  adaptive_critic_learning_rate: bool = True
   # ``None`` preserves normal RSL-RL handling.  SP enables 0.0 to match the
   # reference PPO's non-negative reward signal before GAE.
   clamp_rewards_min: float | None = None
@@ -148,6 +149,7 @@ class SPV61DirectCriticCfg(HeftTeacherCriticCfg):
 @dataclass
 class SPV3EstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
   estimator_learning_rate: float = 1.0e-4
+  use_checkpoint_estimator_learning_rate: bool = True
   estimator_root_height_loss_coef: float = 1.0
   estimator_root_lin_vel_loss_coef: float = 1.0
   estimator_max_grad_norm: float = 1.0
@@ -259,7 +261,12 @@ def build_agent_cfg(
   actor = actor_cls(**_filter_dataclass_kwargs(actor_cls, actor_data))
   critic = critic_cls(**_filter_dataclass_kwargs(critic_cls, critic_data))
   algorithm_data = dict(data.pop("algorithm"))
-  split_lr_keys = {"actor_learning_rate", "critic_learning_rate", "clamp_rewards_min"}
+  split_lr_keys = {
+    "actor_learning_rate",
+    "critic_learning_rate",
+    "adaptive_critic_learning_rate",
+    "clamp_rewards_min",
+  }
   algorithm_class_name = str(algorithm_data.get("class_name", ""))
   sapg_data = algorithm_data.get("sapg_cfg")
   sapg_enabled = isinstance(sapg_data, dict) and bool(sapg_data.get("enabled", False))

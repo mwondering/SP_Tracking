@@ -9,11 +9,16 @@ variant:
 
 # SPV5-1 keeps SPV5's startup DR and reference encoder unchanged.  The only
 # extra actor information is the two contact probabilities inferred from the
-# existing 50-frame proprioceptive/torque history.
+# existing 50-frame proprioceptive/torque history.  Its shared root/contact
+# estimator uses a lower fixed LR, while the critic no longer follows actor KL.
 agent_overrides:
   actor:
     class_name: sp_tracking.tasks.tracking.rl.spv5_1_models:SPV51ContactEstimatorActor
     foot_contact_target_group: foot_contact_target
   algorithm:
     class_name: sp_tracking.tasks.tracking.rl.ppo:SPV51ContactEstimatorPPO
+    critic_learning_rate: 0.0005
+    adaptive_critic_learning_rate: false
+    estimator_learning_rate: 0.00005
+    use_checkpoint_estimator_learning_rate: false
     estimator_foot_contact_loss_coef: 0.1

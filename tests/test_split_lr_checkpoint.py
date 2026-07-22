@@ -4,10 +4,17 @@ from rsl_rl.algorithms import PPO
 from sp_tracking.tasks.tracking.rl.ppo import SparseTrackSplitLrPPO
 
 
-def _make_algorithm(actor_lr: float = 1.0e-4, critic_lr: float = 5.0e-4):
+def _make_algorithm(
+  actor_lr: float = 1.0e-4,
+  critic_lr: float = 5.0e-4,
+  *,
+  adaptive_critic_learning_rate: bool = True,
+):
   algorithm = object.__new__(SparseTrackSplitLrPPO)
   algorithm.actor_learning_rate = actor_lr
   algorithm.critic_learning_rate = critic_lr
+  algorithm._configured_critic_learning_rate = critic_lr
+  algorithm.adaptive_critic_learning_rate = adaptive_critic_learning_rate
   algorithm.learning_rate = actor_lr
   actor_param = torch.nn.Parameter(torch.zeros(()))
   critic_param = torch.nn.Parameter(torch.zeros(()))
@@ -18,6 +25,33 @@ def _make_algorithm(actor_lr: float = 1.0e-4, critic_lr: float = 5.0e-4):
     ]
   )
   return algorithm
+
+
+def test_fixed_critic_lr_does_not_follow_actor_lr_updates() -> None:
+  algorithm = _make_algorithm(adaptive_critic_learning_rate=False)
+
+  algorithm._set_learning_rate(2.5e-5)
+
+  assert algorithm.actor_learning_rate == 2.5e-5
+  assert algorithm.critic_learning_rate == 5.0e-4
+  assert algorithm.optimizer.param_groups[0]["lr"] == 2.5e-5
+  assert algorithm.optimizer.param_groups[1]["lr"] == 5.0e-4
+
+
+def test_fixed_critic_lr_overrides_checkpoint_lr_on_resume(monkeypatch) -> None:
+  monkeypatch.setattr(PPO, "save", lambda self: {"base": "state"})
+  monkeypatch.setattr(PPO, "load", lambda self, loaded, cfg, strict: True)
+  source = _make_algorithm(critic_lr=1.0e-3)
+  saved = source.save()
+  target = _make_algorithm(
+    critic_lr=5.0e-4,
+    adaptive_critic_learning_rate=False,
+  )
+
+  target.load(saved, load_cfg=None, strict=True)
+
+  assert target.critic_learning_rate == 5.0e-4
+  assert target.optimizer.param_groups[1]["lr"] == 5.0e-4
 
 
 def test_split_lr_state_round_trips_through_ppo_save_and_load(monkeypatch) -> None:

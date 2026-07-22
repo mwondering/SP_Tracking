@@ -616,6 +616,12 @@ def test_spv5_1_task_adds_only_a_simulation_contact_target() -> None:
   assert prepared.agent.algorithm.class_name.endswith(
     ":SPV51ContactEstimatorPPO"
   )
+  assert prepared.agent.algorithm.estimator_learning_rate == 5.0e-5
+  assert (
+    prepared.agent.algorithm.use_checkpoint_estimator_learning_rate is False
+  )
+  assert prepared.agent.algorithm.critic_learning_rate == 5.0e-4
+  assert prepared.agent.algorithm.adaptive_critic_learning_rate is False
   assert prepared.agent.algorithm.estimator_foot_contact_loss_coef == 0.1
   assert env.events["base_com"].mode == "startup"
   assert env.events["base_mass"].mode == "startup"

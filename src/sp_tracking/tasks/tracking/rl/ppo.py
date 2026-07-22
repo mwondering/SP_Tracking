@@ -37,6 +37,7 @@ class SparseTrackSplitLrPPO(PPO):
     *args,
     actor_learning_rate: float | None = None,
     critic_learning_rate: float | None = None,
+    adaptive_critic_learning_rate: bool = True,
     clamp_rewards_min: float | None = None,
     learning_rate: float = 0.001,
     optimizer: str = "adam",
@@ -53,6 +54,9 @@ class SparseTrackSplitLrPPO(PPO):
       optimizer=optimizer,
       **kwargs,
     )
+    self.adaptive_critic_learning_rate = bool(
+      adaptive_critic_learning_rate
+    )
     if sapg_config.enabled:
       context = getattr(actor, "_sapg_policy_context", None)
       if context is None or context is not getattr(
@@ -68,6 +72,7 @@ class SparseTrackSplitLrPPO(PPO):
 
     self.actor_learning_rate = float(actor_learning_rate)
     self.critic_learning_rate = float(critic_learning_rate)
+    self._configured_critic_learning_rate = self.critic_learning_rate
     self.clamp_rewards_min = clamp_rewards_min
     self.learning_rate = self.actor_learning_rate
     self.optimizer = resolve_optimizer(optimizer)(
@@ -109,9 +114,10 @@ class SparseTrackSplitLrPPO(PPO):
       old_actor_lr = self.actor_learning_rate
       old_critic_lr = self.critic_learning_rate
       self.actor_learning_rate = float(lr)
-      self.critic_learning_rate = float(
-        old_critic_lr * self.actor_learning_rate / old_actor_lr
-      )
+      if self.adaptive_critic_learning_rate:
+        self.critic_learning_rate = float(
+          old_critic_lr * self.actor_learning_rate / old_actor_lr
+        )
       self.learning_rate = self.actor_learning_rate
       self.optimizer.param_groups[0]["lr"] = self.actor_learning_rate
       self.optimizer.param_groups[1]["lr"] = self.critic_learning_rate
@@ -162,7 +168,12 @@ class SparseTrackSplitLrPPO(PPO):
       return
 
     actor_lr = state.get("actor_learning_rate", param_groups[0]["lr"])
-    critic_lr = state.get("critic_learning_rate", param_groups[1]["lr"])
+    if self.adaptive_critic_learning_rate:
+      critic_lr = state.get("critic_learning_rate", param_groups[1]["lr"])
+    else:
+      # Keep a fixed critic LR fixed across resumes as well. Optimizer moments
+      # still load normally; only the checkpoint's stale LR is discarded.
+      critic_lr = self._configured_critic_learning_rate
     self.actor_learning_rate = float(actor_lr)
     self.critic_learning_rate = float(critic_lr)
     self.learning_rate = float(state.get("learning_rate", self.actor_learning_rate))
@@ -310,10 +321,16 @@ class SparseTrackSplitLrPPO(PPO):
             if self.gpu_global_rank == 0:
               if kl_mean > self.desired_kl * 2.0:
                 self.actor_learning_rate = max(1e-5, self.actor_learning_rate / 1.5)
-                self.critic_learning_rate = max(1e-5, self.critic_learning_rate / 1.5)
+                if self.adaptive_critic_learning_rate:
+                  self.critic_learning_rate = max(
+                    1e-5, self.critic_learning_rate / 1.5
+                  )
               elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
                 self.actor_learning_rate = min(1e-2, self.actor_learning_rate * 1.5)
-                self.critic_learning_rate = min(1e-2, self.critic_learning_rate * 1.5)
+                if self.adaptive_critic_learning_rate:
+                  self.critic_learning_rate = min(
+                    1e-2, self.critic_learning_rate * 1.5
+                  )
 
             if self.is_multi_gpu:
               actor_lr_tensor = torch.tensor(self.actor_learning_rate, device=self.device)
@@ -532,6 +549,7 @@ class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
     self,
     *args,
     estimator_learning_rate: float = 1.0e-4,
+    use_checkpoint_estimator_learning_rate: bool = True,
     estimator_root_height_loss_coef: float = 1.0,
     estimator_root_lin_vel_loss_coef: float = 1.0,
     estimator_max_grad_norm: float = 1.0,
@@ -553,6 +571,9 @@ class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
     self.estimator_learning_rate = float(estimator_learning_rate)
     if self.estimator_learning_rate <= 0.0:
       raise ValueError("estimator_learning_rate must be positive")
+    self.use_checkpoint_estimator_learning_rate = bool(
+      use_checkpoint_estimator_learning_rate
+    )
     self._estimator_parameters = tuple(estimator.parameters())
     if not self._estimator_parameters:
       raise ValueError("actor.estimator has no trainable parameters")
@@ -637,10 +658,16 @@ class SPV3EstimatorPPO(SparseTrackSplitLrPPO):
     load_optimizer = load_cfg is None or bool(load_cfg.get("optimizer", False))
     estimator_state = loaded_dict.get(self._ESTIMATOR_OPTIMIZER_STATE_KEY)
     if load_optimizer and isinstance(estimator_state, dict):
+      configured_lr = self.estimator_learning_rate
       self.estimator_optimizer.load_state_dict(estimator_state)
-      self.estimator_learning_rate = float(
-        self.estimator_optimizer.param_groups[0]["lr"]
-      )
+      if self.use_checkpoint_estimator_learning_rate:
+        self.estimator_learning_rate = float(
+          self.estimator_optimizer.param_groups[0]["lr"]
+        )
+      else:
+        # Restore optimizer moments but apply the task's newly configured LR.
+        for param_group in self.estimator_optimizer.param_groups:
+          param_group["lr"] = configured_lr
     return load_iteration
 
 

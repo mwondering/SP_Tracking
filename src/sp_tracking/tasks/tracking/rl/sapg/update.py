@@ -26,9 +26,10 @@ def _update_learning_rate(algorithm, kl_mean: torch.Tensor) -> None:
       algorithm.actor_learning_rate = min(
         1.0e-2, max(1.0e-5, algorithm.actor_learning_rate * scale)
       )
-      algorithm.critic_learning_rate = min(
-        1.0e-2, max(1.0e-5, algorithm.critic_learning_rate * scale)
-      )
+      if algorithm.adaptive_critic_learning_rate:
+        algorithm.critic_learning_rate = min(
+          1.0e-2, max(1.0e-5, algorithm.critic_learning_rate * scale)
+        )
     else:
       algorithm.learning_rate = min(
         1.0e-2, max(1.0e-5, algorithm.learning_rate * scale)

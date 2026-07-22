@@ -139,7 +139,11 @@ def test_spv3_estimator_optimizer_checkpoint_is_optional_for_legacy_runs() -> No
     "critic": ["policy", "priv"],
   }
 
-  def make_algorithm(estimator_lr: float) -> SPV3EstimatorPPO:
+  def make_algorithm(
+    estimator_lr: float,
+    *,
+    use_checkpoint_estimator_learning_rate: bool = True,
+  ) -> SPV3EstimatorPPO:
     actor = _actor(obs)
     critic = MLPModel(
       obs,
@@ -160,6 +164,9 @@ def test_spv3_estimator_optimizer_checkpoint_is_optional_for_legacy_runs() -> No
       actor_learning_rate=1.0e-3,
       critic_learning_rate=1.0e-3,
       estimator_learning_rate=estimator_lr,
+      use_checkpoint_estimator_learning_rate=(
+        use_checkpoint_estimator_learning_rate
+      ),
       schedule="fixed",
       desired_kl=None,
     )
@@ -172,6 +179,14 @@ def test_spv3_estimator_optimizer_checkpoint_is_optional_for_legacy_runs() -> No
   resumed.load(saved, load_cfg=None, strict=True)
   assert resumed.estimator_learning_rate == 3.0e-5
   assert resumed.estimator_optimizer.param_groups[0]["lr"] == 3.0e-5
+
+  resumed_with_new_lr = make_algorithm(
+    5.0e-5,
+    use_checkpoint_estimator_learning_rate=False,
+  )
+  resumed_with_new_lr.load(saved, load_cfg=None, strict=True)
+  assert resumed_with_new_lr.estimator_learning_rate == 5.0e-5
+  assert resumed_with_new_lr.estimator_optimizer.param_groups[0]["lr"] == 5.0e-5
 
   legacy = dict(saved)
   legacy.pop(SPV3EstimatorPPO._ESTIMATOR_OPTIMIZER_STATE_KEY)
