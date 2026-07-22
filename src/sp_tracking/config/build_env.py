@@ -42,6 +42,7 @@ from sp_tracking.tasks.tracking.mdp import spv2 as spv2_mdp
 from sp_tracking.tasks.tracking.mdp import spv3 as spv3_mdp
 from sp_tracking.tasks.tracking.mdp import spv4 as spv4_mdp
 from sp_tracking.tasks.tracking.mdp import spv5 as spv5_mdp
+from sp_tracking.tasks.tracking.mdp import spv5_2 as spv5_2_mdp
 from sp_tracking.tasks.tracking.mdp import spv6 as spv6_mdp
 from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
   MotionCommandCfg as LargeDatasetMotionCommandCfg,
@@ -133,6 +134,7 @@ OBS_TERMS = {
   "spv5_reference_encoder_input": spv5_mdp.reference_encoder_input,
   "spv5_reference_encoder_target": spv5_mdp.reference_encoder_target,
   "spv5_robot_root_quat": spv5_mdp.robot_root_quat,
+  "spv5_2_robot_key_body_state": spv5_2_mdp.robot_key_body_state,
   "spv6_physical_parameters": spv6_mdp.physical_parameters,
   "spv6_push_event_state": spv6_mdp.push_event_state,
 }

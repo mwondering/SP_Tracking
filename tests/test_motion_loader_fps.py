@@ -10,6 +10,7 @@ from sp_tracking.tasks.tracking.mdp.multi_command_largedataset import (
 )
 from sp_tracking.tasks.tracking.mdp.motion_fk import (
   MotionFKHelper,
+  angvel_from_quat_wxyz_torch,
   finite_diff_torch,
   smooth_avg5_torch,
 )
@@ -96,6 +97,52 @@ def _sp_fk_helper() -> MotionFKHelper:
     dataset_joint_names=_MUJOCO_JOINT_NAMES,
     output_body_names=SP_BODY_NAMES,
     device="cpu",
+  )
+
+
+def test_motion_fk_analytic_kinematics_matches_finite_difference() -> None:
+  torch.manual_seed(11)
+  helper = _sp_fk_helper()
+  joint_pos = torch.randn(3, len(_MUJOCO_JOINT_NAMES)) * 0.15
+  joint_vel = torch.randn_like(joint_pos) * 0.5
+  root_ang_vel = torch.randn(3, 3) * 0.3
+
+  pos, quat, lin_vel, ang_vel = helper.body_kinematics(
+    joint_pos,
+    joint_vel,
+    root_ang_vel,
+  )
+  dt = 2.0e-4
+  sample_pos, sample_quat = helper.body_pose(
+    torch.stack(
+      (joint_pos - dt * joint_vel, joint_pos, joint_pos + dt * joint_vel)
+    )
+  )
+  expected_lin_vel = (sample_pos[2] - sample_pos[0]) / (2.0 * dt)
+  expected_lin_vel += torch.linalg.cross(
+    root_ang_vel.unsqueeze(1).expand_as(pos),
+    pos,
+    dim=-1,
+  )
+  relative_ang_vel = angvel_from_quat_wxyz_torch(
+    sample_quat,
+    fps=1.0 / dt,
+    dim=0,
+  )[1]
+  expected_ang_vel = relative_ang_vel + root_ang_vel.unsqueeze(1)
+
+  torch.testing.assert_close(quat, sample_quat[1])
+  torch.testing.assert_close(
+    lin_vel,
+    expected_lin_vel,
+    atol=8.0e-4,
+    rtol=4.0e-3,
+  )
+  torch.testing.assert_close(
+    ang_vel,
+    expected_ang_vel,
+    atol=8.0e-4,
+    rtol=4.0e-3,
   )
 
 

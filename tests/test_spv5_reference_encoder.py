@@ -19,6 +19,9 @@ from sp_tracking.tasks.tracking.mdp.spv5 import (
   SPV5_REFERENCE_SUPPORT_STEPS,
   SPV5_REFERENCE_TARGET_DIM,
 )
+from sp_tracking.tasks.tracking.mdp.spv5_2 import (
+  SPV52RobotKeyBodyKinematics,
+)
 from sp_tracking.tasks.tracking.rl.spv5_models import (
   SPV5_POLICY_CONTEXT_CACHE_DIM,
   SPV5_POLICY_CONTEXT_CACHE_GROUP,
@@ -333,6 +336,30 @@ def test_spv5_seven_frame_key_body_fk_is_exact_at_current_frame() -> None:
   torch.testing.assert_close(
     short_ang_vel[:, current], full_ang_vel[:, current]
   )
+
+
+def test_spv5_2_robot_key_body_fk_uses_q_dq_and_gyro() -> None:
+  torch.manual_seed(19)
+  reference_kinematics = SPV5ReferenceKinematics(KEYPOINT_SPECS, fps=50.0)
+  kinematics = SPV52RobotKeyBodyKinematics(
+    reference_kinematics._fk_helper(torch.device("cpu")),
+    KEYPOINT_SPECS,
+  )
+  joint_pos = torch.randn(2, 29) * 0.1
+  zero_joint_vel = torch.zeros_like(joint_pos)
+  zero_gyro = torch.zeros(2, 3)
+
+  stationary = kinematics(joint_pos, zero_joint_vel, zero_gyro)
+  moving = kinematics(
+    joint_pos,
+    torch.randn_like(joint_pos) * 0.4,
+    torch.tensor(((0.1, -0.2, 0.3), (-0.2, 0.1, -0.1))),
+  )
+
+  assert stationary.shape == (2, 195)
+  torch.testing.assert_close(stationary[:, 117:], torch.zeros(2, 78))
+  torch.testing.assert_close(moving[:, :117], stationary[:, :117])
+  assert torch.count_nonzero(moving[:, 117:]) > 0
 
 
 def test_spv5_policy_and_supervised_gradients_are_separated() -> None:
@@ -730,6 +757,7 @@ def test_spv5_2_task_uses_latest_50hz_noisy_torque_and_height_target() -> None:
   prepared = prepare_train_cfg(cfg)
   env = build_env_cfg(cfg.task)
   torque = env.observations["estimator_history"].terms["joint_torque"]
+  robot_key_body = env.observations["robot_key_body"].terms["current"]
   estimator_target = env.observations["estimator_target"]
 
   assert prepared.agent.actor.class_name.endswith(
@@ -752,6 +780,12 @@ def test_spv5_2_task_uses_latest_50hz_noisy_torque_and_height_target() -> None:
   assert torque.params["sample_mode"] == "latest"
   assert torque.noise.n_min == -2.0
   assert torque.noise.n_max == 2.0
+  assert robot_key_body.func.__module__.endswith(".spv5_2")
+  assert robot_key_body.params["biased"] is True
+  assert robot_key_body.params["joint_pos_noise_std"] == 0.01
+  assert robot_key_body.params["joint_vel_noise_std"] == 0.5
+  assert robot_key_body.params["gyro_sensor_name"] == "robot/imu_ang_vel"
+  assert robot_key_body.params["gyro_noise_std"] == 0.2
   assert env.decimation == 4
   assert env.sim.mujoco.timestep == 0.005
   assert 1.0 / (env.decimation * env.sim.mujoco.timestep) == 50.0

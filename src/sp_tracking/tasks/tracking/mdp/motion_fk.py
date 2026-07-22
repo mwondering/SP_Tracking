@@ -576,6 +576,245 @@ class MotionFKHelper:
       body_quat_b.reshape(prefix + (self._body_count, 4)),
     )
 
+  def body_kinematics(
+    self,
+    joint_pos: torch.Tensor,
+    joint_vel: torch.Tensor,
+    root_ang_vel_b: torch.Tensor,
+  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Run analytic FK from measured ``q``, ``dq``, and root gyro.
+
+    Positions and rotations are root-relative and root-frame expressed.  Linear
+    velocity subtracts root translation but includes the velocity induced by
+    root angular motion.  Angular velocity is the absolute body angular
+    velocity expressed in the root frame; callers that need the SPV4
+    root-relative convention subtract ``root_ang_vel_b`` after applying any
+    semantic point offsets.
+    """
+    joint_pos = joint_pos.to(device=self.device, dtype=torch.float32)
+    joint_vel = joint_vel.to(device=self.device, dtype=torch.float32)
+    root_ang_vel_b = root_ang_vel_b.to(
+      device=self.device, dtype=torch.float32
+    )
+    if joint_vel.shape != joint_pos.shape:
+      raise ValueError(
+        "joint_vel must have the same shape as joint_pos, got "
+        f"{tuple(joint_vel.shape)} and {tuple(joint_pos.shape)}"
+      )
+    prefix = joint_pos.shape[:-1]
+    if root_ang_vel_b.shape != prefix + (3,):
+      raise ValueError(
+        "root_ang_vel_b must match the joint-state prefix, got "
+        f"{tuple(root_ang_vel_b.shape)} for {tuple(joint_pos.shape)}"
+      )
+
+    flat_count = math.prod(prefix) if len(prefix) > 0 else 1
+    joint_pos_f = joint_pos.reshape(flat_count, joint_pos.shape[-1])
+    joint_vel_f = joint_vel.reshape(flat_count, joint_vel.shape[-1])
+    root_ang_vel_f = root_ang_vel_b.reshape(flat_count, 3)
+
+    tree_pos_b = torch.zeros(
+      (flat_count, self._tree_size, 3),
+      device=self.device,
+      dtype=torch.float32,
+    )
+    tree_quat_b = torch.zeros(
+      (flat_count, self._tree_size, 4),
+      device=self.device,
+      dtype=torch.float32,
+    )
+    tree_lin_vel_b = torch.zeros_like(tree_pos_b)
+    tree_ang_vel_b = torch.zeros_like(tree_pos_b)
+    tree_quat_b[:, self.base_local_idx, 0] = 1.0
+    tree_ang_vel_b[:, self.base_local_idx] = root_ang_vel_f
+
+    for depth_group in self._depth_groups:
+      fixed_group = depth_group["fixed"]
+      if fixed_group is not None:
+        parent_pos_b = tree_pos_b.index_select(
+          1, fixed_group["parent_idx"]
+        )
+        parent_quat_b = tree_quat_b.index_select(
+          1, fixed_group["parent_idx"]
+        )
+        parent_lin_vel_b = tree_lin_vel_b.index_select(
+          1, fixed_group["parent_idx"]
+        )
+        parent_ang_vel_b = tree_ang_vel_b.index_select(
+          1, fixed_group["parent_idx"]
+        )
+        rel_quat = fixed_group["quat0"].unsqueeze(0)
+        rel_pos_parent = fixed_group["pos0"].unsqueeze(0)
+        rel_pos_b = quat_apply(parent_quat_b, rel_pos_parent)
+        tree_quat_b.index_copy_(
+          1,
+          fixed_group["local_idx"],
+          normalize(quat_mul(parent_quat_b, rel_quat)),
+        )
+        tree_pos_b.index_copy_(
+          1, fixed_group["local_idx"], parent_pos_b + rel_pos_b
+        )
+        tree_lin_vel_b.index_copy_(
+          1,
+          fixed_group["local_idx"],
+          parent_lin_vel_b
+          + torch.linalg.cross(parent_ang_vel_b, rel_pos_b, dim=-1),
+        )
+        tree_ang_vel_b.index_copy_(
+          1, fixed_group["local_idx"], parent_ang_vel_b
+        )
+
+      slide_group = depth_group["slide"]
+      if slide_group is not None:
+        parent_pos_b = tree_pos_b.index_select(
+          1, slide_group["parent_idx"]
+        )
+        parent_quat_b = tree_quat_b.index_select(
+          1, slide_group["parent_idx"]
+        )
+        parent_lin_vel_b = tree_lin_vel_b.index_select(
+          1, slide_group["parent_idx"]
+        )
+        parent_ang_vel_b = tree_ang_vel_b.index_select(
+          1, slide_group["parent_idx"]
+        )
+        quat0 = slide_group["quat0"].unsqueeze(0)
+        pos0 = slide_group["pos0"].unsqueeze(0)
+        axis_local = slide_group["joint_axis_local"].unsqueeze(0)
+        joint_value = joint_pos_f.index_select(
+          1, slide_group["joint_dataset_idx"]
+        )
+        joint_rate = joint_vel_f.index_select(
+          1, slide_group["joint_dataset_idx"]
+        )
+        axis_parent = quat_apply(quat0, axis_local)
+        rel_pos_parent = pos0 + axis_parent * joint_value.unsqueeze(-1)
+        rel_pos_b = quat_apply(parent_quat_b, rel_pos_parent)
+        axis_b = quat_apply(parent_quat_b, axis_parent)
+        tree_quat_b.index_copy_(
+          1,
+          slide_group["local_idx"],
+          normalize(quat_mul(parent_quat_b, quat0)),
+        )
+        tree_pos_b.index_copy_(
+          1, slide_group["local_idx"], parent_pos_b + rel_pos_b
+        )
+        tree_lin_vel_b.index_copy_(
+          1,
+          slide_group["local_idx"],
+          parent_lin_vel_b
+          + torch.linalg.cross(parent_ang_vel_b, rel_pos_b, dim=-1)
+          + axis_b * joint_rate.unsqueeze(-1),
+        )
+        tree_ang_vel_b.index_copy_(
+          1, slide_group["local_idx"], parent_ang_vel_b
+        )
+
+      hinge_group = depth_group["hinge"]
+      if hinge_group is not None:
+        parent_pos_b = tree_pos_b.index_select(
+          1, hinge_group["parent_idx"]
+        )
+        parent_quat_b = tree_quat_b.index_select(
+          1, hinge_group["parent_idx"]
+        )
+        parent_lin_vel_b = tree_lin_vel_b.index_select(
+          1, hinge_group["parent_idx"]
+        )
+        parent_ang_vel_b = tree_ang_vel_b.index_select(
+          1, hinge_group["parent_idx"]
+        )
+        quat0 = hinge_group["quat0"].unsqueeze(0)
+        pos0 = hinge_group["pos0"].unsqueeze(0)
+        axis_local = hinge_group["joint_axis_local"].unsqueeze(0)
+        anchor_local = hinge_group["joint_pos_local"].unsqueeze(0)
+        joint_value = joint_pos_f.index_select(
+          1, hinge_group["joint_dataset_idx"]
+        )
+        joint_rate = joint_vel_f.index_select(
+          1, hinge_group["joint_dataset_idx"]
+        )
+        joint_quat = quat_from_angle_axis(joint_value, axis_local)
+        rel_quat = quat_mul(quat0, joint_quat)
+        rotated_anchor_parent = quat_apply(
+          quat0, quat_apply(joint_quat, anchor_local)
+        )
+        rel_pos_parent = pos0 + quat_apply(
+          quat0, anchor_local - quat_apply(joint_quat, anchor_local)
+        )
+        rel_pos_b = quat_apply(parent_quat_b, rel_pos_parent)
+        axis_parent = quat_apply(quat0, axis_local)
+        joint_ang_vel_b = (
+          quat_apply(parent_quat_b, axis_parent)
+          * joint_rate.unsqueeze(-1)
+        )
+        joint_lever_b = -quat_apply(
+          parent_quat_b, rotated_anchor_parent
+        )
+        tree_quat_b.index_copy_(
+          1,
+          hinge_group["local_idx"],
+          normalize(quat_mul(parent_quat_b, rel_quat)),
+        )
+        tree_pos_b.index_copy_(
+          1, hinge_group["local_idx"], parent_pos_b + rel_pos_b
+        )
+        tree_lin_vel_b.index_copy_(
+          1,
+          hinge_group["local_idx"],
+          parent_lin_vel_b
+          + torch.linalg.cross(parent_ang_vel_b, rel_pos_b, dim=-1)
+          + torch.linalg.cross(
+            joint_ang_vel_b, joint_lever_b, dim=-1
+          ),
+        )
+        tree_ang_vel_b.index_copy_(
+          1,
+          hinge_group["local_idx"],
+          parent_ang_vel_b + joint_ang_vel_b,
+        )
+
+    output_shape = prefix + (self._body_count,)
+    body_pos_b = torch.zeros(
+      output_shape + (3,), device=self.device, dtype=torch.float32
+    )
+    body_quat_b = torch.zeros(
+      output_shape + (4,), device=self.device, dtype=torch.float32
+    )
+    body_lin_vel_b = torch.zeros_like(body_pos_b)
+    body_ang_vel_b = torch.zeros_like(body_pos_b)
+    body_quat_b[..., 0] = 1.0
+    if self._valid_output_idx.numel() > 0:
+      flat_pos = body_pos_b.reshape(flat_count, self._body_count, 3)
+      flat_quat = body_quat_b.reshape(flat_count, self._body_count, 4)
+      flat_lin_vel = body_lin_vel_b.reshape(
+        flat_count, self._body_count, 3
+      )
+      flat_ang_vel = body_ang_vel_b.reshape(
+        flat_count, self._body_count, 3
+      )
+      flat_pos.index_copy_(
+        1,
+        self._valid_output_idx,
+        tree_pos_b.index_select(1, self._valid_output_local_idx),
+      )
+      flat_quat.index_copy_(
+        1,
+        self._valid_output_idx,
+        tree_quat_b.index_select(1, self._valid_output_local_idx),
+      )
+      flat_lin_vel.index_copy_(
+        1,
+        self._valid_output_idx,
+        tree_lin_vel_b.index_select(1, self._valid_output_local_idx),
+      )
+      flat_ang_vel.index_copy_(
+        1,
+        self._valid_output_idx,
+        tree_ang_vel_b.index_select(1, self._valid_output_local_idx),
+      )
+    return body_pos_b, body_quat_b, body_lin_vel_b, body_ang_vel_b
+
   def expand_motion(
     self,
     *,

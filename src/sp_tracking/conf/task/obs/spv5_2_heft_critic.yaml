@@ -3,6 +3,24 @@ defaults:
   - _self_
 
 observations:
+  # Rebuild the actor's current robot key-body state from the same cached noisy
+  # q/dq/gyro samples used by estimator_history.  This removes the SPV4
+  # simulator-body-state shortcut while preserving the 195-D policy contract.
+  robot_key_body:
+    concatenate_terms: true
+    enable_corruption: false
+    terms:
+      - name: current
+        term: spv5_2_robot_key_body_state
+        params:
+          command_name: motion
+          biased: true
+          joint_pos_noise_std: 0.01
+          joint_vel_noise_std: 0.5
+          gyro_sensor_name: robot/imu_ang_vel
+          gyro_noise_std: 0.2
+          keypoint_specs: ${task.obs.semantic_keypoints.heft}
+
   estimator_history:
     concatenate_terms: true
     enable_corruption: true
