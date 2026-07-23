@@ -98,3 +98,70 @@ def test_old_tracking_view_selects_its_body_set_from_union_reference() -> None:
     body_names=old_body_names,
     anchor_body_name="torso_link",
   ).item()
+
+
+def test_global_body_position_termination_checks_each_selected_link() -> None:
+  body_names = (
+    "pelvis",
+    "left_wrist_yaw_link",
+    "right_wrist_yaw_link",
+    "left_ankle_roll_link",
+    "right_ankle_roll_link",
+  )
+  reference_pos = torch.zeros((4, len(body_names), 3))
+  robot_pos = reference_pos.clone()
+  robot_pos[0, body_names.index("left_wrist_yaw_link"), 0] = 0.5
+  robot_pos[1, body_names.index("right_wrist_yaw_link"), 0] = 0.501
+  robot_pos[2, body_names.index("left_ankle_roll_link"), :2] = torch.tensor(
+    [0.3, 0.39]
+  )
+  robot_pos[3, body_names.index("pelvis"), 2] = -0.51
+  command = SimpleNamespace(
+    cfg=SimpleNamespace(body_names=body_names),
+    body_pos_w=reference_pos,
+    robot_body_pos_w=robot_pos,
+  )
+  env = SimpleNamespace(num_envs=4, command_manager=_CommandManager(command))
+
+  outputs = [
+    tracking_terminations.bad_motion_body_pos_global(
+      env,
+      "motion",
+      threshold=0.5,
+      body_names=body_names,
+      consecutive_steps=5,
+    )
+    for _ in range(5)
+  ]
+
+  assert all(not output.any() for output in outputs[:4])
+  assert torch.equal(outputs[4], torch.tensor([False, True, False, True]))
+
+
+def test_global_body_position_termination_buffer_resets_after_recovery() -> None:
+  body_names = ("pelvis",)
+  reference_pos = torch.zeros((1, 1, 3))
+  robot_pos = torch.tensor([[[0.51, 0.0, 0.0]]])
+  command = SimpleNamespace(
+    cfg=SimpleNamespace(body_names=body_names),
+    body_pos_w=reference_pos,
+    robot_body_pos_w=robot_pos,
+  )
+  env = SimpleNamespace(num_envs=1, command_manager=_CommandManager(command))
+
+  def terminate() -> torch.Tensor:
+    return tracking_terminations.bad_motion_body_pos_global(
+      env,
+      "motion",
+      threshold=0.5,
+      body_names=body_names,
+      consecutive_steps=5,
+    )
+
+  assert not terminate().item()
+  assert not terminate().item()
+  command.robot_body_pos_w.zero_()
+  assert not terminate().item()
+  command.robot_body_pos_w[..., 0] = 0.51
+  assert [terminate().item() for _ in range(4)] == [False] * 4
+  assert terminate().item()

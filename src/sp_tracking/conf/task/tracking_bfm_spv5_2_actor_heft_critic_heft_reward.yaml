@@ -7,6 +7,47 @@ name: tracking_bfm_spv5_2_actor_heft_critic_heft_reward
 variant:
   observation_profile: spv5_2_height_contact_estimator_actor_heft_critic
 
+# Preserve the inherited BFM failure conditions and add a strict global-frame
+# guard for the pelvis and distal wrist/ankle links.  Any one-link error must
+# remain above 0.5 m for five consecutive control steps before termination.
+terminations:
+  - name: time_out
+    term: time_out
+    time_out: true
+  - name: anchor_pos
+    term: bad_anchor_pos_z_only
+    params:
+      command_name: motion
+      threshold: 0.5
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
+  - name: anchor_ori
+    term: bad_anchor_ori
+    params:
+      command_name: motion
+      threshold: 0.8
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
+      asset_cfg:
+        entity_name: robot
+  - name: ee_body_pos
+    term: bad_motion_body_pos_z_only
+    params:
+      command_name: motion
+      threshold: 0.5
+      body_names: ${task.reference_views.old_tracking.termination_body_names}
+      anchor_body_name: ${task.reference_views.old_tracking.anchor_body_name}
+  - name: global_key_body_pos
+    term: bad_motion_body_pos_global
+    params:
+      command_name: motion
+      threshold: 0.5
+      consecutive_steps: 5
+      body_names:
+        - pelvis
+        - left_wrist_yaw_link
+        - right_wrist_yaw_link
+        - left_ankle_roll_link
+        - right_ankle_roll_link
+
 # SPV5-2 removes the three-dimensional root-linear-velocity estimate and its
 # three-dimensional reference error.  Height/contact estimation, the denoised
 # reference encoder, and SPV5-1's conservative auxiliary/critic LRs remain.

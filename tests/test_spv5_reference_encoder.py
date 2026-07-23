@@ -789,3 +789,23 @@ def test_spv5_2_task_uses_latest_50hz_noisy_torque_and_height_target() -> None:
   assert env.decimation == 4
   assert env.sim.mujoco.timestep == 0.005
   assert 1.0 / (env.decimation * env.sim.mujoco.timestep) == 50.0
+  assert tuple(env.terminations) == (
+    "time_out",
+    "anchor_pos",
+    "anchor_ori",
+    "ee_body_pos",
+    "global_key_body_pos",
+  )
+  global_key_body_pos = env.terminations["global_key_body_pos"]
+  assert global_key_body_pos.params["threshold"] == 0.5
+  assert global_key_body_pos.params["consecutive_steps"] == 5
+  assert tuple(global_key_body_pos.params["body_names"]) == (
+    "pelvis",
+    "left_wrist_yaw_link",
+    "right_wrist_yaw_link",
+    "left_ankle_roll_link",
+    "right_ankle_roll_link",
+  )
+  assert set(global_key_body_pos.params["body_names"]) <= set(
+    env.commands["motion"].body_names
+  )

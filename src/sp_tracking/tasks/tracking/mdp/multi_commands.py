@@ -1184,6 +1184,7 @@ class MultiMotionCommand(CommandTerm):
     for name in (
       "_body_z_termination_buffer",
       "_gravity_dir_termination_buffer",
+      "_global_key_body_pos_termination_buffer",
     ):
       buffer = getattr(self, name, None)
       if isinstance(buffer, torch.Tensor):
@@ -1468,7 +1469,11 @@ class MultiMotionCommand(CommandTerm):
       self._clear_shared_joint_observation_cache()
       self.boot_indicator[env_ids] = float(max(int(self.cfg.boot_indicator_max), 0))
       self.feet_standing[env_ids] = False
-      for name in ("_body_z_termination_buffer", "_gravity_dir_termination_buffer"):
+      for name in (
+        "_body_z_termination_buffer",
+        "_gravity_dir_termination_buffer",
+        "_global_key_body_pos_termination_buffer",
+      ):
         buffer = getattr(self, name, None)
         if isinstance(buffer, torch.Tensor):
           buffer[env_ids] = 0

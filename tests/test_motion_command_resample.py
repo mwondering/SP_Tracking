@@ -174,6 +174,9 @@ def test_sp_tracking_reset_clears_consecutive_termination_buffers() -> None:
   command.feet_standing = torch.ones((2, 2), dtype=torch.bool)
   command._body_z_termination_buffer = torch.tensor([3, 5], dtype=torch.int32)
   command._gravity_dir_termination_buffer = torch.tensor([2, 5], dtype=torch.int32)
+  command._global_key_body_pos_termination_buffer = torch.tensor(
+    [4, 5], dtype=torch.int32
+  )
   command.reward_root_ref_xy_history_w = torch.zeros((2, 1, 2))
   command.reward_root_actual_xy_history_w = torch.zeros((2, 1, 2))
   command._reward_root_history_slot = torch.zeros(2, dtype=torch.long)
@@ -192,4 +195,5 @@ def test_sp_tracking_reset_clears_consecutive_termination_buffers() -> None:
 
   assert command._body_z_termination_buffer.tolist() == [3, 0]
   assert command._gravity_dir_termination_buffer.tolist() == [2, 0]
+  assert command._global_key_body_pos_termination_buffer.tolist() == [4, 0]
   assert command.boot_indicator[:, 0].tolist() == [0.0, 25.0]

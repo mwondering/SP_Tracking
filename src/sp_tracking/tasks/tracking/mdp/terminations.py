@@ -103,6 +103,49 @@ def bad_motion_body_pos(
   return torch.any(error > threshold, dim=-1)
 
 
+def bad_motion_body_pos_global(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  threshold: float,
+  body_names: tuple[str, ...] | None = None,
+  consecutive_steps: int = 1,
+) -> torch.Tensor:
+  """Terminate after a sustained global-position error on any selected body."""
+  command = cast(MotionCommand, env.command_manager.get_term(command_name))
+  body_indexes = _get_body_indexes(command, body_names)
+  if body_names is not None and len(body_indexes) != len(body_names):
+    configured_names = set(command.cfg.body_names)
+    missing_names = tuple(name for name in body_names if name not in configured_names)
+    raise ValueError(
+      "Global body-position termination references bodies absent from the "
+      f"command reference: {missing_names}."
+    )
+
+  error = torch.norm(
+    command.body_pos_w[:, body_indexes]
+    - command.robot_body_pos_w[:, body_indexes],
+    dim=-1,
+  )
+  exceed = torch.any(error > threshold, dim=-1)
+  required_steps = max(int(consecutive_steps), 1)
+  if required_steps == 1:
+    return exceed
+
+  buffer_name = "_global_key_body_pos_termination_buffer"
+  buffer = getattr(command, buffer_name, None)
+  if (
+    not isinstance(buffer, torch.Tensor)
+    or buffer.shape != exceed.shape
+    or buffer.device != exceed.device
+  ):
+    buffer = torch.zeros_like(exceed, dtype=torch.int32)
+    setattr(command, buffer_name, buffer)
+  buffer.add_(exceed.to(buffer.dtype))
+  buffer.masked_fill_(~exceed, 0)
+  buffer.clamp_(max=required_steps)
+  return buffer >= required_steps
+
+
 def bad_motion_body_pos_z_only(
   env: ManagerBasedRlEnv,
   command_name: str,

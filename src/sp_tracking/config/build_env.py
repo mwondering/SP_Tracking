@@ -174,6 +174,7 @@ TERMINATION_TERMS = {
   "time_out": mjlab_mdp.time_out,
   "bad_anchor_pos_z_only": mdp.bad_anchor_pos_z_only,
   "bad_anchor_ori": mdp.bad_anchor_ori,
+  "bad_motion_body_pos_global": mdp.bad_motion_body_pos_global,
   "bad_motion_body_pos_z_only": mdp.bad_motion_body_pos_z_only,
   "body_z_termination": sp_mdp.body_z_termination,
   "gravity_dir_termination": sp_mdp.gravity_dir_termination,
