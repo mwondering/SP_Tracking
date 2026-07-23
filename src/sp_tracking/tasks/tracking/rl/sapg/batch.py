@@ -1,4 +1,4 @@
-"""Trajectory-preserving SAPG aggregation over RSL-RL rollout storage."""
+"""Trajectory-preserving SAPG/CPO aggregation over RSL-RL rollout storage."""
 
 from __future__ import annotations
 
@@ -34,12 +34,15 @@ def rollout_policy_ids(
 
 @dataclass
 class SAPGAggregatedData:
-  """Index-only aggregate plus SAPG-specific value/return targets."""
+  """Index-only aggregate plus role-specific value/return targets."""
 
   source_indices: torch.Tensor
   source_policy_ids: torch.Tensor
   target_policy_ids: torch.Tensor
   off_policy_mask: torch.Tensor
+  leader_to_follower_mask: torch.Tensor
+  leader_on_policy_mask: torch.Tensor
+  follower_on_policy_mask: torch.Tensor
   values: torch.Tensor
   returns: torch.Tensor
   advantages: torch.Tensor
@@ -147,6 +150,15 @@ def build_aggregated_data(
     source_indices.numel(), dtype=torch.bool, device=device
   )
   off_policy_mask[on_policy_samples:] = True
+  leader_to_follower_mask = torch.zeros_like(off_policy_mask)
+  leader_on_policy_mask = (
+    (~off_policy_mask)
+    & (source_policy_ids == num_policy_blocks - 1)
+  )
+  follower_on_policy_mask = (
+    (~off_policy_mask)
+    & (source_policy_ids != num_policy_blocks - 1)
+  )
 
   on_values = storage.values.transpose(0, 1).reshape(-1, 1)
   on_returns = storage.returns.transpose(0, 1).reshape(-1, 1)
@@ -170,6 +182,167 @@ def build_aggregated_data(
     source_policy_ids=source_policy_ids,
     target_policy_ids=target_policy_ids,
     off_policy_mask=off_policy_mask,
+    leader_to_follower_mask=leader_to_follower_mask,
+    leader_on_policy_mask=leader_on_policy_mask,
+    follower_on_policy_mask=follower_on_policy_mask,
+    values=values,
+    returns=returns,
+    advantages=advantages,
+    kl_reference_params=kl_reference_params,
+    selected_follower_ids=selected_follower_ids,
+    num_trajectories=int(source_envs.numel()),
+    horizon=horizon,
+  )
+
+
+def build_cpo_aggregated_data(
+  storage: RolloutStorage,
+  selected_follower_ids: torch.Tensor,
+  leader_values: torch.Tensor,
+  leader_next_values: torch.Tensor,
+  follower_values: torch.Tensor,
+  follower_next_values: torch.Tensor,
+  *,
+  num_policy_blocks: int,
+  gamma: float,
+) -> SAPGAggregatedData:
+  """Build the official CPO leader/follower roles without copying observations.
+
+  The aggregate contains, in order:
+
+  1. every original on-policy trajectory;
+  2. each leader trajectory re-evaluated by every follower for the AWAC term;
+  3. selected follower trajectories re-evaluated by the leader, as in SAPG.
+  """
+  horizon = int(storage.num_transitions_per_env)
+  num_envs = int(storage.num_envs)
+  device = storage.values.device
+  policy_ids = rollout_policy_ids(num_envs, num_policy_blocks, device)
+  block_size = num_envs // num_policy_blocks
+  num_followers = num_policy_blocks - 1
+  leader_policy_id = num_policy_blocks - 1
+  selected_follower_ids = selected_follower_ids.to(
+    device=device, dtype=torch.long
+  )
+
+  leader_envs = torch.arange(
+    leader_policy_id * block_size,
+    num_envs,
+    device=device,
+  )
+  leader_copy_envs = leader_envs.repeat(num_followers)
+  follower_copy_ids = torch.arange(
+    num_followers, dtype=torch.long, device=device
+  ).repeat_interleave(block_size)
+  off_envs = torch.cat(
+    [
+      torch.arange(
+        int(follower) * block_size,
+        (int(follower) + 1) * block_size,
+        device=device,
+      )
+      for follower in selected_follower_ids
+    ]
+  )
+
+  expected_off_shape = (horizon, off_envs.numel(), 1)
+  if tuple(leader_values.shape) != expected_off_shape:
+    raise ValueError(
+      f"leader_values has shape {tuple(leader_values.shape)}, "
+      f"expected {expected_off_shape}"
+    )
+  if tuple(leader_next_values.shape) != expected_off_shape:
+    raise ValueError(
+      "leader_next_values has shape "
+      f"{tuple(leader_next_values.shape)}, expected {expected_off_shape}"
+    )
+  expected_copy_shape = (horizon, leader_copy_envs.numel(), 1)
+  if tuple(follower_values.shape) != expected_copy_shape:
+    raise ValueError(
+      f"follower_values has shape {tuple(follower_values.shape)}, "
+      f"expected {expected_copy_shape}"
+    )
+  if tuple(follower_next_values.shape) != expected_copy_shape:
+    raise ValueError(
+      "follower_next_values has shape "
+      f"{tuple(follower_next_values.shape)}, expected {expected_copy_shape}"
+    )
+
+  source_envs = torch.cat(
+    (
+      torch.arange(num_envs, device=device),
+      leader_copy_envs,
+      off_envs,
+    )
+  )
+  source_indices = (
+    torch.arange(horizon, device=device).unsqueeze(1) * num_envs
+    + source_envs.unsqueeze(0)
+  ).transpose(0, 1).reshape(-1)
+  source_policy_ids = policy_ids[source_envs].repeat_interleave(horizon)
+  target_policy_ids = source_policy_ids.clone()
+
+  on_policy_samples = num_envs * horizon
+  leader_copy_samples = leader_copy_envs.numel() * horizon
+  leader_copy_stop = on_policy_samples + leader_copy_samples
+  target_policy_ids[on_policy_samples:leader_copy_stop] = (
+    follower_copy_ids.repeat_interleave(horizon)
+  )
+  target_policy_ids[leader_copy_stop:] = leader_policy_id
+
+  off_policy_mask = torch.zeros(
+    source_indices.numel(), dtype=torch.bool, device=device
+  )
+  off_policy_mask[leader_copy_stop:] = True
+  leader_to_follower_mask = torch.zeros_like(off_policy_mask)
+  leader_to_follower_mask[on_policy_samples:leader_copy_stop] = True
+  leader_on_policy_mask = torch.zeros_like(off_policy_mask)
+  leader_start = leader_policy_id * block_size * horizon
+  leader_on_policy_mask[leader_start:on_policy_samples] = True
+  follower_on_policy_mask = torch.zeros_like(off_policy_mask)
+  follower_on_policy_mask[:leader_start] = True
+
+  on_values = storage.values.transpose(0, 1).reshape(-1, 1)
+  on_returns = storage.returns.transpose(0, 1).reshape(-1, 1)
+  copy_values = follower_values.transpose(0, 1).reshape(-1, 1)
+  off_values = leader_values.transpose(0, 1).reshape(-1, 1)
+
+  copy_rewards = storage.rewards[:, leader_envs].repeat(
+    1, num_followers, 1
+  )
+  copy_alive = (1.0 - storage.dones[:, leader_envs]).to(
+    storage.rewards.dtype
+  ).repeat(1, num_followers, 1)
+  copy_returns = (
+    copy_rewards
+    + gamma * copy_alive * follower_next_values
+  ).transpose(0, 1).reshape(-1, 1)
+
+  off_alive = 1.0 - storage.dones[:, off_envs].to(storage.rewards.dtype)
+  off_returns = (
+    storage.rewards[:, off_envs]
+    + gamma * off_alive * leader_next_values
+  ).transpose(0, 1).reshape(-1, 1)
+
+  values = torch.cat((on_values, copy_values, off_values))
+  returns = torch.cat((on_returns, copy_returns, off_returns))
+  advantages = returns - values
+  flat_distribution_params = tuple(
+    parameter.flatten(0, 1) for parameter in storage.distribution_params
+  )
+  kl_reference_params = tuple(
+    parameter[source_indices].detach().clone()
+    for parameter in flat_distribution_params
+  )
+
+  return SAPGAggregatedData(
+    source_indices=source_indices,
+    source_policy_ids=source_policy_ids,
+    target_policy_ids=target_policy_ids,
+    off_policy_mask=off_policy_mask,
+    leader_to_follower_mask=leader_to_follower_mask,
+    leader_on_policy_mask=leader_on_policy_mask,
+    follower_on_policy_mask=follower_on_policy_mask,
     values=values,
     returns=returns,
     advantages=advantages,
@@ -241,7 +414,7 @@ def sapg_mini_batch_generator(
   flat_actions = storage.actions.flatten(0, 1)
   flat_log_prob = storage.actions_log_prob.flatten(0, 1)
 
-  for _ in range(num_epochs):
+  for learning_epoch in range(num_epochs):
     for batch_index in range(batches_per_epoch):
       start = batch_index * mini_batch_size
       stop = (
@@ -266,4 +439,13 @@ def sapg_mini_batch_generator(
       batch.source_policy_ids = data.source_policy_ids[aggregate_idx]
       batch.target_policy_ids = data.target_policy_ids[aggregate_idx]
       batch.off_policy_mask = data.off_policy_mask[aggregate_idx]
+      batch.leader_to_follower_mask = data.leader_to_follower_mask[
+        aggregate_idx
+      ]
+      batch.leader_on_policy_mask = data.leader_on_policy_mask[aggregate_idx]
+      batch.follower_on_policy_mask = data.follower_on_policy_mask[
+        aggregate_idx
+      ]
+      batch.sapg_learning_epoch = learning_epoch
+      batch.sapg_mini_batch_index = batch_index
       yield batch

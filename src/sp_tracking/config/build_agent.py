@@ -10,7 +10,7 @@ from mjlab.rl import RslRlModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 
 @dataclass
 class SapgPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
-  """Optional SAPG extension shared by plain and tracking-specific PPOs."""
+  """Optional SAPG/CPO extension shared by tracking PPO variants."""
 
   sapg_cfg: dict[str, Any] | None = None
 
@@ -225,6 +225,40 @@ def _filter_dataclass_kwargs(cls, data: dict[str, Any]) -> dict[str, Any]:
   return result
 
 
+def _resolve_policy_optimization_variant(
+  algorithm_data: dict[str, Any],
+) -> tuple[str, bool]:
+  """Normalize the public PPO/SAPG/CPO selector into ``sapg_cfg``.
+
+  ``sapg_cfg.enabled=true`` remains a backwards-compatible SAPG switch.
+  The new ``variant`` field is authoritative when set to ``sapg`` or ``cpo``.
+  """
+  raw_variant = algorithm_data.pop("variant", "ppo")
+  if not isinstance(raw_variant, str):
+    raise TypeError("algorithm.variant must be a string")
+  variant = raw_variant.lower()
+  if variant not in {"ppo", "sapg", "cpo"}:
+    raise ValueError("algorithm.variant must be 'ppo', 'sapg', or 'cpo'")
+
+  raw_ensemble = algorithm_data.get("sapg_cfg")
+  ensemble = dict(raw_ensemble) if isinstance(raw_ensemble, dict) else {}
+  legacy_enabled = bool(ensemble.get("enabled", False))
+  if variant == "ppo" and legacy_enabled:
+    # Preserve the old command-line switch after adding ``variant: ppo`` to
+    # every checked-in agent profile.
+    variant = str(ensemble.get("method", "sapg")).lower()
+  if variant in {"sapg", "cpo"}:
+    ensemble["enabled"] = True
+    ensemble["method"] = variant
+    algorithm_data["sapg_cfg"] = ensemble
+    return variant, True
+
+  ensemble["enabled"] = False
+  ensemble.setdefault("method", "sapg")
+  algorithm_data["sapg_cfg"] = ensemble
+  return variant, False
+
+
 def build_agent_cfg(
   cfg: DictConfig | dict[str, Any],
   overrides: DictConfig | dict[str, Any] | None = None,
@@ -275,6 +309,7 @@ def build_agent_cfg(
   actor = actor_cls(**_filter_dataclass_kwargs(actor_cls, actor_data))
   critic = critic_cls(**_filter_dataclass_kwargs(critic_cls, critic_data))
   algorithm_data = dict(data.pop("algorithm"))
+  _, sapg_enabled = _resolve_policy_optimization_variant(algorithm_data)
   split_lr_keys = {
     "actor_learning_rate",
     "critic_learning_rate",
@@ -282,8 +317,6 @@ def build_agent_cfg(
     "clamp_rewards_min",
   }
   algorithm_class_name = str(algorithm_data.get("class_name", ""))
-  sapg_data = algorithm_data.get("sapg_cfg")
-  sapg_enabled = isinstance(sapg_data, dict) and bool(sapg_data.get("enabled", False))
   if sapg_enabled and algorithm_class_name == "PPO":
     algorithm_class_name = (
       "sp_tracking.tasks.tracking.rl.ppo:SparseTrackSplitLrPPO"
@@ -339,7 +372,7 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
   data = asdict(cfg)
   sapg_cfg = data["algorithm"].get("sapg_cfg")
   if not isinstance(sapg_cfg, dict) or not bool(sapg_cfg.get("enabled", False)):
-    # This is the hard non-regression boundary: disabled SAPG never reaches
+    # This is the hard non-regression boundary: plain PPO never reaches
     # RSL-RL's PPO constructor and cannot alter its model or update path.
     data["algorithm"].pop("sapg_cfg", None)
   for model_name in ("actor", "critic"):

@@ -101,12 +101,11 @@ The resulting checkpoint is self-describing and can be passed directly to
 stage. The original `tracking_bfm` dynamics and MLP/PPO preset are retained;
 all task observation and reward views now use a pelvis anchor.
 
-An official-code-compatible SAPG extension can be enabled on any task with
-`agent.algorithm.sapg_cfg.enabled=true`. It is disabled by default and removed
-before the original PPO constructor is called, so existing PPO runs retain
-their previous model, optimizer and update paths. Configuration, algorithm
-semantics, checkpoint behavior and current limitations are documented in
-[docs/sapg.md](docs/sapg.md).
+Every task supports the explicit `agent.algorithm.variant=ppo|sapg|cpo`
+selector. PPO remains the default and retains its previous model, optimizer and
+update paths; SAPG and the CPO KL/AWAC variant share the ensemble-policy
+extension. Configuration, algorithm semantics, checkpoint behavior and current
+limitations are documented in [docs/sapg.md](docs/sapg.md).
 
 The two-motion SPV5 gradient-conflict experiment is available as
 `SPTracking-G1-TestPolicyGradients`. Its three-run protocol, exact gradient

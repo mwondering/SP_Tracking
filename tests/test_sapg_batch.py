@@ -4,6 +4,7 @@ from tensordict import TensorDict
 
 from sp_tracking.tasks.tracking.rl.sapg.batch import (
   build_aggregated_data,
+  build_cpo_aggregated_data,
   rollout_policy_ids,
   sapg_mini_batch_generator,
 )
@@ -72,6 +73,37 @@ def test_aggregate_uses_post_action_done_for_one_step_target() -> None:
   torch.testing.assert_close(
     data.returns[-3:], torch.tensor([[3.0], [1.0], [3.0]])
   )
+
+
+def test_cpo_aggregate_assigns_all_four_sample_roles() -> None:
+  storage = _storage()
+  data = build_cpo_aggregated_data(
+    storage,
+    torch.tensor([1]),
+    torch.full((3, 1, 1), 20.0),
+    torch.full((3, 1, 1), 30.0),
+    torch.full((3, 3, 1), 40.0),
+    torch.full((3, 3, 1), 50.0),
+    num_policy_blocks=4,
+    gamma=0.5,
+  )
+
+  assert data.num_samples == 24
+  assert data.follower_on_policy_mask.tolist() == [True] * 9 + [False] * 15
+  assert data.leader_on_policy_mask.tolist() == (
+    [False] * 9 + [True] * 3 + [False] * 12
+  )
+  assert data.leader_to_follower_mask.tolist() == (
+    [False] * 12 + [True] * 9 + [False] * 3
+  )
+  assert data.off_policy_mask.tolist() == [False] * 21 + [True] * 3
+  assert data.target_policy_ids[12:21].tolist() == [0] * 3 + [1] * 3 + [2] * 3
+  assert data.target_policy_ids[-3:].tolist() == [3, 3, 3]
+  assert data.source_indices[12:21].tolist() == [3, 7, 11] * 3
+  assert data.source_indices[-3:].tolist() == [1, 5, 9]
+  torch.testing.assert_close(data.values[12:21], torch.full((9, 1), 40.0))
+  torch.testing.assert_close(data.returns[12:21], torch.full((9, 1), 26.0))
+  torch.testing.assert_close(data.returns[-3:], torch.full((3, 1), 16.0))
 
 
 def test_generator_folds_remainder_into_last_batch_and_reuses_shuffle() -> None:

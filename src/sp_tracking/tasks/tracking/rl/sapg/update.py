@@ -1,6 +1,8 @@
-"""PPO optimization over official-compatible SAPG aggregate batches."""
+"""PPO optimization over official-compatible SAPG/CPO aggregate batches."""
 
 from __future__ import annotations
+
+import math
 
 import torch
 import torch.nn as nn
@@ -73,7 +75,7 @@ def _entropy_loss(algorithm, entropy: torch.Tensor, policy_ids: torch.Tensor):
 
 
 def _clear_auxiliary_forward_caches(algorithm) -> None:
-  # SPV6 normally reuses full-batch forward caches. SAPG filters duplicated
+  # SPV6 normally reuses full-batch forward caches. SAPG/CPO filter duplicated
   # follower samples out of auxiliary objectives, so those caches no longer
   # share the same indexing and must be recomputed on the on-policy subset.
   for model in (algorithm.actor, algorithm.critic):
@@ -91,9 +93,67 @@ def _on_policy_auxiliary_weight(
   return sample_count, sample_count / batch_size
 
 
+def cpo_actor_loss(
+  *,
+  actions_log_prob: torch.Tensor,
+  old_actions_log_prob: torch.Tensor,
+  leader_actions_log_prob: torch.Tensor,
+  advantages: torch.Tensor,
+  leader_update_mask: torch.Tensor,
+  follower_on_policy_mask: torch.Tensor,
+  leader_to_follower_mask: torch.Tensor,
+  clip_param: float,
+  awac_temperature: float,
+  awac_max_weight: float,
+  awac_coef: float,
+  kl_coef: float,
+  valid_mask: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+  """Return the official CPO leader PPO, follower PPO-KL, and AWAC losses."""
+  ratio = torch.exp(actions_log_prob - old_actions_log_prob)
+
+  def clipped_surrogate(adjusted_advantages: torch.Tensor) -> torch.Tensor:
+    direct = -adjusted_advantages * ratio
+    clipped = -adjusted_advantages * torch.clamp(
+      ratio, 1.0 - clip_param, 1.0 + clip_param
+    )
+    return torch.maximum(direct, clipped)
+
+  leader_terms = clipped_surrogate(advantages) * leader_update_mask
+  follower_advantages = advantages + kl_coef * (
+    leader_actions_log_prob - actions_log_prob
+  )
+  follower_terms = (
+    clipped_surrogate(follower_advantages) * follower_on_policy_mask
+  )
+
+  max_log_weight = math.log(awac_max_weight)
+  awac_weight = torch.exp(
+    torch.clamp(advantages / awac_temperature, max=max_log_weight)
+  )
+  awac_terms = (
+    -awac_coef
+    * awac_weight
+    * actions_log_prob
+    * leader_to_follower_mask
+  )
+  if valid_mask is not None:
+    leader_terms = leader_terms * valid_mask
+    follower_terms = follower_terms * valid_mask
+    awac_terms = awac_terms * valid_mask
+
+  components = {
+    "leader_ppo": leader_terms.mean(),
+    "follower_ppo_kl": follower_terms.mean(),
+    "awac": awac_terms.mean(),
+  }
+  return sum(components.values()), components
+
+
 def update_sapg(algorithm) -> dict[str, float]:
-  """Run SAPG without sharing any execution branch with disabled PPO."""
+  """Run SAPG/CPO without sharing an execution branch with plain PPO."""
   runtime = algorithm._sapg_runtime
+  config = runtime.config
   context = runtime.context
   data = runtime.prepare_aggregated_data()
 
@@ -106,13 +166,27 @@ def update_sapg(algorithm) -> dict[str, float]:
   clipped_samples = 0
   off_policy_clipped_samples = 0
   off_policy_samples = 0
+  clip_eligible_samples = 0
+  cpo_component_totals = {
+    "leader_ppo": 0.0,
+    "follower_ppo_kl": 0.0,
+    "awac": 0.0,
+  }
+  follower_leader_kl_total = 0.0
+  follower_leader_kl_samples = 0
+  off_policy_ratio_abs_deviation = 0.0
+  off_policy_ratio_sum = 0.0
+  off_policy_ratio_square_sum = 0.0
+  off_policy_ratio_samples = 0
   num_updates = 0
 
   for batch in runtime.mini_batch_generator(data):
     num_updates += 1
     original_batch_size = batch.observations.batch_size[0]
     target_policy_ids = batch.target_policy_ids
-    on_policy_mask = ~batch.off_policy_mask
+    on_policy_mask = ~(
+      batch.off_policy_mask | batch.leader_to_follower_mask
+    )
     valid_mask = None
     get_valid_mask = getattr(algorithm, "_heft_valid_mask", None)
     if callable(get_valid_mask):
@@ -128,6 +202,16 @@ def update_sapg(algorithm) -> dict[str, float]:
       algorithm.symmetry.augment_batch(batch, original_batch_size)
     num_aug = batch.observations.batch_size[0] // original_batch_size
     augmented_policy_ids = target_policy_ids.repeat(num_aug)
+    augmented_off_policy_mask = batch.off_policy_mask.repeat(num_aug)
+    augmented_leader_to_follower_mask = (
+      batch.leader_to_follower_mask.repeat(num_aug)
+    )
+    augmented_leader_on_policy_mask = batch.leader_on_policy_mask.repeat(
+      num_aug
+    )
+    augmented_follower_on_policy_mask = (
+      batch.follower_on_policy_mask.repeat(num_aug)
+    )
     augmented_valid_mask = (
       valid_mask.repeat(num_aug, 1) if valid_mask is not None else None
     )
@@ -140,6 +224,31 @@ def update_sapg(algorithm) -> dict[str, float]:
         stochastic_output=True,
       )
       actions_log_prob = algorithm.actor.get_output_log_prob(batch.actions)
+    all_distribution_params = tuple(
+      parameter for parameter in algorithm.actor.output_distribution_params
+    )
+    all_entropy = algorithm.actor.output_entropy
+
+    leader_actions_log_prob = None
+    leader_distribution_params = None
+    if config.is_cpo:
+      leader_ids = torch.full_like(
+        augmented_policy_ids, config.leader_policy_id
+      )
+      with torch.no_grad(), context.use(leader_ids):
+        algorithm.actor(
+          batch.observations,
+          masks=batch.masks,
+          hidden_state=batch.hidden_states[0],
+          stochastic_output=True,
+        )
+        leader_actions_log_prob = algorithm.actor.get_output_log_prob(
+          batch.actions
+        ).detach()
+        leader_distribution_params = tuple(
+          parameter[:original_batch_size].detach()
+          for parameter in algorithm.actor.output_distribution_params
+        )
     with context.use(augmented_policy_ids):
       values = algorithm.critic(
         batch.observations,
@@ -156,16 +265,17 @@ def update_sapg(algorithm) -> dict[str, float]:
         )
     distribution_params = tuple(
       parameter[:original_batch_size]
-      for parameter in algorithm.actor.output_distribution_params
+      for parameter in all_distribution_params
     )
-    entropy = algorithm.actor.output_entropy[:original_batch_size]
+    entropy = all_entropy[:original_batch_size]
 
     if algorithm.desired_kl is not None and algorithm.schedule == "adaptive":
       with torch.inference_mode():
         kl = algorithm.actor.get_kl_divergence(
           batch.old_distribution_params, distribution_params
         )
-        kl_mean = torch.mean(kl)
+        kl_schedule_mask = ~batch.leader_to_follower_mask
+        kl_mean = kl[kl_schedule_mask].mean()
         if algorithm.is_multi_gpu:
           torch.distributed.all_reduce(
             kl_mean, op=torch.distributed.ReduceOp.SUM
@@ -176,24 +286,82 @@ def update_sapg(algorithm) -> dict[str, float]:
     ratio = torch.exp(
       actions_log_prob - torch.squeeze(batch.old_actions_log_prob)
     )
-    surrogate = -torch.squeeze(batch.advantages) * ratio
-    surrogate_clipped = -torch.squeeze(batch.advantages) * torch.clamp(
-      ratio, 1.0 - algorithm.clip_param, 1.0 + algorithm.clip_param
-    )
-    surrogate_terms = torch.max(surrogate, surrogate_clipped)
-    if augmented_valid_mask is not None:
-      surrogate_terms = surrogate_terms * augmented_valid_mask.squeeze(-1)
-    surrogate_loss = surrogate_terms.mean()
+    if config.is_cpo:
+      if leader_actions_log_prob is None:
+        raise RuntimeError("CPO leader log-probability evaluation is missing")
+      surrogate_loss, cpo_components = cpo_actor_loss(
+        actions_log_prob=actions_log_prob,
+        old_actions_log_prob=torch.squeeze(batch.old_actions_log_prob),
+        leader_actions_log_prob=leader_actions_log_prob,
+        advantages=torch.squeeze(batch.advantages),
+        leader_update_mask=(
+          augmented_leader_on_policy_mask | augmented_off_policy_mask
+        ).to(actions_log_prob.dtype),
+        follower_on_policy_mask=augmented_follower_on_policy_mask.to(
+          actions_log_prob.dtype
+        ),
+        leader_to_follower_mask=augmented_leader_to_follower_mask.to(
+          actions_log_prob.dtype
+        ),
+        clip_param=algorithm.clip_param,
+        awac_temperature=config.cpo_awac_temperature,
+        awac_max_weight=config.cpo_awac_max_weight,
+        awac_coef=config.cpo_awac_coef,
+        kl_coef=config.cpo_kl_coef,
+        valid_mask=(
+          augmented_valid_mask.squeeze(-1)
+          if augmented_valid_mask is not None
+          else None
+        ),
+      )
+      for name, value in cpo_components.items():
+        cpo_component_totals[name] += float(value.detach().item())
+    else:
+      surrogate = -torch.squeeze(batch.advantages) * ratio
+      surrogate_clipped = -torch.squeeze(batch.advantages) * torch.clamp(
+        ratio, 1.0 - algorithm.clip_param, 1.0 + algorithm.clip_param
+      )
+      surrogate_terms = torch.max(surrogate, surrogate_clipped)
+      if augmented_valid_mask is not None:
+        surrogate_terms = (
+          surrogate_terms * augmented_valid_mask.squeeze(-1)
+        )
+      surrogate_loss = surrogate_terms.mean()
 
     original_ratio = ratio[:original_batch_size]
     is_clipped = (original_ratio < 1.0 - algorithm.clip_param) | (
       original_ratio > 1.0 + algorithm.clip_param
     )
-    clipped_samples += int(is_clipped.sum().item())
+    clip_eligible_mask = ~batch.leader_to_follower_mask
+    clipped_samples += int((is_clipped & clip_eligible_mask).sum().item())
+    clip_eligible_samples += int(clip_eligible_mask.sum().item())
     off_policy_clipped_samples += int(
       (is_clipped & batch.off_policy_mask).sum().item()
     )
     off_policy_samples += int(batch.off_policy_mask.sum().item())
+    if batch.sapg_learning_epoch == 0:
+      off_ratio = original_ratio[batch.off_policy_mask].detach()
+      off_policy_ratio_abs_deviation += float(
+        (off_ratio - 1.0).abs().sum().item()
+      )
+      off_policy_ratio_sum += float(off_ratio.sum().item())
+      off_policy_ratio_square_sum += float(off_ratio.square().sum().item())
+      off_policy_ratio_samples += int(off_ratio.numel())
+      if (
+        config.is_cpo
+        and leader_distribution_params is not None
+        and batch.follower_on_policy_mask.any()
+      ):
+        with torch.inference_mode():
+          follower_leader_kl = algorithm.actor.get_kl_divergence(
+            distribution_params,
+            leader_distribution_params,
+          )
+          selected_kl = follower_leader_kl[
+            batch.follower_on_policy_mask
+          ]
+          follower_leader_kl_total += float(selected_kl.sum().item())
+          follower_leader_kl_samples += int(selected_kl.numel())
 
     if algorithm.use_clipped_value_loss:
       value_clipped = batch.values + (values - batch.values).clamp(
@@ -201,15 +369,22 @@ def update_sapg(algorithm) -> dict[str, float]:
       )
       value_losses = (values - batch.returns).pow(2)
       value_losses_clipped = (value_clipped - batch.returns).pow(2)
-      value_loss = torch.max(value_losses, value_losses_clipped).mean()
+      value_errors = torch.max(value_losses, value_losses_clipped)
     else:
       value_errors = (batch.returns - values).pow(2)
-      if augmented_valid_mask is not None:
-        value_errors = value_errors * augmented_valid_mask
-      value_loss = value_errors.mean()
+    if config.is_cpo:
+      critic_mask = (~augmented_leader_to_follower_mask).unsqueeze(-1)
+      value_errors = value_errors * critic_mask
+    if augmented_valid_mask is not None:
+      value_errors = value_errors * augmented_valid_mask
+    value_loss = value_errors.mean()
     if mirrored_values is not None:
       mirror_targets = batch.returns[:original_batch_size]
       mirror_errors = (mirror_targets - mirrored_values).pow(2)
+      if config.is_cpo:
+        mirror_errors = mirror_errors * (
+          ~batch.leader_to_follower_mask
+        ).unsqueeze(-1)
       if valid_mask is not None:
         mirror_errors = mirror_errors * valid_mask
       value_loss = 0.5 * (value_loss + mirror_errors.mean())
@@ -232,7 +407,7 @@ def update_sapg(algorithm) -> dict[str, float]:
         auxiliary_loss, auxiliary_metrics = auxiliary_loss_fn(auxiliary_obs)
         # Auxiliary objectives are defined on the original on-policy rollout.
         # Scale their subset mean back to a masked full-batch mean so adding
-        # duplicated SAPG follower data does not increase their epoch weight.
+        # duplicated ensemble data does not increase their epoch weight.
         loss = loss + auxiliary_weight * auxiliary_loss
         auxiliary_samples += on_policy_samples
         for name, metric in auxiliary_metrics.items():
@@ -242,7 +417,6 @@ def update_sapg(algorithm) -> dict[str, float]:
             if name in mean_auxiliary_losses
             else detached.clone()
           )
-
     get_std_symmetry_loss = getattr(algorithm.actor, "std_symmetry_loss", None)
     if callable(get_std_symmetry_loss):
       loss = loss + 10.0 * get_std_symmetry_loss()
@@ -301,27 +475,48 @@ def update_sapg(algorithm) -> dict[str, float]:
       mean_symmetry_loss += symmetry_loss.item()
 
   if num_updates == 0:
-    raise RuntimeError("SAPG generated no optimization mini-batches")
+    raise RuntimeError(
+      f"{config.method.upper()} generated no optimization mini-batches"
+    )
   mean_value_loss /= num_updates
   mean_surrogate_loss /= num_updates
   mean_entropy /= num_updates
   if mean_symmetry_loss is not None:
     mean_symmetry_loss /= num_updates
 
-  total_samples = data.num_samples
+  namespace = config.method
   loss_dict = {
     "value": mean_value_loss,
     "surrogate": mean_surrogate_loss,
     "entropy": mean_entropy,
-    "sapg/off_policy_fraction": float(data.off_policy_mask.float().mean().item()),
-    "sapg/clip_fraction": clipped_samples
-    / max(1, total_samples * algorithm.num_learning_epochs),
-    "sapg/off_policy_clip_fraction": off_policy_clipped_samples
+    f"{namespace}/off_policy_fraction": float(
+      data.off_policy_mask.float().mean().item()
+    ),
+    f"{namespace}/clip_fraction": clipped_samples
+    / max(1, clip_eligible_samples),
+    f"{namespace}/off_policy_clip_fraction": off_policy_clipped_samples
     / max(1, off_policy_samples),
-    "sapg/num_updates": float(num_updates),
+    f"{namespace}/importance_ratio_abs_deviation": (
+      off_policy_ratio_abs_deviation / max(1, off_policy_ratio_samples)
+    ),
+    f"{namespace}/importance_ess_normalized": (
+      (off_policy_ratio_sum * off_policy_ratio_sum)
+      / max(1.0, off_policy_ratio_square_sum)
+      / max(1, off_policy_ratio_samples)
+    ),
+    f"{namespace}/num_updates": float(num_updates),
   }
+  if config.is_cpo:
+    for name, total in cpo_component_totals.items():
+      loss_dict[f"cpo/{name}_loss"] = total / num_updates
+    loss_dict["cpo/follower_to_leader_kl"] = (
+      follower_leader_kl_total / max(1, follower_leader_kl_samples)
+    )
+    loss_dict["cpo/leader_to_follower_fraction"] = float(
+      data.leader_to_follower_mask.float().mean().item()
+    )
   for index, follower in enumerate(data.selected_follower_ids.tolist()):
-    loss_dict[f"sapg/selected_follower_{index}"] = float(follower)
+    loss_dict[f"{namespace}/selected_follower_{index}"] = float(follower)
   distribution = algorithm.actor.distribution
   if distribution.std_type == "scalar":
     std_table = distribution.std_param.detach().clamp(
@@ -332,7 +527,9 @@ def update_sapg(algorithm) -> dict[str, float]:
       distribution.log_std_range[0], distribution.log_std_range[1]
     ).exp()
   for policy_id, policy_std in enumerate(std_table):
-    loss_dict[f"sapg/std_block_{policy_id}"] = float(policy_std.mean().item())
+    loss_dict[f"{namespace}/std_block_{policy_id}"] = float(
+      policy_std.mean().item()
+    )
   if algorithm.symmetry:
     loss_dict["symmetry"] = mean_symmetry_loss
   if callable(getattr(algorithm.actor, "std_symmetry_loss", None)):

@@ -44,8 +44,10 @@ critic:
 
 algorithm:
   class_name: sp_tracking.tasks.tracking.rl.ppo:HeftTeacherPPO
+  variant: ppo
   sapg_cfg:
     enabled: false
+    method: sapg
     compatibility: official
     num_policy_blocks: 4
     local_parameter_dim: 32
@@ -53,6 +55,10 @@ algorithm:
     exploration_type: none
     entropy_coef_scale: 1.0
     value_eval_chunk_size: 8192
+    cpo_awac_temperature: 0.2
+    cpo_awac_max_weight: 100.0
+    cpo_awac_coef: 0.001
+    cpo_kl_coef: 0.0
   value_loss_coef: 1.0
   use_clipped_value_loss: false
   clip_param: 0.2

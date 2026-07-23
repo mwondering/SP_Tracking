@@ -247,6 +247,7 @@ def test_enabled_sapg_rewrites_plain_ppo_and_serializes_config() -> None:
   assert agent_cfg.algorithm.class_name.endswith(":SparseTrackSplitLrPPO")
   assert serialized["algorithm"]["sapg_cfg"] == {
     "enabled": True,
+    "method": "sapg",
     "compatibility": "official",
     "num_policy_blocks": 8,
     "local_parameter_dim": 32,
@@ -254,7 +255,31 @@ def test_enabled_sapg_rewrites_plain_ppo_and_serializes_config() -> None:
     "exploration_type": "entropy",
     "entropy_coef_scale": 0.02,
     "value_eval_chunk_size": 8192,
+    "cpo_awac_temperature": 0.2,
+    "cpo_awac_max_weight": 100.0,
+    "cpo_awac_coef": 0.001,
+    "cpo_kl_coef": 0.0,
   }
+
+
+def test_algorithm_variant_selects_cpo_and_serializes_method() -> None:
+  cfg = _compose("agent.algorithm.variant=cpo")
+
+  agent_cfg = build_agent_cfg(cfg.agent)
+  serialized = serialize_agent_cfg(agent_cfg)
+
+  assert agent_cfg.algorithm.class_name.endswith(":SparseTrackSplitLrPPO")
+  assert serialized["algorithm"]["sapg_cfg"]["enabled"] is True
+  assert serialized["algorithm"]["sapg_cfg"]["method"] == "cpo"
+
+
+def test_algorithm_variant_selects_sapg_without_legacy_switch() -> None:
+  cfg = _compose("agent.algorithm.variant=sapg")
+
+  serialized = serialize_agent_cfg(build_agent_cfg(cfg.agent))
+
+  assert serialized["algorithm"]["sapg_cfg"]["enabled"] is True
+  assert serialized["algorithm"]["sapg_cfg"]["method"] == "sapg"
 
 
 def test_disabled_sapg_is_removed_from_specialized_ppo_serialization() -> None:

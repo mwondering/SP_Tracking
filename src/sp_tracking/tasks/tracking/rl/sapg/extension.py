@@ -1,4 +1,4 @@
-"""SAPG runtime lifecycle and algorithm construction."""
+"""SAPG/CPO runtime lifecycle and algorithm construction."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from tensordict import TensorDict
 from .batch import (
   SAPGAggregatedData,
   build_aggregated_data,
+  build_cpo_aggregated_data,
   normalize_aggregated_advantages,
   rollout_policy_ids,
   sapg_mini_batch_generator,
@@ -23,7 +24,7 @@ from .config import SAPGConfig
 
 
 class SAPGRuntime:
-  """State owned only by algorithms constructed with SAPG enabled."""
+  """State owned only by algorithms constructed with SAPG or CPO enabled."""
 
   _SCHEMA_VERSION = 1
 
@@ -102,7 +103,9 @@ class SAPGRuntime:
       require_divisible=True,
     )
     if self.last_observations is None:
-      raise RuntimeError("SAPG compute_returns() must run before update()")
+      raise RuntimeError(
+        f"{self.config.method.upper()} compute_returns() must run before update()"
+      )
 
     selected = self._select_followers()
     block_size = num_envs // self.config.num_policy_blocks
@@ -141,14 +144,56 @@ class SAPGRuntime:
     last_values = self._critic_values(last_obs, last_ids)
     leader_next_values = torch.cat((leader_values[1:], last_values.unsqueeze(0)))
 
-    data = build_aggregated_data(
-      storage,
-      selected,
-      leader_values,
-      leader_next_values,
-      num_policy_blocks=self.config.num_policy_blocks,
-      gamma=self.algorithm.gamma,
-    )
+    if self.config.is_cpo:
+      leader_envs = torch.arange(
+        self.config.leader_policy_id * block_size,
+        num_envs,
+        device=storage.values.device,
+      )
+      num_followers = self.config.num_policy_blocks - 1
+      leader_copy_envs = leader_envs.repeat(num_followers)
+      follower_ids = torch.arange(
+        num_followers,
+        dtype=torch.long,
+        device=storage.values.device,
+      ).repeat_interleave(block_size)
+      copy_indices = (
+        torch.arange(horizon, device=storage.values.device).unsqueeze(1)
+        * num_envs
+        + leader_copy_envs.unsqueeze(0)
+      ).reshape(-1)
+      repeated_follower_ids = follower_ids.repeat(horizon)
+      follower_values = self._critic_values(
+        storage.observations.flatten(0, 1),
+        repeated_follower_ids,
+        copy_indices,
+      ).reshape(horizon, leader_copy_envs.numel(), 1)
+      follower_last_values = self._critic_values(
+        self.last_observations[leader_copy_envs],
+        follower_ids,
+      )
+      follower_next_values = torch.cat(
+        (follower_values[1:], follower_last_values.unsqueeze(0))
+      )
+      data = build_cpo_aggregated_data(
+        storage,
+        selected,
+        leader_values,
+        leader_next_values,
+        follower_values,
+        follower_next_values,
+        num_policy_blocks=self.config.num_policy_blocks,
+        gamma=self.algorithm.gamma,
+      )
+    else:
+      data = build_aggregated_data(
+        storage,
+        selected,
+        leader_values,
+        leader_next_values,
+        num_policy_blocks=self.config.num_policy_blocks,
+        gamma=self.algorithm.gamma,
+      )
     if not self.algorithm.normalize_advantage_per_mini_batch:
       normalize_aggregated_advantages(
         data,
@@ -181,13 +226,13 @@ class SAPGRuntime:
     version = int(state.get("schema_version", 0))
     if version != self._SCHEMA_VERSION:
       raise ValueError(
-        f"Unsupported SAPG checkpoint schema version {version}; "
+        f"Unsupported ensemble checkpoint schema version {version}; "
         f"expected {self._SCHEMA_VERSION}"
       )
     saved_config = SAPGConfig.from_dict(state.get("config"))
     if saved_config != self.config:
       raise ValueError(
-        "SAPG checkpoint configuration does not match the current run: "
+        "Ensemble checkpoint configuration does not match the current run: "
         f"saved={saved_config.to_dict()}, current={self.config.to_dict()}"
       )
     rng_state = state.get("rng_state")
@@ -196,14 +241,20 @@ class SAPGRuntime:
 
 
 def construct_sapg_algorithm(obs, env, cfg: dict, device: str):
-  """Mirror RSL-RL construction, injecting SAPG before optimizer creation."""
+  """Inject SAPG/CPO policy conditioning before optimizer creation."""
   sapg_config = SAPGConfig.from_dict(cfg["algorithm"].get("sapg_cfg"))
   if not sapg_config.enabled:
-    raise ValueError("construct_sapg_algorithm requires sapg_cfg.enabled=true")
+    raise ValueError(
+      "construct_sapg_algorithm requires an enabled SAPG/CPO configuration"
+    )
   if cfg.get("torch_compile_mode") is not None:
-    raise ValueError("SAPG does not currently support torch_compile_mode")
+    raise ValueError(
+      f"{sapg_config.method.upper()} does not support torch_compile_mode"
+    )
   if cfg["algorithm"].get("rnd_cfg") is not None:
-    raise ValueError("SAPG official compatibility does not support RND")
+    raise ValueError(
+      f"{sapg_config.method.upper()} official compatibility does not support RND"
+    )
 
   alg_class = resolve_callable(cfg["algorithm"].pop("class_name"))
   actor_class: type[MLPModel] = resolve_callable(cfg["actor"].pop("class_name"))

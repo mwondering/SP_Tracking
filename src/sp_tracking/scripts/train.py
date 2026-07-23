@@ -120,7 +120,8 @@ def prepare_train_cfg(cfg: DictConfig) -> PreparedTrainCfg:
     num_envs = int(env_cfg.scene.num_envs)
     if num_envs % sapg_cfg.num_policy_blocks:
       raise ValueError(
-        f"SAPG training requires task.num_envs ({num_envs}) to be divisible "
+        f"{sapg_cfg.method.upper()} training requires task.num_envs "
+        f"({num_envs}) to be divisible "
         f"by agent.algorithm.sapg_cfg.num_policy_blocks "
         f"({sapg_cfg.num_policy_blocks})"
       )

@@ -18,6 +18,7 @@ from sp_tracking.tasks.tracking.rl.sapg.conditioning import (
 )
 from sp_tracking.tasks.tracking.rl.sapg.config import SAPGConfig
 from sp_tracking.tasks.tracking.rl.sapg.extension import SAPGRuntime
+from sp_tracking.tasks.tracking.rl.sapg.update import cpo_actor_loss
 from sp_tracking.tasks.tracking.task_catalog import TASK_SPECS
 
 
@@ -127,6 +128,76 @@ def test_plain_ppo_runs_one_sapg_rollout_and_update() -> None:
   # remainder into the second batch instead of adding an optimizer step.
   assert losses["sapg/num_updates"] == 2.0
   assert sum(auxiliary_sample_counts) == 24
+
+
+def test_plain_ppo_runs_one_cpo_rollout_and_update() -> None:
+  cfg = _config()
+  cfg["algorithm"]["sapg_cfg"].update(
+    {
+      "method": "cpo",
+      "cpo_awac_temperature": 0.2,
+      "cpo_awac_max_weight": 100.0,
+      "cpo_awac_coef": 0.001,
+      "cpo_kl_coef": 0.0,
+    }
+  )
+  algorithm = SparseTrackSplitLrPPO.construct_algorithm(
+    _observations(), _FakeEnv(), deepcopy(cfg), "cpu"
+  )
+  auxiliary_sample_counts = []
+
+  def auxiliary_loss(observations):
+    auxiliary_sample_counts.append(observations.batch_size[0])
+    zero = algorithm.actor.mlp[0].policy_weight.sum() * 0.0
+    return zero, {"test_auxiliary": zero}
+
+  algorithm._auxiliary_loss = auxiliary_loss
+  obs = _observations()
+  for step in range(3):
+    algorithm.act(obs)
+    next_obs = _observations(float(step + 1))
+    algorithm.process_env_step(
+      next_obs,
+      torch.ones(8),
+      torch.zeros(8, dtype=torch.bool),
+      {},
+    )
+    obs = next_obs
+  algorithm.compute_returns(obs)
+  losses = algorithm.update()
+
+  assert algorithm.storage.step == 0
+  assert losses["cpo/off_policy_fraction"] == pytest.approx(0.125)
+  assert losses["cpo/leader_to_follower_fraction"] == pytest.approx(0.375)
+  assert losses["cpo/awac_loss"] != 0.0
+  assert losses["cpo/importance_ess_normalized"] > 0.0
+  assert sum(auxiliary_sample_counts) == 24
+
+
+def test_cpo_actor_loss_separates_leader_follower_and_awac_terms() -> None:
+  current = torch.tensor([-0.2, -0.4, -0.5], requires_grad=True)
+  total, components = cpo_actor_loss(
+    actions_log_prob=current,
+    old_actions_log_prob=current.detach(),
+    leader_actions_log_prob=torch.tensor([-0.2, -0.1, -0.5]),
+    advantages=torch.tensor([2.0, 1.0, 0.0]),
+    leader_update_mask=torch.tensor([1.0, 0.0, 0.0]),
+    follower_on_policy_mask=torch.tensor([0.0, 1.0, 0.0]),
+    leader_to_follower_mask=torch.tensor([0.0, 0.0, 1.0]),
+    clip_param=0.2,
+    awac_temperature=0.2,
+    awac_max_weight=100.0,
+    awac_coef=0.3,
+    kl_coef=0.0,
+  )
+
+  assert components["leader_ppo"].item() == pytest.approx(-2.0 / 3.0)
+  assert components["follower_ppo_kl"].item() == pytest.approx(-1.0 / 3.0)
+  assert components["awac"].item() == pytest.approx(0.05)
+  assert total.item() == pytest.approx(-0.95)
+  total.backward()
+  assert current.grad is not None
+  assert current.grad[2] < 0.0
 
 
 def test_training_act_rejects_non_divisible_environment_count_immediately() -> None:

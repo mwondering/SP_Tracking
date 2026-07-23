@@ -127,13 +127,16 @@ def test_config_normalizes_integer_valued_hydra_numbers() -> None:
   ("override", "message"),
   [
     ({"enabled": "false"}, "enabled must be a boolean"),
+    ({"method": "other"}, "method must be 'sapg' or 'cpo'"),
     ({"num_policy_blocks": 4.5}, "num_policy_blocks must be an integer"),
     ({"off_policy_ratio": "1"}, "off_policy_ratio must be an integer"),
     ({"entropy_coef_scale": float("nan")}, "must be a finite number"),
+    ({"cpo_awac_temperature": 0.0}, "must be positive"),
+    ({"cpo_awac_coef": -1.0}, "must be non-negative"),
   ],
 )
-def test_config_rejects_invalid_runtime_types(
+def test_config_rejects_invalid_runtime_values(
   override: dict, message: str
 ) -> None:
-  with pytest.raises(TypeError, match=message):
+  with pytest.raises((TypeError, ValueError), match=message):
     SAPGConfig.from_dict({"enabled": True, **override})

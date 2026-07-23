@@ -27,9 +27,10 @@ def _mirror_batch(*, env, obs=None, actions=None):
   return mirrored_obs, mirrored_actions
 
 
-def _sapg_cfg() -> dict:
+def _sapg_cfg(method: str = "sapg") -> dict:
   return {
     "enabled": True,
+    "method": method,
     "compatibility": "official",
     "num_policy_blocks": 4,
     "local_parameter_dim": 8,
@@ -37,6 +38,10 @@ def _sapg_cfg() -> dict:
     "exploration_type": "entropy",
     "entropy_coef_scale": 1.0,
     "value_eval_chunk_size": 8,
+    "cpo_awac_temperature": 0.2,
+    "cpo_awac_max_weight": 100.0,
+    "cpo_awac_coef": 0.001,
+    "cpo_kl_coef": 0.0,
   }
 
 
@@ -139,6 +144,30 @@ def test_heft_runs_sapg_update_with_muon_group_and_block_std() -> None:
   assert isinstance(algorithm.actor.mlp[0], PolicyConditionedLinear)
   assert isinstance(algorithm.actor.distribution, BlockGaussianDistribution)
   assert algorithm.actor.distribution.std_param.shape == (4, 3)
+  assert losses["actor_lr"] == 1.0e-3
+  assert losses["critic_lr"] == 1.0e-3
+  assert losses["symmetry"] >= 0.0
+
+
+def test_heft_runs_cpo_update_with_symmetry_and_split_optimizer() -> None:
+  cfg = _heft_config()
+  cfg["algorithm"]["sapg_cfg"] = _sapg_cfg("cpo")
+  algorithm = HeftTeacherPPO.construct_algorithm(
+    _heft_obs(), _Env(), deepcopy(cfg), "cpu"
+  )
+  obs = _heft_obs()
+  for step in range(2):
+    algorithm.act(obs)
+    next_obs = _heft_obs(float(step + 1))
+    algorithm.process_env_step(
+      next_obs, torch.ones(8), torch.zeros(8, dtype=torch.bool), {}
+    )
+    obs = next_obs
+  algorithm.compute_returns(obs)
+  losses = algorithm.update()
+
+  assert losses["cpo/awac_loss"] != 0.0
+  assert losses["cpo/follower_to_leader_kl"] >= 0.0
   assert losses["actor_lr"] == 1.0e-3
   assert losses["critic_lr"] == 1.0e-3
   assert losses["symmetry"] >= 0.0
