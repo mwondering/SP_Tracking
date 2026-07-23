@@ -313,7 +313,7 @@ def test_prepare_train_cfg_rejects_non_divisible_sapg_envs() -> None:
 
   with pytest.raises(
     ValueError,
-    match=r"task.num_envs \(5\).*num_policy_blocks \(4\)",
+    match=r"task.num_envs \(5\).*num_policy_blocks \(8\)",
   ):
     prepare_train_cfg(cfg)
 

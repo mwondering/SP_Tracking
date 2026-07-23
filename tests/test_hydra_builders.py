@@ -245,7 +245,16 @@ def test_enabled_sapg_rewrites_plain_ppo_and_serializes_config() -> None:
   serialized = serialize_agent_cfg(agent_cfg)
 
   assert agent_cfg.algorithm.class_name.endswith(":SparseTrackSplitLrPPO")
-  assert serialized["algorithm"]["sapg_cfg"]["enabled"] is True
+  assert serialized["algorithm"]["sapg_cfg"] == {
+    "enabled": True,
+    "compatibility": "official",
+    "num_policy_blocks": 8,
+    "local_parameter_dim": 32,
+    "off_policy_ratio": 4,
+    "exploration_type": "entropy",
+    "entropy_coef_scale": 0.02,
+    "value_eval_chunk_size": 8192,
+  }
 
 
 def test_disabled_sapg_is_removed_from_specialized_ppo_serialization() -> None:
