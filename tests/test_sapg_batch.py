@@ -93,3 +93,62 @@ def test_generator_folds_remainder_into_last_batch_and_reuses_shuffle() -> None:
   first_epoch = torch.cat([batch.actions for batch in batches[:2]])
   second_epoch = torch.cat([batch.actions for batch in batches[2:]])
   torch.testing.assert_close(first_epoch, second_epoch)
+
+
+def test_generator_refreshes_kl_reference_distribution_between_epochs() -> None:
+  storage = _storage()
+  data = build_aggregated_data(
+    storage,
+    torch.tensor([0]),
+    torch.zeros(3, 1, 1),
+    torch.zeros(3, 1, 1),
+    num_policy_blocks=4,
+    gamma=0.5,
+  )
+  generator = sapg_mini_batch_generator(
+    storage, data, num_mini_batches=2, num_epochs=2
+  )
+
+  first_batch = next(generator)
+  data.update_kl_reference(
+    first_batch.sapg_aggregate_indices,
+    (
+      torch.full_like(first_batch.old_distribution_params[0], 7.0),
+      torch.full_like(first_batch.old_distribution_params[1], 8.0),
+    ),
+  )
+  second_batch = next(generator)
+  data.update_kl_reference(
+    second_batch.sapg_aggregate_indices,
+    (
+      torch.full_like(second_batch.old_distribution_params[0], 9.0),
+      torch.full_like(second_batch.old_distribution_params[1], 10.0),
+    ),
+  )
+
+  next_epoch_first = next(generator)
+  next_epoch_second = next(generator)
+  torch.testing.assert_close(
+    next_epoch_first.old_distribution_params[0],
+    torch.full_like(next_epoch_first.old_distribution_params[0], 7.0),
+  )
+  torch.testing.assert_close(
+    next_epoch_first.old_distribution_params[1],
+    torch.full_like(next_epoch_first.old_distribution_params[1], 8.0),
+  )
+  torch.testing.assert_close(
+    next_epoch_second.old_distribution_params[0],
+    torch.full_like(next_epoch_second.old_distribution_params[0], 9.0),
+  )
+  torch.testing.assert_close(
+    next_epoch_second.old_distribution_params[1],
+    torch.full_like(next_epoch_second.old_distribution_params[1], 10.0),
+  )
+  # KL references are aggregate-local mutable state. PPO behavior parameters
+  # in rollout storage remain frozen for the importance ratio.
+  torch.testing.assert_close(
+    storage.distribution_params[0], torch.zeros_like(storage.distribution_params[0])
+  )
+  torch.testing.assert_close(
+    storage.distribution_params[1], torch.ones_like(storage.distribution_params[1])
+  )

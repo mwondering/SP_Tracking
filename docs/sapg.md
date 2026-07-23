@@ -74,8 +74,12 @@ are retained and receive the same SAPG extension.
 - Aggregation preserves complete environment trajectories and uses the original
   base PPO mini-batch size. As in the official dataset, any remainder is folded
   into the final mini-batch instead of creating an extra optimizer step.
-- Aggregated actions, old log probabilities and old distribution parameters are
-  the follower behavior data. Current policy/value evaluation uses the leader.
+- Aggregated actions and old log probabilities remain frozen follower behavior
+  data for the PPO importance ratio. Current policy/value evaluation uses the
+  leader.
+- Distribution parameters used by adaptive KL start from the follower behavior
+  distribution and are refreshed per aggregate sample after every mini-batch,
+  matching the official dataset's `update_mu_sigma` behavior across PPO epochs.
 - The aggregated return is the official one-step target
   `stored_reward + gamma * alive * V_leader(next_state)`.
 - PPO uses the normal behavior-policy ratio and `[1-eps, 1+eps]` clipping, as in

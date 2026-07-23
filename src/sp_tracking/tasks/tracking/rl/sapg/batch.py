@@ -43,6 +43,7 @@ class SAPGAggregatedData:
   values: torch.Tensor
   returns: torch.Tensor
   advantages: torch.Tensor
+  kl_reference_params: tuple[torch.Tensor, ...]
   selected_follower_ids: torch.Tensor
   num_trajectories: int
   horizon: int
@@ -50,6 +51,42 @@ class SAPGAggregatedData:
   @property
   def num_samples(self) -> int:
     return int(self.source_indices.numel())
+
+  def update_kl_reference(
+    self,
+    aggregate_indices: torch.Tensor,
+    distribution_params: tuple[torch.Tensor, ...],
+  ) -> None:
+    """Persist current policy parameters for the next PPO learning epoch.
+
+    Official SAPG updates the dataset's ``mu`` and ``sigma`` after every
+    mini-batch. These mutable references are used only by adaptive-KL
+    scheduling; rollout actions, log probabilities, and behavior-policy
+    parameters remain immutable.
+    """
+    if len(distribution_params) != len(self.kl_reference_params):
+      raise ValueError(
+        "SAPG KL reference parameter count does not match the actor distribution"
+      )
+    indices = aggregate_indices.to(
+      device=self.source_indices.device, dtype=torch.long
+    )
+    if indices.ndim != 1:
+      raise ValueError("SAPG aggregate indices must be one-dimensional")
+    for reference, current in zip(
+      self.kl_reference_params, distribution_params, strict=True
+    ):
+      expected_shape = (indices.numel(), *reference.shape[1:])
+      if tuple(current.shape) != expected_shape:
+        raise ValueError(
+          "SAPG current distribution parameter has shape "
+          f"{tuple(current.shape)}, expected {expected_shape}"
+        )
+      reference.index_copy_(
+        0,
+        indices,
+        current.detach().to(device=reference.device, dtype=reference.dtype),
+      )
 
 
 def build_aggregated_data(
@@ -120,6 +157,13 @@ def build_aggregated_data(
   values = torch.cat((on_values, off_values))
   returns = torch.cat((on_returns, off_returns))
   advantages = returns - values
+  flat_distribution_params = tuple(
+    parameter.flatten(0, 1) for parameter in storage.distribution_params
+  )
+  kl_reference_params = tuple(
+    parameter[source_indices].detach().clone()
+    for parameter in flat_distribution_params
+  )
 
   return SAPGAggregatedData(
     source_indices=source_indices,
@@ -129,6 +173,7 @@ def build_aggregated_data(
     values=values,
     returns=returns,
     advantages=advantages,
+    kl_reference_params=kl_reference_params,
     selected_follower_ids=selected_follower_ids,
     num_trajectories=int(source_envs.numel()),
     horizon=horizon,
@@ -195,9 +240,6 @@ def sapg_mini_batch_generator(
   flat_obs = storage.observations.flatten(0, 1)
   flat_actions = storage.actions.flatten(0, 1)
   flat_log_prob = storage.actions_log_prob.flatten(0, 1)
-  flat_distribution_params = tuple(
-    parameter.flatten(0, 1) for parameter in storage.distribution_params
-  )
 
   for _ in range(num_epochs):
     for batch_index in range(batches_per_epoch):
@@ -217,9 +259,10 @@ def sapg_mini_batch_generator(
         returns=data.returns[aggregate_idx],
         old_actions_log_prob=flat_log_prob[source_idx],
         old_distribution_params=tuple(
-          parameter[source_idx] for parameter in flat_distribution_params
+          parameter[aggregate_idx] for parameter in data.kl_reference_params
         ),
       )
+      batch.sapg_aggregate_indices = aggregate_idx
       batch.source_policy_ids = data.source_policy_ids[aggregate_idx]
       batch.target_policy_ids = data.target_policy_ids[aggregate_idx]
       batch.off_policy_mask = data.off_policy_mask[aggregate_idx]

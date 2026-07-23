@@ -169,6 +169,57 @@ def test_off_policy_clip_fraction_is_not_divided_by_epochs_twice() -> None:
   assert losses["sapg/off_policy_clip_fraction"] == pytest.approx(1.0)
 
 
+def test_adaptive_kl_uses_refreshed_distribution_in_next_epoch(
+  monkeypatch,
+) -> None:
+  cfg = _config()
+  cfg["algorithm"].update(
+    {
+      "num_learning_epochs": 2,
+      "num_mini_batches": 1,
+      "learning_rate": 0.0,
+      "schedule": "adaptive",
+      "desired_kl": 0.01,
+    }
+  )
+  algorithm = SparseTrackSplitLrPPO.construct_algorithm(
+    _observations(), _FakeEnv(), deepcopy(cfg), "cpu"
+  )
+  conditioned = algorithm.actor.mlp[0]
+  with torch.no_grad():
+    conditioned.policy_embedding.zero_()
+    conditioned.policy_embedding[-1].fill_(1.0)
+    conditioned.policy_weight.fill_(0.25)
+
+  obs = _observations()
+  for step in range(3):
+    algorithm.act(obs)
+    next_obs = _observations(float(step + 1))
+    algorithm.process_env_step(
+      next_obs,
+      torch.ones(8),
+      torch.zeros(8, dtype=torch.bool),
+      {},
+    )
+    obs = next_obs
+  algorithm.compute_returns(obs)
+
+  kl_values: list[float] = []
+
+  def record_kl(_algorithm, kl_mean):
+    kl_values.append(float(kl_mean.item()))
+
+  monkeypatch.setattr(
+    "sp_tracking.tasks.tracking.rl.sapg.update._update_learning_rate",
+    record_kl,
+  )
+  algorithm.update()
+
+  assert len(kl_values) == 2
+  assert kl_values[0] > 0.0
+  assert kl_values[1] == pytest.approx(0.0, abs=1.0e-8)
+
+
 def test_disabled_sparse_constructor_delegates_to_upstream_ppo(monkeypatch) -> None:
   sentinel = object()
   calls = []

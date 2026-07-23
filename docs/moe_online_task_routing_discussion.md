@@ -3,6 +3,8 @@
 > 讨论整理与研究设计草案，2026-07-22  
 > 范围：SP Tracking 当前 SPV5-1 residual MoE、基于梯度的任务发现、Humanoid-GPT HME、局部 reference 聚类及在线分组。  
 > 状态：本文区分了仓库中已经存在的实现、论文明确提出的方法和仍需实验验证的设计假设；推荐方案尚未实现。
+>
+> **2026-07-23 后续调研更新**：GMT 与 HoloMotion 的新证据使首版方案收敛为“reference-only 直接 Top-2 路由”，而不是默认加入 state correction 或 SwAV/prototypes。完整论证、仓库改造点和实验矩阵见 [`moe_ref_window_online_routing_research.md`](./moe_ref_window_online_routing_research.md)。本文保留为原始讨论记录。
 
 ## 1. 问题与目标
 

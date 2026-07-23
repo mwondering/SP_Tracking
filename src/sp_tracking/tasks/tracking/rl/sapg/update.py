@@ -286,6 +286,13 @@ def update_sapg(algorithm) -> dict[str, float]:
     if callable(step_auxiliary_optimizers):
       step_auxiliary_optimizers()
     algorithm.optimizer.step()
+    # Match rl_games PPODataset.update_mu_sigma(): PPO behavior log-probabilities
+    # stay frozen, while the distribution used by adaptive KL is refreshed for
+    # the same aggregate slots before the next learning epoch.
+    data.update_kl_reference(
+      batch.sapg_aggregate_indices,
+      distribution_params,
+    )
 
     mean_value_loss += value_loss.item()
     mean_surrogate_loss += surrogate_loss.item()
