@@ -677,6 +677,7 @@ class MultiMotionCommand(CommandTerm):
     )
 
     motion_files = self._resolve_motion_files()
+    self.motion_files = tuple(motion_files)
     fk_helper = self._build_fk_helper()
     self.motion = MultiMotionLoader(
       motion_files,
@@ -819,6 +820,8 @@ class MultiMotionCommand(CommandTerm):
       else None
     )
     self._initialize_reference_cache()
+    self._adaptive_bin_snapshot_writer = None
+    self._adaptive_bin_snapshot_writer_key = None
 
   def _initialize_sp_tracking_state(self) -> None:
     """Allocate optional reference-frame and one-stage SP state.
@@ -1478,6 +1481,48 @@ class MultiMotionCommand(CommandTerm):
         if isinstance(buffer, torch.Tensor):
           buffer[env_ids] = 0
     return extras
+
+  def maybe_write_adaptive_bin_snapshot(
+    self,
+    *,
+    iteration: int,
+    default_snapshot_dir: str | os.PathLike[str] | None = None,
+  ) -> None:
+    interval = int(self.cfg.adaptive_bin_snapshot_interval_iterations)
+    if interval <= 0 or int(iteration) <= 0 or int(iteration) % interval != 0:
+      return
+    snapshot_dir = os.fspath(self.cfg.adaptive_bin_snapshot_dir)
+    if not snapshot_dir:
+      if default_snapshot_dir is None:
+        return
+      snapshot_dir = os.fspath(default_snapshot_dir)
+
+    writer_key = (snapshot_dir,)
+    if (
+      self._adaptive_bin_snapshot_writer is None
+      or writer_key != self._adaptive_bin_snapshot_writer_key
+    ):
+      from sp_tracking.tasks.tracking.viewer.snapshot import (
+        PerRankAdaptiveBinSnapshotWriter,
+      )
+
+      self._adaptive_bin_snapshot_writer = PerRankAdaptiveBinSnapshotWriter(
+        snapshot_dir=snapshot_dir,
+        motion_files=self.motion_files,
+        file_lengths=self.motion.file_lengths,
+        fps_list=self.motion.fps_list,
+        motion_bin_counts=self.motion_bin_counts,
+        bin_width_steps=self.bin_width_steps,
+        failure_rate_window_iterations=(
+          self.cfg.adaptive_failure_rate_window_iterations
+        ),
+      )
+      self._adaptive_bin_snapshot_writer_key = writer_key
+    self._adaptive_bin_snapshot_writer.write(
+      episode_count=self.bin_episode_count,
+      failure_count=self.bin_failure_count,
+      iteration=int(iteration),
+    )
 
   def _compute_motion_bin_indices(
     self, time_steps: torch.Tensor, motion_indices: torch.Tensor
@@ -2586,6 +2631,8 @@ class MultiMotionCommandCfg(CommandTermCfg):
   adaptive_max_prob_per_bin: float | Literal["auto"] | None = "auto"
   adaptive_max_prob_per_motion: float | Literal["auto"] | None = "auto"
   adaptive_pre_failure_sample_window_steps: int = 200
+  adaptive_bin_snapshot_interval_iterations: int = 0
+  adaptive_bin_snapshot_dir: str = ""
   sampling_mode: Literal["adaptive", "uniform", "start"] = "adaptive"
 
   # for downstream task training

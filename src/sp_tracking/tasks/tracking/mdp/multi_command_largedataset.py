@@ -3096,9 +3096,7 @@ class LargeDatasetMultiMotionCommandCfg(MultiMotionCommandCfg):
   subset_adaptive_refresh_ratio: float = 0.5
   subset_adaptive_candidate_pool_size: int = 10_000
   adaptive_bin_pool_reset_interval_iterations: int = 5000
-  adaptive_bin_snapshot_interval_iterations: int = 0
   adaptive_bin_snapshot_num_buckets: int = 2048
-  adaptive_bin_snapshot_dir: str = ""
   motion_manifest_file: str = ""
   motion_metadata_cache_file: str = ""
   motion_metadata_cache_wait_timeout_s: float = 7200.0

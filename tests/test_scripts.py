@@ -38,6 +38,8 @@ def test_tracking_bfm_multigpu_script_uses_torchrun() -> None:
   assert 'TASK_ID="${SP_TRACKING_TASK_ID:-SPTracking-G1-BFM-BFMActor-BFMCritic}"' in contents
   assert 'cmd+=("task_id=${TASK_ID}")' in contents
   assert "launch_script_path=" in contents
+  assert "adaptive_bin_snapshot_interval_iterations=10" in contents
+  assert "adaptive_bin_snapshot_num_buckets" not in contents
   assert '"$@"' in contents
 
 

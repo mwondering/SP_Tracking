@@ -923,7 +923,7 @@ class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     self._gradient_diagnostics_db.close()
     self._gradient_diagnostics_db = None
 
-  def _write_large_dataset_snapshot(self, iteration: int) -> None:
+  def _write_adaptive_bin_snapshot(self, iteration: int) -> None:
     unwrapped_env = getattr(self.env, "unwrapped", None)
     command_manager = getattr(unwrapped_env, "command_manager", None)
     if command_manager is None:
@@ -1074,7 +1074,7 @@ class SpTrackingOnPolicyRunner(MjlabOnPolicyRunner):
       _bootstrap_debug(f"iteration {it}: start")
       self._step_sp_tracking_curriculum(it)
       self._begin_adaptive_sampling_iteration(it)
-      self._write_large_dataset_snapshot(it)
+      self._write_adaptive_bin_snapshot(it)
       start = time.time()
       with torch.inference_mode():
         num_steps_per_env = int(self.cfg["num_steps_per_env"])

@@ -118,6 +118,21 @@ class SPV51ContactEstimatorMoEActorCfg(SPV51ContactEstimatorActorCfg):
 
 
 @dataclass
+class SPV52PMoEActorCfg(SPV51ContactEstimatorActorCfg):
+  pmoe_context_hidden_dim: int = 1472
+  pmoe_hidden_dim: int = 608
+  pmoe_num_experts: int = 8
+  pmoe_top_k: int = 2
+  pmoe_expansion: int = 4
+  pmoe_output_init_gain: float = 5.0e-2
+  pmoe_pae_latent_dim: int = 8
+  pmoe_pae_hidden_dims: tuple[int, ...] = (64, 64)
+  pmoe_pae_kernel_size: int = 5
+  pmoe_cluster_temperature: float = 1.0
+  pmoe_cluster_momentum: float = 0.99
+
+
+@dataclass
 class SPV6RmaActorCfg(SPV5ReferenceEncoderActorCfg):
   rma_physics_nominal_group: str = "rma_physics_nominal"
   rma_global_latent_dim: int = 8
@@ -187,6 +202,17 @@ class SPV52HeightContactEstimatorPpoAlgorithmCfg(SplitLrPpoAlgorithmCfg):
   estimator_foot_contact_loss_coef: float = 0.1
   estimator_max_grad_norm: float = 1.0
   reference_encoder_loss_coef: float = 1.0
+
+
+@dataclass
+class SPV52PMoEPpoAlgorithmCfg(
+  SPV52HeightContactEstimatorPpoAlgorithmCfg
+):
+  pmoe_pae_learning_rate: float = 5.0e-5
+  pmoe_pae_loss_coef: float = 1.0
+  pmoe_pae_max_grad_norm: float = 1.0
+  pmoe_collect_chunk_size: int = 4096
+  use_checkpoint_pmoe_pae_learning_rate: bool = False
 
 
 @dataclass
@@ -285,6 +311,8 @@ def build_agent_cfg(
     actor_cls = SPV51ContactEstimatorMoEActorCfg
   elif actor_class_name.endswith(":SPV51ContactEstimatorActor"):
     actor_cls = SPV51ContactEstimatorActorCfg
+  elif actor_class_name.endswith(":SPV52PMoEActor"):
+    actor_cls = SPV52PMoEActorCfg
   elif actor_class_name.endswith(":SPV52HeightContactEstimatorActor"):
     actor_cls = SPV51ContactEstimatorActorCfg
   elif actor_class_name.endswith(":SPV5ReferenceEncoderActor"):
@@ -330,6 +358,8 @@ def build_agent_cfg(
     algorithm_cls = SPV6RmaPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV51ContactEstimatorMoEPPO"):
     algorithm_cls = SPV51ContactEstimatorMoEPpoAlgorithmCfg
+  elif algorithm_class_name.endswith(":SPV52PMoEPPO"):
+    algorithm_cls = SPV52PMoEPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV52HeightContactEstimatorPPO"):
     algorithm_cls = SPV52HeightContactEstimatorPpoAlgorithmCfg
   elif algorithm_class_name.endswith(":SPV51ContactEstimatorPPO"):
@@ -390,6 +420,7 @@ def serialize_agent_cfg(cfg: RslRlOnPolicyRunnerCfg) -> dict[str, Any]:
         ":SPV51ContactEstimatorActor",
         ":SPV51ContactEstimatorMoEActor",
         ":SPV52HeightContactEstimatorActor",
+        ":SPV52PMoEActor",
         ":SPV6RmaActor",
         ":SPV6RmaCritic",
         ":SPV61DirectActor",

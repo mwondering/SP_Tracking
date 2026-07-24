@@ -27,6 +27,11 @@ def test_default_tracking_bfm_builds_multimotion_cfg() -> None:
   assert isinstance(env_cfg.commands["motion"], MultiMotionCommandCfg)
   assert env_cfg.commands["motion"].history_steps == 0
   assert env_cfg.commands["motion"].future_steps == 1
+  assert env_cfg.commands["motion"].adaptive_bin_snapshot_interval_iterations == 0
+  assert env_cfg.commands["motion"].adaptive_bin_snapshot_dir == ""
+  assert not hasattr(
+    env_cfg.commands["motion"], "adaptive_bin_snapshot_num_buckets"
+  )
   assert list(env_cfg.observations.keys()) == ["actor", "critic"]
   assert list(env_cfg.observations["actor"].terms.keys()) == [
     "command",
@@ -54,6 +59,7 @@ def test_sp_variant_builds_largedataset_cfg() -> None:
   assert isinstance(env_cfg.commands["motion"], LargeDatasetMotionCommandCfg)
   assert env_cfg.commands["motion"].history_steps == 0
   assert env_cfg.commands["motion"].future_steps == 1
+  assert env_cfg.commands["motion"].adaptive_bin_snapshot_num_buckets == 2048
   assert list(env_cfg.observations) == ["policy", "priv", "priv_critic"]
   assert list(env_cfg.observations["policy"].terms.keys())[0] == "boot_indicator_state_obs"
   assert env_cfg.commands["motion"].rewind.enabled is True
@@ -249,11 +255,11 @@ def test_enabled_sapg_rewrites_plain_ppo_and_serializes_config() -> None:
     "enabled": True,
     "method": "sapg",
     "compatibility": "official",
-    "num_policy_blocks": 8,
+    "num_policy_blocks": 4,
     "local_parameter_dim": 32,
-    "off_policy_ratio": 4,
-    "exploration_type": "entropy",
-    "entropy_coef_scale": 0.02,
+    "off_policy_ratio": 1,
+    "exploration_type": "none",
+    "entropy_coef_scale": 1.0,
     "value_eval_chunk_size": 8192,
     "cpo_awac_temperature": 0.2,
     "cpo_awac_max_weight": 100.0,

@@ -880,6 +880,292 @@ class SPV52HeightContactEstimatorPPO(SPV51ContactEstimatorPPO):
     )
 
 
+class SPV52PMoEPPO(SPV52HeightContactEstimatorPPO):
+  """SPV5-2 PPO with independently optimized PAE and no-gradient K-Means."""
+
+  _PMOE_OPTIMIZER_STATE_KEY = "spv5_2_pmoe_optimizer_state_dict"
+
+  @staticmethod
+  def construct_algorithm(obs, env, cfg: dict, device: str):
+    from .spv5_2_models import (
+      SPV5_2_PMOE_ROUTING_CACHE_GROUP,
+      SPV5_2_POLICY_CONTEXT_CACHE_DIM,
+      SPV5_2_POLICY_CONTEXT_CACHE_GROUP,
+    )
+
+    num_experts = int(cfg["actor"].get("pmoe_num_experts", 8))
+    cache_device = obs.device
+    if cache_device is None:
+      cache_device = next(iter(obs.values())).device
+    obs.set(
+      SPV5_2_POLICY_CONTEXT_CACHE_GROUP,
+      torch.zeros(
+        (*obs.batch_size, SPV5_2_POLICY_CONTEXT_CACHE_DIM),
+        device=cache_device,
+      ),
+    )
+    obs.set(
+      SPV5_2_PMOE_ROUTING_CACHE_GROUP,
+      torch.zeros(
+        (*obs.batch_size, num_experts),
+        device=cache_device,
+      ),
+    )
+    algorithm = SparseTrackSplitLrPPO.construct_algorithm(
+      obs, env, cfg, device
+    )
+    populate = getattr(algorithm.actor, "populate_policy_context_cache", None)
+    if not callable(populate):
+      raise TypeError(
+        "SPV52PMoEPPO requires an actor with "
+        "populate_policy_context_cache()"
+      )
+    populate(obs)
+    return algorithm
+
+  def __init__(
+    self,
+    *args,
+    pmoe_pae_learning_rate: float = 5.0e-5,
+    pmoe_pae_loss_coef: float = 1.0,
+    pmoe_pae_max_grad_norm: float = 1.0,
+    pmoe_collect_chunk_size: int = 4096,
+    use_checkpoint_pmoe_pae_learning_rate: bool = False,
+    **kwargs,
+  ) -> None:
+    optimizer_name = str(kwargs.get("optimizer", "adam"))
+    super().__init__(*args, **kwargs)
+    if hasattr(self, "_sapg_runtime"):
+      raise ValueError("SPV5-2 PMoE does not support SAPG")
+    pmoe_router = getattr(self.actor, "pmoe_router", None)
+    if not isinstance(pmoe_router, nn.Module):
+      raise TypeError("SPV52PMoEPPO requires actor.pmoe_router")
+    self.pmoe_pae_learning_rate = float(pmoe_pae_learning_rate)
+    self.pmoe_pae_loss_coef = float(pmoe_pae_loss_coef)
+    self.pmoe_pae_max_grad_norm = float(pmoe_pae_max_grad_norm)
+    self.pmoe_collect_chunk_size = int(pmoe_collect_chunk_size)
+    self.use_checkpoint_pmoe_pae_learning_rate = bool(
+      use_checkpoint_pmoe_pae_learning_rate
+    )
+    if self.pmoe_pae_learning_rate <= 0.0:
+      raise ValueError("PMoE PAE learning rate must be positive")
+    if self.pmoe_pae_loss_coef < 0.0:
+      raise ValueError("PMoE PAE loss coefficient must be non-negative")
+    if self.pmoe_pae_max_grad_norm <= 0.0:
+      raise ValueError("PMoE PAE max grad norm must be positive")
+    if self.pmoe_collect_chunk_size <= 0:
+      raise ValueError("PMoE collect chunk size must be positive")
+
+    self._pmoe_parameters = tuple(pmoe_router.parameters())
+    if not self._pmoe_parameters:
+      raise ValueError("PMoE routing encoder has no trainable PAE parameters")
+    self._pmoe_parameter_ids = {
+      id(parameter) for parameter in self._pmoe_parameters
+    }
+    self.pmoe_optimizer = resolve_optimizer(optimizer_name)(
+      self._pmoe_parameters,
+      lr=self.pmoe_pae_learning_rate,
+    )
+
+  def _auxiliary_loss(
+    self, observations
+  ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    base_loss, diagnostics = super()._auxiliary_loss(observations)
+    reconstruction_loss = getattr(
+      self.actor, "pmoe_reconstruction_loss", None
+    )
+    if not callable(reconstruction_loss):
+      raise TypeError(
+        "SPV52PMoEPPO requires actor.pmoe_reconstruction_loss()"
+      )
+    pae_loss, pae_diagnostics = reconstruction_loss(observations)
+    diagnostics.update(pae_diagnostics)
+    return base_loss + self.pmoe_pae_loss_coef * pae_loss, diagnostics
+
+  def _zero_auxiliary_optimizers(self) -> None:
+    super()._zero_auxiliary_optimizers()
+    self.pmoe_optimizer.zero_grad()
+
+  def _clip_auxiliary_gradients(self) -> None:
+    super()._clip_auxiliary_gradients()
+    nn.utils.clip_grad_norm_(
+      self._pmoe_parameters, self.pmoe_pae_max_grad_norm
+    )
+
+  def _step_auxiliary_optimizers(self) -> None:
+    super()._step_auxiliary_optimizers()
+    self.pmoe_optimizer.step()
+    # PAE parameters are present in the legacy actor optimizer group for
+    # checkpoint compatibility. Clearing their gradients prevents a second
+    # actor-LR step and is also an executable gradient-isolation guarantee.
+    for parameter in self._pmoe_parameters:
+      parameter.grad = None
+
+  def _actor_parameters_for_gradient_clipping(self):
+    excluded = self._estimator_parameter_ids | self._pmoe_parameter_ids
+    return (
+      parameter
+      for parameter in self.actor.parameters()
+      if id(parameter) not in excluded
+    )
+
+  def _pmoe_collect_observation_chunks(self):
+    steps = int(getattr(self.storage, "step", 0))
+    if steps <= 0:
+      raise RuntimeError("Cannot update PMoE clusters from an empty rollout")
+    observations = self.storage.observations[:steps].flatten(0, 1)
+    total = int(observations.batch_size[0])
+    for start in range(0, total, self.pmoe_collect_chunk_size):
+      yield observations[start : start + self.pmoe_collect_chunk_size]
+
+  @torch.no_grad()
+  def _prepare_collect_auxiliary_loss(self) -> dict[str, torch.Tensor]:
+    routing_encoder = self.actor.pmoe_router
+    clusterer = routing_encoder.clusterer
+    feature_dim = int(clusterer.feature_dim)
+    num_clusters = int(clusterer.num_clusters)
+    parameter = next(iter(self._pmoe_parameters))
+    device = parameter.device
+    feature_sum = torch.zeros(
+      feature_dim, dtype=torch.float64, device=device
+    )
+    feature_square_sum = torch.zeros_like(feature_sum)
+    feature_count = torch.zeros((), dtype=torch.float64, device=device)
+    initialization_features: torch.Tensor | None = None
+
+    for observations in self._pmoe_collect_observation_chunks():
+      features = self.actor.pmoe_embeddings(observations).detach()
+      flat = features.reshape(-1, feature_dim)
+      if initialization_features is None:
+        initialization_features = flat
+      feature_sum.add_(flat.sum(dim=0, dtype=torch.float64))
+      feature_square_sum.add_(flat.square().sum(dim=0, dtype=torch.float64))
+      feature_count.add_(float(flat.shape[0]))
+
+    packed_statistics = torch.cat(
+      (feature_sum, feature_square_sum, feature_count.reshape(1))
+    )
+    if self.is_multi_gpu:
+      torch.distributed.all_reduce(
+        packed_statistics, op=torch.distributed.ReduceOp.SUM
+      )
+    feature_sum = packed_statistics[:feature_dim]
+    feature_square_sum = packed_statistics[
+      feature_dim : 2 * feature_dim
+    ]
+    global_count = float(packed_statistics[-1].item())
+    clusterer.update_feature_statistics(
+      feature_sum.to(dtype=parameter.dtype),
+      feature_square_sum.to(dtype=parameter.dtype),
+      global_count,
+    )
+
+    if not bool(clusterer.initialized.item()):
+      if initialization_features is None:
+        raise RuntimeError("PMoE collect contains no PAE embeddings")
+      if not self.is_multi_gpu or self.gpu_global_rank == 0:
+        clusterer.initialize(initialization_features)
+      if self.is_multi_gpu:
+        torch.distributed.broadcast(clusterer.centroids, src=0)
+        torch.distributed.broadcast(clusterer.initialized, src=0)
+
+    cluster_sums = torch.zeros(
+      num_clusters,
+      feature_dim,
+      dtype=torch.float64,
+      device=device,
+    )
+    cluster_counts = torch.zeros(
+      num_clusters, dtype=torch.float64, device=device
+    )
+    distance_sum = torch.zeros((), dtype=torch.float64, device=device)
+    for observations in self._pmoe_collect_observation_chunks():
+      features = self.actor.pmoe_embeddings(observations).detach()
+      flat = features.reshape(-1, feature_dim)
+      distances = clusterer.standardized_distances(flat)
+      assignments = distances.argmin(dim=-1)
+      cluster_sums.index_add_(
+        0, assignments, flat.to(dtype=torch.float64)
+      )
+      cluster_counts.add_(
+        torch.bincount(assignments, minlength=num_clusters).to(
+          dtype=torch.float64
+        )
+      )
+      distance_sum.add_(
+        distances.gather(1, assignments.unsqueeze(1))
+        .sum(dtype=torch.float64)
+      )
+
+    packed_clusters = torch.cat(
+      (
+        cluster_sums.reshape(-1),
+        cluster_counts,
+        distance_sum.reshape(1),
+      )
+    )
+    if self.is_multi_gpu:
+      torch.distributed.all_reduce(
+        packed_clusters, op=torch.distributed.ReduceOp.SUM
+      )
+    sums_end = num_clusters * feature_dim
+    cluster_sums = packed_clusters[:sums_end].reshape(
+      num_clusters, feature_dim
+    )
+    cluster_counts = packed_clusters[
+      sums_end : sums_end + num_clusters
+    ]
+    distance_sum = packed_clusters[-1]
+    clusterer.update_centroids(
+      cluster_sums.to(dtype=parameter.dtype),
+      cluster_counts.to(dtype=parameter.dtype),
+    )
+
+    usage = cluster_counts / cluster_counts.sum().clamp_min(1.0)
+    safe_usage = usage.clamp_min(1.0e-12)
+    usage_entropy = -(usage * safe_usage.log()).sum()
+    return {
+      "pmoe_cluster_effective_count": usage_entropy.exp(),
+      "pmoe_cluster_usage_min": usage.min(),
+      "pmoe_cluster_usage_max": usage.max(),
+      "pmoe_cluster_empty_count": (cluster_counts == 0).float().sum(),
+      "pmoe_cluster_mean_distance": (
+        distance_sum / cluster_counts.sum().clamp_min(1.0)
+      ),
+      "pmoe_cluster_update_count": clusterer.num_updates.float(),
+    }
+
+  def update(self) -> dict[str, float]:
+    result = super().update()
+    result["pmoe_pae_lr"] = float(
+      self.pmoe_optimizer.param_groups[0]["lr"]
+    )
+    return result
+
+  def save(self) -> dict:
+    saved_dict = super().save()
+    saved_dict[self._PMOE_OPTIMIZER_STATE_KEY] = (
+      self.pmoe_optimizer.state_dict()
+    )
+    return saved_dict
+
+  def load(self, loaded_dict: dict, load_cfg: dict | None, strict: bool) -> bool:
+    load_iteration = super().load(loaded_dict, load_cfg, strict)
+    load_optimizer = load_cfg is None or bool(load_cfg.get("optimizer", False))
+    optimizer_state = loaded_dict.get(self._PMOE_OPTIMIZER_STATE_KEY)
+    if load_optimizer and isinstance(optimizer_state, dict):
+      configured_lr = self.pmoe_pae_learning_rate
+      self.pmoe_optimizer.load_state_dict(optimizer_state)
+      if self.use_checkpoint_pmoe_pae_learning_rate:
+        self.pmoe_pae_learning_rate = float(
+          self.pmoe_optimizer.param_groups[0]["lr"]
+        )
+      else:
+        for param_group in self.pmoe_optimizer.param_groups:
+          param_group["lr"] = configured_lr
+    return load_iteration
+
+
 class SPV51ContactEstimatorMoEPPO(SPV51ContactEstimatorPPO):
   """SPV5-1 supervision plus collect-level residual-MoE routing losses."""
 

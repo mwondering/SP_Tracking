@@ -3,7 +3,9 @@
 > 调研日期：2026-07-23  
 > 关联讨论：[`moe_online_task_routing_discussion.md`](./moe_online_task_routing_discussion.md)  
 > 范围：当前 SPV5-1 residual MoE、局部 reference window 路由、PPO 联合训练、路由稳定性与专家专长验证。  
-> 状态：研究结论与实现设计，尚未实现。
+> 状态：本文中的端到端 TCN router 方案尚未实现。后续选定的
+> PAE + online prototypes + detached Top-2 MoE 方案已经实现，见
+> [`pmoe.md`](./pmoe.md)。
 
 ## 1. 结论
 

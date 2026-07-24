@@ -151,6 +151,7 @@ profile.
 | `SPTracking-G1-BFM-SPV5-1MoEActor-HEFTCritic-HEFTReward` | 30M-parameter SPV5-1 residual MoE with 8 experts, top-2 observation-conditioned routing, block-internal LayerNorm, and post-mixture RMSNorm | `policy + priv` | HEFT finetune | No motion/task ID; collect-level load balance is enabled and routing confidence loss is disabled by default |
 | `SPTracking-G1-BFM-SPV5-1Actor-HEFTMoECritic-HEFTReward` | Standard SPV5-1 actor (1651-D policy input) | HEFT critic with an 8-expert, top-2 observation-conditioned residual MoE | HEFT finetune | MoE routing regularization targets only the critic; the deployable actor is unchanged |
 | `SPTracking-G1-BFM-SPV5-2Actor-HEFTCritic-HEFTReward` | SPV5-2: height/contact estimator only; root-linear-velocity estimate and error are removed (1645-D policy input) | `policy + priv` | HEFT finetune | Robot key bodies use noisy sensor FK; torque history reads the latest 50 Hz sample with uniform ±2 N·m noise |
+| `SPTracking-G1-BFM-SPV5-2PMoEActor-HEFTCritic-HEFTReward` | SPV5-2 + PAE features, 8 online K-Means prototypes and a Top-2 residual MoE | `policy + priv` | HEFT finetune | PPO routes are detached and rollout-frozen; PAE uses an independent reconstruction optimizer and prototypes update without gradients |
 | `SPTracking-G1-BFM-SPV6Actor-HEFTCritic-HEFTReward` | SPV6: SPV5 + actor-inferred 56-D RMA latent from nominal physics and 50-frame proprioception | HEFT base + actual physics/push latent | HEFT finetune | RMA alignment and privileged reconstruction training |
 | `SPTracking-G1-BFM-SPV6-0Actor-HEFTCritic-HEFTReward` | SPV6-0 oracle: SPV5 startup DR + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT finetune | Controlled SPV5 + oracle-information ablation; no DR encoder or reconstruction loss |
 | `SPTracking-G1-BFM-SPV6-1Actor-HEFTCritic-HEFTReward` | SPV6-1 oracle: SPV5 + raw actual physics (34-D) + raw 50-frame push window (350-D) | HEFT base + the same raw 384-D oracle input | HEFT finetune | Diagnostic upper bound; no DR encoder, latent alignment, or reconstruction loss |
@@ -279,6 +280,16 @@ It also replaces the four-physics-substep torque average with the latest
 `jointactuatorfrc` sample once per 20 ms control step. A bounded uniform
 `[-2, 2] N·m` perturbation is applied during training to reduce sensitivity to
 the real torque-sensing and actuator-model mismatch.
+
+The SPV5-2 PMOE variant feeds the existing noisy `50 × 38` reference window
+through a PAE and clusters its phase-invariant amplitude/frequency/offset
+features with eight online prototypes. Detached soft prototype assignments
+route a Top-2 residual MoE, while the complete SPV5-2 policy feature remains
+available to the shared policy and every expert. PPO cannot update the PAE or
+prototypes: the PAE is trained only by an independent reconstruction optimizer,
+and prototype updates run without gradients once per rollout. Behavior-time
+routes are cached across PPO epochs. See [PMOE](docs/pmoe.md) for the complete
+gradient contract, configuration, and diagnostics.
 
 ## Checkpoints, Resume, and Deployment Export
 

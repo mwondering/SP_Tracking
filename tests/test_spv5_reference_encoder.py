@@ -39,15 +39,18 @@ from sp_tracking.tasks.tracking.rl.spv5_1_models import (
   SPV51ContactEstimatorMoEActor,
 )
 from sp_tracking.tasks.tracking.rl.spv5_2_models import (
+  SPV5_2_PMOE_ROUTING_CACHE_GROUP,
   SPV5_2_POLICY_CONTEXT_CACHE_DIM,
   SPV5_2_POLICY_CONTEXT_CACHE_GROUP,
   SPV5_2_POLICY_INPUT_DIM,
   SPV52HeightContactEstimatorActor,
+  SPV52PMoEActor,
 )
 from sp_tracking.tasks.tracking.rl.ppo import (
   SPV5ReferenceEncoderPPO,
   SPV51ContactEstimatorPPO,
   SPV52HeightContactEstimatorPPO,
+  SPV52PMoEPPO,
 )
 from sp_tracking.tasks.tracking.rl.policy_gradient_diagnostics import (
   PolicyGradientDiagnosticsPPO,
@@ -232,6 +235,42 @@ def _spv5_2_actor(obs: TensorDict) -> SPV52HeightContactEstimatorActor:
     hidden_dims=(32, 16),
     estimator_hidden_dims=(16, 8, 4),
     reference_encoder_hidden_dims=(32, 16),
+    obs_normalization=False,
+    distribution_cfg={
+      "class_name": "GaussianDistribution",
+      "init_std": 1.0,
+      "std_type": "scalar",
+    },
+    keypoint_specs=KEYPOINT_SPECS,
+  )
+
+
+def _spv5_2_pmoe_actor(obs: TensorDict) -> SPV52PMoEActor:
+  return SPV52PMoEActor(
+    obs,
+    {
+      "actor": [
+        "robot_root_quat",
+        "estimator_history",
+        "reference_encoder_input",
+        "robot_key_body",
+      ]
+    },
+    "actor",
+    3,
+    hidden_dims=(32, 16),
+    estimator_hidden_dims=(16, 8, 4),
+    reference_encoder_hidden_dims=(32, 16),
+    pmoe_context_hidden_dim=16,
+    pmoe_hidden_dim=8,
+    pmoe_num_experts=4,
+    pmoe_top_k=2,
+    pmoe_expansion=2,
+    pmoe_pae_latent_dim=3,
+    pmoe_pae_hidden_dims=(8,),
+    pmoe_pae_kernel_size=3,
+    pmoe_cluster_temperature=0.5,
+    pmoe_cluster_momentum=0.9,
     obs_normalization=False,
     distribution_cfg={
       "class_name": "GaussianDistribution",
@@ -746,6 +785,161 @@ def test_spv5_2_auxiliary_loss_has_no_velocity_term() -> None:
   assert "estimator_root_lin_vel_mse" not in diagnostics
 
 
+def test_spv5_2_pmoe_policy_gradient_isolated_from_pae_and_export(
+  tmp_path,
+) -> None:
+  torch.manual_seed(29)
+  obs = _spv5_2_observations(4)
+  actor = _spv5_2_pmoe_actor(obs)
+  embeddings = actor.pmoe_embeddings(obs).detach()
+  clusterer = actor.pmoe_router.clusterer
+  clusterer.update_feature_statistics(
+    embeddings.sum(dim=0),
+    embeddings.square().sum(dim=0),
+    float(embeddings.shape[0]),
+  )
+  clusterer.initialize(embeddings)
+
+  uncached_output = actor(obs)
+  actor.populate_policy_context_cache(obs)
+  routes = actor.routing_probabilities(obs)
+
+  assert embeddings.shape == (4, 9)
+  assert routes.shape == (4, 4)
+  assert SPV5_2_PMOE_ROUTING_CACHE_GROUP in obs
+  torch.testing.assert_close(routes.sum(dim=-1), torch.ones(4))
+  torch.testing.assert_close(actor(obs), uncached_output)
+
+  actor.zero_grad(set_to_none=True)
+  actor(obs).sum().backward()
+  assert all(
+    parameter.grad is None
+    for parameter in actor.pmoe_router.parameters()
+  )
+  assert any(parameter.grad is not None for parameter in actor.mlp.parameters())
+
+  actor.zero_grad(set_to_none=True)
+  pae_loss, diagnostics = actor.pmoe_reconstruction_loss(obs)
+  pae_loss.backward()
+  assert any(
+    parameter.grad is not None
+    for parameter in actor.pmoe_router.parameters()
+  )
+  assert set(diagnostics) == {
+    "pmoe_pae_mse",
+    "pmoe_pae_root_mse",
+    "pmoe_pae_joint_mse",
+    "pmoe_pae_mean_amplitude",
+    "pmoe_pae_active_channel_fraction",
+  }
+
+  flat = torch.cat([obs[name] for name in actor.obs_groups], dim=-1)
+  exported = actor.as_onnx()
+  torch.testing.assert_close(exported(flat), actor(obs))
+  traced = torch.jit.trace(actor.as_jit(), flat)
+  torch.testing.assert_close(traced(flat), actor(obs))
+  onnx_path = tmp_path / "spv5_2_pmoe.onnx"
+  torch.onnx.export(
+    exported,
+    (flat[:1],),
+    str(onnx_path),
+    opset_version=18,
+    input_names=exported.input_names,
+    output_names=exported.output_names,
+    dynamo=False,
+  )
+  assert onnx_path.is_file()
+
+
+def test_spv5_2_pmoe_runs_full_ppo_update_with_independent_pae_optimizer() -> None:
+  torch.manual_seed(31)
+  obs = _spv5_2_observations(4)
+  obs.set("critic_obs", torch.randn(4, 5))
+  actor = _spv5_2_pmoe_actor(obs)
+  actor.populate_policy_context_cache(obs)
+  critic = MLPModel(
+    obs,
+    {"critic": ["critic_obs"]},
+    "critic",
+    1,
+    hidden_dims=(16, 8),
+    obs_normalization=False,
+  )
+  storage = RolloutStorage("rl", 4, 1, obs, [3], "cpu")
+  algorithm = SPV52PMoEPPO(
+    actor,
+    critic,
+    storage,
+    device="cpu",
+    num_learning_epochs=1,
+    num_mini_batches=1,
+    learning_rate=1.0e-3,
+    actor_learning_rate=1.0e-3,
+    critic_learning_rate=1.0e-3,
+    estimator_learning_rate=1.0e-4,
+    pmoe_pae_learning_rate=2.0e-4,
+    pmoe_collect_chunk_size=2,
+    schedule="fixed",
+    desired_kl=None,
+  )
+  pae_before = [
+    parameter.detach().clone()
+    for parameter in actor.pmoe_router.parameters()
+  ]
+
+  algorithm.act(obs)
+  next_obs = _spv5_2_observations(4)
+  next_obs.set("critic_obs", torch.randn(4, 5))
+  algorithm.process_env_step(
+    next_obs,
+    torch.tensor([1.0, 0.5, -0.25, -0.5]),
+    torch.zeros(4),
+    {},
+  )
+  algorithm.compute_returns(next_obs)
+  losses = algorithm.update()
+
+  assert bool(actor.pmoe_router.clusterer.initialized.item())
+  assert int(actor.pmoe_router.clusterer.num_updates.item()) == 1
+  assert any(
+    not torch.equal(before, after)
+    for before, after in zip(
+      pae_before, actor.pmoe_router.parameters(), strict=True
+    )
+  )
+  assert losses["pmoe_pae_mse"] >= 0.0
+  assert losses["pmoe_cluster_effective_count"] >= 1.0
+  assert losses["pmoe_cluster_empty_count"] >= 0.0
+  assert losses["pmoe_pae_lr"] == 2.0e-4
+  saved = algorithm.save()
+  pmoe_optimizer_state = saved["spv5_2_pmoe_optimizer_state_dict"]
+  assert pmoe_optimizer_state["state"]
+
+
+def test_spv5_2_pmoe_task_configures_pae_cluster_and_top2_actor() -> None:
+  with initialize_config_module(
+    version_base=None, config_module="sp_tracking.conf"
+  ):
+    cfg = compose(
+      config_name="train",
+      overrides=[
+        "task=tracking_bfm_spv5_2_pmoe_actor_heft_critic_heft_reward"
+      ],
+    )
+  prepared = prepare_train_cfg(cfg)
+  env = build_env_cfg(cfg.task)
+
+  assert prepared.agent.actor.class_name.endswith(":SPV52PMoEActor")
+  assert prepared.agent.actor.pmoe_num_experts == 8
+  assert prepared.agent.actor.pmoe_top_k == 2
+  assert prepared.agent.actor.pmoe_pae_latent_dim == 8
+  assert prepared.agent.algorithm.class_name.endswith(":SPV52PMoEPPO")
+  assert prepared.agent.algorithm.pmoe_pae_learning_rate == 5.0e-5
+  assert prepared.agent.algorithm.pmoe_pae_loss_coef == 1.0
+  assert "reference_encoder_input" in env.observations
+  assert SPV5_2_PMOE_ROUTING_CACHE_GROUP not in env.observations
+
+
 def test_spv5_2_task_uses_latest_50hz_noisy_torque_and_height_target() -> None:
   with initialize_config_module(
     version_base=None, config_module="sp_tracking.conf"
@@ -756,10 +950,19 @@ def test_spv5_2_task_uses_latest_50hz_noisy_torque_and_height_target() -> None:
     )
   prepared = prepare_train_cfg(cfg)
   env = build_env_cfg(cfg.task)
+  motion_command = env.commands["motion"]
   torque = env.observations["estimator_history"].terms["joint_torque"]
   robot_key_body = env.observations["robot_key_body"].terms["current"]
   estimator_target = env.observations["estimator_target"]
 
+  assert motion_command.sampling_mode == "adaptive"
+  assert motion_command.adaptive_sampling.strategy == "branch"
+  assert motion_command.adaptive_sampling.random_probability == 0.5
+  assert motion_command.rewind.enabled is True
+  assert motion_command.rewind.failure_probability == 1.0 / 3.0
+  assert motion_command.rewind.min_steps == 0
+  assert motion_command.rewind.max_steps == 0
+  assert motion_command.adaptive_failure_rate_window_iterations == 1000
   assert prepared.agent.actor.class_name.endswith(
     ":SPV52HeightContactEstimatorActor"
   )

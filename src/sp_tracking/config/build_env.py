@@ -429,6 +429,12 @@ def _build_command(cfg: DictConfig):
     "adaptive_pre_failure_sample_window_steps": int(
       command_cfg.get("adaptive_pre_failure_sample_window_steps", 200)
     ),
+    "adaptive_bin_snapshot_interval_iterations": int(
+      command_cfg.get("adaptive_bin_snapshot_interval_iterations", 0)
+    ),
+    "adaptive_bin_snapshot_dir": str(
+      command_cfg.get("adaptive_bin_snapshot_dir", "")
+    ),
     "sampling_mode": str(command_cfg.get("sampling_mode", "adaptive")),
     "if_log_metrics": bool(command_cfg.get("if_log_metrics", True)),
     "resampling_time_range": tuple(command_cfg.resampling_time_range),
@@ -451,14 +457,8 @@ def _build_command(cfg: DictConfig):
         "adaptive_bin_pool_reset_interval_iterations": int(
           command_cfg.get("adaptive_bin_pool_reset_interval_iterations", 5000)
         ),
-        "adaptive_bin_snapshot_interval_iterations": int(
-          command_cfg.get("adaptive_bin_snapshot_interval_iterations", 0)
-        ),
         "adaptive_bin_snapshot_num_buckets": int(
           command_cfg.get("adaptive_bin_snapshot_num_buckets", 2048)
-        ),
-        "adaptive_bin_snapshot_dir": str(
-          command_cfg.get("adaptive_bin_snapshot_dir", "")
         ),
         "motion_manifest_file": str(command_cfg.get("motion_manifest_file", "")),
         "motion_metadata_cache_file": str(

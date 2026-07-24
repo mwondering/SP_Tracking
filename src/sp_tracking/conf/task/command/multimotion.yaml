@@ -41,5 +41,7 @@ command:
   adaptive_max_prob_per_bin: auto
   adaptive_max_prob_per_motion: auto
   adaptive_pre_failure_sample_window_steps: 200
+  adaptive_bin_snapshot_interval_iterations: 0
+  adaptive_bin_snapshot_dir: ""
   sampling_mode: adaptive
   if_log_metrics: true

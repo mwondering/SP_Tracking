@@ -1,0 +1,34 @@
+defaults:
+  - tracking_bfm_spv5_2_actor_heft_critic_heft_reward
+  - _self_
+
+name: tracking_bfm_spv5_2_pmoe_actor_heft_critic_heft_reward
+variant:
+  observation_profile: spv5_2_pae_kmeans_moe_actor_heft_critic
+
+# PMoE trains a periodic autoencoder from the existing noisy 50x38 reference
+# window. Detached PAE embeddings update eight online K-Means prototypes once
+# per rollout; their soft nearest-prototype probabilities directly route a
+# Top-2 residual MoE. PPO never differentiates through the routes, PAE, or
+# prototype state.
+agent_overrides:
+  actor:
+    class_name: sp_tracking.tasks.tracking.rl.spv5_2_models:SPV52PMoEActor
+    pmoe_context_hidden_dim: 1472
+    pmoe_hidden_dim: 608
+    pmoe_num_experts: 8
+    pmoe_top_k: 2
+    pmoe_expansion: 4
+    pmoe_output_init_gain: 0.05
+    pmoe_pae_latent_dim: 8
+    pmoe_pae_hidden_dims: [64, 64]
+    pmoe_pae_kernel_size: 5
+    pmoe_cluster_temperature: 1.0
+    pmoe_cluster_momentum: 0.99
+  algorithm:
+    class_name: sp_tracking.tasks.tracking.rl.ppo:SPV52PMoEPPO
+    pmoe_pae_learning_rate: 0.00005
+    pmoe_pae_loss_coef: 1.0
+    pmoe_pae_max_grad_norm: 1.0
+    pmoe_collect_chunk_size: 4096
+    use_checkpoint_pmoe_pae_learning_rate: false
